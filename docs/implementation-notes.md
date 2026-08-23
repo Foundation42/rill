@@ -16,10 +16,20 @@ it. Spec section numbers in parentheses.
   them. Built-ins: `any number boolean string record bytes array`, with
   spelling aliases (`int`/`float` → number, `bool`, `map`). `any` is a
   wildcard on either side of a wire; everything else must match exactly.
-- **struple gained `Packer.appendRaw`** (splice a pre-encoded element
-  verbatim) — the passthrough operators (`where`, `select`, `tap`, `latch`,
-  `partition`) emit already-encoded views. Added upstream with a test;
-  struple's suite still passes.
+- **struple gained `Packer.appendRaw`** (splice pre-encoded elements) — the
+  passthrough operators (`where`, `select`, `tap`, `latch`, `partition`)
+  emit already-encoded views. Review scrutiny (validate or trust?) landed
+  here: appendRaw **validates structure** — input must parse as complete
+  elements or the call fails with the stream untouched — so garbage cannot
+  enter a struple through rill. Canonicality beyond structure stays the
+  producer's contract, the same one `appendArray`/`appendMap`/`appendSet`
+  children always had. Note where rill's determinism boundary actually is:
+  foreign bytes enter through `feed()`/`read()` (host-supplied plane
+  values), which is why math ops emit f64 uniformly (representational
+  consistency per producer) and `=` compares numbers semantically.
+  Suppression remains representational by design — a host that flips a
+  path between int 20 and float 20.0 will see re-fires; keep producers
+  type-consistent.
 - **Statics** (registry.zig): the spec's grammar has `set <path>` and
   `tap label` taking non-stream arguments. These are declared per-OpDef as
   `statics` (path | word | literal) and consumed from the leading positional
