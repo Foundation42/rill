@@ -217,7 +217,32 @@ contract is still auditable from the text. Bare dotted names falling through to 
 REPL-only affordance permitted: at the interactive prompt, an unresolved dotted expression may
 *offer* plane completion — never in a `.rill` file.
 
-### 3.11 Optional sugar (later, not v0)
+### 3.11 Tail ports (v0.1, agreed 2026-08-23)
+
+```
+sound play /tmp/loop.wav
+sample load pack:horns#audio.stem
+```
+
+An operator may mark its **last** input port `tail`. The parser binds the fixed prefix —
+statics, then any non-tail ports the pipe didn't feed, positionally — and captures the rest
+of the line **verbatim** as a string literal on the tail port. This is the honest shape of a
+locator: freeform text, not structure. Console grammars with a `rest` argument map onto it
+directly, which is what lets lines like the above parse unchanged (G1) without teaching the
+tokenizer about `/`, `#`, or `:`.
+
+- Closed shape, enforced at registration: last input only, string-typed, never variadic,
+  and every port before the tail is required — a fixed prefix has no room for maybe-there
+  arguments. Kwargs don't exist on a tail operator for the same reason.
+- **The tail ends the chain.** Everything to end-of-line is text: `#` does not start a
+  comment there, and `as` does not bind. Piping *into* an operator whose only port is the
+  tail is an error — the tail is parse-time text, never a stream.
+- **Footgun closed at parse:** an unquoted tail containing `|` is an error — *"tail port
+  consumed a pipe — quote the locator or restructure"* — so composing after a tail verb
+  fails loud instead of silently swallowing the pipe into the string. A fully-quoted tail
+  (`say "a | b"`) unwraps, applies escapes, and may contain anything.
+
+### 3.12 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:
 

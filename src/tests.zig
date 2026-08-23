@@ -21,6 +21,17 @@ fn stubEval(ctx: *rill.EvalCtx) registry.EvalError!registry.Emit {
     return registry.Emit.first;
 }
 
+/// Echoes the tail port (always the last input) so tests can read exactly
+/// what the parser captured; "<none>" marks an absent optional tail.
+fn echoTailEval(ctx: *rill.EvalCtx) registry.EvalError!registry.Emit {
+    if (ctx.in[ctx.in.len - 1]) |v| {
+        ctx.out[0].appendRaw(v) catch return error.BadValue;
+    } else {
+        ctx.out[0].appendString("<none>") catch return error.OutOfMemory;
+    }
+    return registry.Emit.first;
+}
+
 /// Registry with the core set plus a few console-shaped host verbs.
 fn hostRegistry(gpa: std.mem.Allocator) !rill.Registry {
     var reg = try rill.Registry.init(gpa);
@@ -32,6 +43,12 @@ fn hostRegistry(gpa: std.mem.Allocator) !rill.Registry {
         var ports_mesh_num: [2]registry.Port = undefined;
         var ports_mesh_mesh: [2]registry.Port = undefined;
         var out_mesh: [1]registry.Port = undefined;
+        // tail-shaped console verbs (§3.11)
+        var ports_tail = [_]registry.Port{.{ .name = "locator", .ty = types.Tag.string, .tail = true }};
+        var ports_gain_tail = [_]registry.Port{ .{ .name = "gain", .ty = types.Tag.number }, .{ .name = "locator", .ty = types.Tag.string, .tail = true } };
+        var ports_tail_opt = [_]registry.Port{.{ .name = "text", .ty = types.Tag.string, .tail = true, .optional = true }};
+        var statics_emitter = [_]registry.StaticDecl{.{ .name = "name", .kind = .word }};
+        var out_str = [_]registry.Port{.{ .name = "out", .ty = types.Tag.string }};
     };
     host.out_mesh = .{.{ .name = "out", .ty = mesh }};
     host.ports_mesh_num = .{ .{ .name = "m", .ty = mesh }, .{ .name = "amount", .ty = types.Tag.number } };
@@ -41,6 +58,9 @@ fn hostRegistry(gpa: std.mem.Allocator) !rill.Registry {
     _ = try reg.register(.{ .name = "rot", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
     _ = try reg.register(.{ .name = "shell", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
     _ = try reg.register(.{ .name = "boolean subtract", .inputs = &host.ports_mesh_mesh, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
+    _ = try reg.register(.{ .name = "sound play", .inputs = &host.ports_tail, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "emitter drop", .inputs = &host.ports_gain_tail, .statics = &host.statics_emitter, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "say", .inputs = &host.ports_tail_opt, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
     return reg;
 }
 
@@ -606,4 +626,114 @@ test "publish hook: freshened wires reach the host each tick, then go quiet" {
     try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 80));
     try fx.rt.tick();
     try testing.expectEqual(@as(usize, 0), Collector.paths.items.len);
+}
+
+// ---------------------------------------------------------------------------
+// §3.11 tail ports — the console's `rest` grammar, landed in core before any
+// Matryoshka handler leans on it (adoption doc D6).
+// ---------------------------------------------------------------------------
+
+/// Mounts `source` over an empty plane and asserts the named slot holds
+/// exactly the struple string `expected` after tick 0.
+fn expectTailEcho(source: []const u8, slot_path: []const u8, expected: []const u8) !void {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, source, .{});
+    defer fx.deinit();
+    const bytes = fx.rt.readSlot(slot_path) orelse return error.TestUnexpectedResult;
+    const want = blk: {
+        var pk = struple.Packer.init(testing.allocator);
+        defer pk.deinit();
+        try pk.appendString(expected);
+        break :blk try pk.toOwnedSlice();
+    };
+    defer testing.allocator.free(want);
+    try testing.expectEqualSlices(u8, want, bytes);
+}
+
+test "tail: rest of line is captured verbatim — slashes, colons, hashes are text" {
+    try expectTailEcho("sound play /tmp/loop.wav", "programs.p.sound play1.out.out", "/tmp/loop.wav");
+    try expectTailEcho("sound play pack:horns#audio.stem", "programs.p.sound play1.out.out", "pack:horns#audio.stem");
+    try expectTailEcho("sound play --gain 0.5 it's freeform", "programs.p.sound play1.out.out", "--gain 0.5 it's freeform");
+}
+
+test "tail: the fixed prefix binds positionally, piped or not" {
+    // statics then ports, then the rest: `emitter drop <name> <gain> <locator…>`
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "emitter drop e1 0.5 /tmp/a.wav", .{});
+    defer fx.deinit();
+    const n = fx.prog.node(0);
+    try testing.expectEqualStrings("e1", n.statics[0].word);
+    try testing.expectEqual(@as(f64, 0.5), types.asNumber(fx.prog.slot(n.inputs[0]).source.literal).?);
+    try testing.expectEqualStrings("/tmp/a.wav", types.asString(fx.prog.slot(n.inputs[1]).source.literal).?);
+
+    // the pipe feeds port 0, so the prefix shrinks by one
+    var fx2: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx2, "0.5 | emitter drop e2 /tmp/b.wav", .{});
+    defer fx2.deinit();
+    const n2 = fx2.prog.node(0);
+    try testing.expectEqualStrings("e2", n2.statics[0].word);
+    try testing.expectEqualStrings("/tmp/b.wav", types.asString(fx2.prog.slot(n2.inputs[1]).source.literal).?);
+}
+
+test "tail: a pipe in the tail fails loud, spaced or not" {
+    try expectParseError("sound play boom.wav | tap t", "tail port consumed a pipe");
+    try expectParseError("sound play boom.wav|tap t", "tail port consumed a pipe");
+}
+
+test "tail: a fully-quoted tail is the escape hatch — unwrap, unescape, pipes welcome" {
+    try expectTailEcho(
+        \\sound play "weird | name.wav"
+    , "programs.p.sound play1.out.out", "weird | name.wav");
+    try expectTailEcho(
+        \\sound play "line one\nline two"
+    , "programs.p.sound play1.out.out", "line one\nline two");
+    // a *partial* quote is not the escape hatch: verbatim, quotes included
+    try expectTailEcho(
+        \\sound play "half quoted" rest
+    , "programs.p.sound play1.out.out", "\"half quoted\" rest");
+}
+
+test "tail: required tail missing errors; optional tail absent is null" {
+    try expectParseError("sound play", "expects text for its tail port");
+    try expectTailEcho("say", "programs.p.say1.out.out", "<none>");
+    try expectTailEcho("say something nice", "programs.p.say1.out.out", "something nice");
+}
+
+test "tail: the tail ends the chain — as is text, not a binding" {
+    try expectTailEcho("sound play boom.wav as s", "programs.p.sound play1.out.out", "boom.wav as s");
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    const result = rill.parse(testing.allocator, &reg, "p",
+        \\sound play boom.wav as s
+        \\s | tap t
+    , &diag);
+    try testing.expectError(error.Parse, result); // `s` never became a name
+}
+
+test "tail: closed at the joints — no sections, no piping into a tail-only op" {
+    try expectParseError("cube 2 | where (sound play x)", "cannot be a predicate section");
+    try expectParseError("plane.hp | sound play boom.wav", "its only port is the tail");
+}
+
+test "tail: raw characters outside a tail still fail loud" {
+    try expectParseError("cube 2 | bevel /tmp/x", "unexpected '/' in arguments");
+}
+
+test "tail: dump → load → dump survives a tail literal byte-identically" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "sound play pack:horns#audio.stem", .{});
+    defer fx.deinit();
+    const dump1 = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(dump1);
+    var prog2 = try rill.loadProgram(testing.allocator, &fx.reg, dump1);
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane());
+    defer rt2.deinit();
+    try rill.restoreState(&rt2, dump1);
+    const dump2 = try rill.dump(&rt2, testing.allocator);
+    defer testing.allocator.free(dump2);
+    try testing.expectEqualSlices(u8, dump1, dump2);
 }

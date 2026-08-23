@@ -63,6 +63,33 @@ it. Spec section numbers in parentheses.
   close-over-nothing error, like the `plane.` paths it stands for. Small
   hardening that rode along: `as` can no longer bind reserved words
   (`plane use def as true false`).
+- **Tail ports (§3.11, spec v0.1)** — the console's `rest` grammar, landed
+  ahead of Matryoshka's Phase C so the handler migration stands on tested
+  ground. Decisions inside the ruling's envelope:
+  - **The tokenizer no longer rejects any character.** It can't — whether `/`
+    is an error or a locator depends on the operator, which tokenization
+    doesn't know. Unknown bytes become inert `raw` tokens that fail only when
+    a non-tail position consumes one ("unexpected '/' in arguments" — same
+    loudness, better position, and the tail slices the *raw source* by byte
+    offset so `#` is text there, not a comment).
+  - **Any unquoted `|` in a tail errors**, not just the spaced ` | ` from the
+    ruling: `a|b` is valid pipe syntax everywhere else in the language, so a
+    tail that swallowed it silently would be the exact footgun the ruling
+    closes. The escape hatch is the one the error message names: a *fully*
+    quoted tail (`say "a | b"`) unwraps and unescapes; a partial quote is
+    verbatim text, quotes included.
+  - The fixed prefix (statics, then non-tail ports minus a piped primary) is
+    strictly positional — no kwargs, and the registry rejects optional
+    non-tail ports on a tail op (`error.BadTailPort`), because "fixed prefix
+    then rest" has no room for maybe-there arguments. Registration also
+    enforces last-input-only, string-typed, never variadic.
+  - `as` after a tail is captured as text — the tail ends the chain, pinned
+    by test. Piping into an op whose *only* port is the tail is refused
+    (the tail is parse-time text, never a stream). Tail ops can't be
+    predicate sections.
+  - Known edge, accepted: a lone unmatched `"` inside a tail is still an
+    "unterminated string" at tokenize time (the tokenizer must pair quotes
+    before the parser knows a tail is coming). Quote the whole tail.
 - **Two-word operator lookup**: `boolean subtract` resolves before `boolean`,
   so a host registry seeded from Matryoshka's `(verb, subop)` `Cmd` rows can
   map one row → one OpDef with no renaming. **Note the tense: G1 is passed

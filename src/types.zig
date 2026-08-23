@@ -114,6 +114,16 @@ pub fn asNumber(encoded: []const u8) ?f64 {
     };
 }
 
+/// Decode a single-element string. The slice borrows from `encoded`.
+pub fn asString(encoded: []const u8) ?[]const u8 {
+    var r = struple.reader(encoded);
+    const elem = (r.next() catch return null) orelse return null;
+    return switch (elem) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
 pub fn asBool(encoded: []const u8) ?bool {
     var r = struple.reader(encoded);
     const elem = (r.next() catch return null) orelse return null;

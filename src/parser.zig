@@ -29,6 +29,11 @@
 //! - Operator lookup tries the two-word form first (`boolean subtract`), so a
 //!   host registry seeded from (verb, subop) command pairs maps one row to
 //!   one operator.
+//! - A `tail` port (last input only, §3.11) binds the rest of the line
+//!   *verbatim from the raw source* as a string literal — locators like
+//!   `/tmp/loop.wav` and `pack:horns#audio.stem` are text, not structure.
+//!   The tokenizer therefore rejects no character: unknown bytes become inert
+//!   `raw` tokens that only error when a non-tail position consumes one.
 //!
 //! There is no `if` statement and no exec wire, by design (§4.3). Selection
 //! and gating are ordinary operators over data.
@@ -77,6 +82,7 @@ const TokKind = enum {
     comma,
     dot,
     newline,
+    raw, // a character with no token of its own; legal only inside a tail
     eof,
 };
 
@@ -85,6 +91,9 @@ const Token = struct {
     text: []const u8,
     line: u32,
     col: u32,
+    /// Byte offset of the token's first character (a string's opening quote
+    /// included) — tail capture slices the raw source between offsets.
+    off: usize,
 };
 
 fn isReservedWord(s: []const u8) bool {
@@ -112,8 +121,9 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         const c = src[i];
         const tl = line;
         const tc = col;
+        const to = i;
         if (c == '\n') {
-            try toks.append(a, .{ .kind = .newline, .text = src[i .. i + 1], .line = tl, .col = tc });
+            try toks.append(a, .{ .kind = .newline, .text = src[i .. i + 1], .line = tl, .col = tc, .off = to });
             line += 1;
             col = 1;
             i += 1;
@@ -131,7 +141,7 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         if (isNameStart(c)) {
             const start = i;
             while (i < src.len and isNameChar(src[i])) : (i += 1) col += 1;
-            try toks.append(a, .{ .kind = .name, .text = src[start..i], .line = tl, .col = tc });
+            try toks.append(a, .{ .kind = .name, .text = src[start..i], .line = tl, .col = tc, .off = to });
             continue;
         }
         if (std.ascii.isDigit(c) or (c == '-' and i + 1 < src.len and std.ascii.isDigit(src[i + 1]))) {
@@ -153,7 +163,7 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
                 i -= 1;
                 col -= 1;
             }
-            try toks.append(a, .{ .kind = .number, .text = src[start..end], .line = tl, .col = tc });
+            try toks.append(a, .{ .kind = .number, .text = src[start..end], .line = tl, .col = tc, .off = to });
             continue;
         }
         if (c == '"') {
@@ -178,14 +188,14 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
                 diag.len = (std.fmt.bufPrint(&diag.buf, "unterminated string", .{}) catch "").len;
                 return error.Parse;
             }
-            try toks.append(a, .{ .kind = .string, .text = src[start..i], .line = tl, .col = tc });
+            try toks.append(a, .{ .kind = .string, .text = src[start..i], .line = tl, .col = tc, .off = to });
             i += 1;
             col += 1;
             continue;
         }
         const two = if (i + 1 < src.len) src[i .. i + 2] else src[i .. i + 1];
         if (std.mem.eql(u8, two, "!=") or std.mem.eql(u8, two, "<=") or std.mem.eql(u8, two, ">=")) {
-            try toks.append(a, .{ .kind = .sym, .text = two, .line = tl, .col = tc });
+            try toks.append(a, .{ .kind = .sym, .text = two, .line = tl, .col = tc, .off = to });
             i += 2;
             col += 2;
             continue;
@@ -200,17 +210,16 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             ',' => .comma,
             '.' => .dot,
             '=', '<', '>' => .sym,
-            else => {
-                diag.* = .{ .line = tl, .col = tc };
-                diag.len = (std.fmt.bufPrint(&diag.buf, "unexpected character '{c}'", .{c}) catch "").len;
-                return error.Parse;
-            },
+            // No character is rejected here: a `/` or `'` may be tail text
+            // (§3.11), and the tokenizer cannot know. It errors at the parser
+            // instead, when a non-tail position actually consumes it.
+            else => .raw,
         };
-        try toks.append(a, .{ .kind = kind, .text = src[i .. i + 1], .line = tl, .col = tc });
+        try toks.append(a, .{ .kind = kind, .text = src[i .. i + 1], .line = tl, .col = tc, .off = to });
         i += 1;
         col += 1;
     }
-    try toks.append(a, .{ .kind = .eof, .text = "", .line = line, .col = col });
+    try toks.append(a, .{ .kind = .eof, .text = "", .line = line, .col = col, .off = src.len });
     return toks.items;
 }
 
@@ -284,6 +293,7 @@ pub fn parse(
         .prog = &prog,
         .reg = reg,
         .diag = diag,
+        .src = source,
         .toks = try tokenize(prog.a(), source, diag),
     };
     p.program_target = .{ .nodes = &prog.nodes, .slots = &prog.slots };
@@ -307,6 +317,9 @@ const Parser = struct {
     prog: *Program,
     reg: *registry.Registry,
     diag: *Diag,
+    /// The raw source — tail ports (§3.11) slice their text from here, not
+    /// from tokens, so `#` is text in a tail and `/` needs no token.
+    src: []const u8,
     toks: []Token,
     pos: usize = 0,
     program_target: Target = undefined,
@@ -794,9 +807,15 @@ const Parser = struct {
             return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
         const def = self.reg.get(op_id);
         if (def.variadic) return self.fail(op_tok, "'{s}' cannot be called directly", .{op_name});
+        const has_tail = def.inputs.len > 0 and def.inputs[def.inputs.len - 1].tail;
 
         var args = std.ArrayListUnmanaged(Arg).empty;
-        try self.parseArgs(target, &args);
+        if (has_tail) {
+            if (reserved_primary) return self.fail(op_tok, "'{s}' has a tail port and cannot be a predicate section", .{op_name});
+            try self.parseTailArgs(target, def, &args, op_tok, primary != null);
+        } else {
+            try self.parseArgs(target, &args);
+        }
 
         // Statics are consumed from the leading positional args, in
         // declaration order — they are configuration, not streams.
@@ -960,6 +979,50 @@ const Parser = struct {
                 else => try args.append(self.a(), try self.parseArgValue(target)),
             }
         }
+    }
+
+    /// Arguments for a tail operator (§3.11). The grammar is closed: a fixed
+    /// prefix — one positional value per static, then one per non-tail port
+    /// the pipe didn't feed — and then *the rest of the line, verbatim*, as a
+    /// string literal on the tail port. Kwargs don't exist here, `#` is text
+    /// (a comment cannot follow a tail), and `as` after the tail is captured
+    /// as text too: the tail ends the chain. An unquoted `|` anywhere in the
+    /// tail fails loud; a fully-quoted tail is the escape hatch and may
+    /// contain anything.
+    fn parseTailArgs(self: *Parser, target: *Target, def: *const registry.OpDef, args: *std.ArrayListUnmanaged(Arg), op_tok: Token, primary_bound: bool) ParseError!void {
+        if (primary_bound and def.inputs.len == 1) {
+            return self.fail(op_tok, "'{s}' takes no stream input — its only port is the tail", .{def.name});
+        }
+        const n_fixed = def.statics.len + (def.inputs.len - 1) - @intFromBool(primary_bound);
+        var i: usize = 0;
+        while (i < n_fixed) : (i += 1) {
+            const t = self.peek();
+            if (t.kind == .newline or t.kind == .eof) break; // binding reports what's missing
+            try args.append(self.a(), try self.parseArgValue(target));
+        }
+
+        const start_tok = self.peek();
+        var text: []const u8 = "";
+        if (start_tok.kind != .newline and start_tok.kind != .eof) {
+            while (self.peek().kind != .newline and self.peek().kind != .eof) _ = self.next();
+            text = std.mem.trim(u8, self.src[start_tok.off..self.peek().off], " \t\r");
+        }
+
+        const tail_port = def.inputs[def.inputs.len - 1];
+        if (text.len == 0) {
+            if (tail_port.optional) return; // unbound ⇒ .none, the op sees null
+            return self.fail(op_tok, "'{s}' expects text for its tail port '{s}'", .{ def.name, tail_port.name });
+        }
+        var final_text = text;
+        if (quotedSpan(text)) |inner| {
+            final_text = try self.unescape(inner);
+        } else if (std.mem.indexOfScalar(u8, text, '|') != null) {
+            return self.fail(start_tok, "tail port consumed a pipe — quote the locator or restructure", .{});
+        }
+        var pk = struple.Packer.init(self.a());
+        pk.appendString(final_text) catch return error.OutOfMemory;
+        const bytes = pk.toOwnedSlice() catch return error.OutOfMemory;
+        try args.append(self.a(), .{ .kind = .literal, .source = .{ .literal = bytes }, .ty = types.Tag.string, .tok = start_tok });
     }
 
     /// arg := literal | path | name(.field)* | record | "(" opcall ")"
@@ -1190,6 +1253,22 @@ const Parser = struct {
         return .{ .node = null, .outputs = outs };
     }
 };
+
+/// If `text` is exactly one quoted string — `"…"` with nothing after the
+/// close — return the span inside the quotes (escapes honored, not applied).
+/// Anything else, a partial quote included, is verbatim tail text.
+fn quotedSpan(text: []const u8) ?[]const u8 {
+    if (text.len < 2 or text[0] != '"') return null;
+    var i: usize = 1;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (text[i] == '"') return if (i == text.len - 1) text[1..i] else null;
+    }
+    return null;
+}
 
 /// Remap a template source into the instance: wires shift by `slot_base`
 /// (slot ids are dense and the splice loop appends every template slot exactly

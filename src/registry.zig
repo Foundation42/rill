@@ -26,6 +26,10 @@ pub const Port = struct {
     ty: TypeId = types.Tag.any,
     kind: PortKind = .value,
     optional: bool = false,
+    /// §3.11: the parser captures the rest of the line verbatim as a string
+    /// literal bound here. Last input port only — `register` enforces the
+    /// closed shape. A locator is freeform text, not structure.
+    tail: bool = false,
 };
 
 /// Static (non-stream) parameters an operator consumes at parse time:
@@ -128,7 +132,7 @@ pub const OpDef = struct {
 
 pub const OpId = u32;
 
-pub const RegistryError = error{DuplicateOp} || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort } || std.mem.Allocator.Error;
 
 /// The operator table. Owns nothing but its own arrays: `OpDef` port/static
 /// slices are borrowed from the registrant (comptime tables for built-ins;
@@ -151,6 +155,17 @@ pub const Registry = struct {
 
     pub fn register(self: *Registry, def: OpDef) RegistryError!OpId {
         if (self.by_name.contains(def.name)) return error.DuplicateOp;
+        // Tails are a closed grammar (§3.11): last input only, string-typed,
+        // never variadic — and every port before the tail is required, because
+        // "fixed prefix, then rest of line" has no room for maybe-there args.
+        if (def.inputs.len > 0) {
+            const last = def.inputs[def.inputs.len - 1];
+            if (last.tail and (last.ty != types.Tag.string or def.variadic)) return error.BadTailPort;
+            for (def.inputs[0 .. def.inputs.len - 1]) |p| {
+                if (p.tail) return error.BadTailPort;
+                if (last.tail and p.optional) return error.BadTailPort;
+            }
+        }
         const id: OpId = @intCast(self.ops.items.len);
         try self.ops.append(self.gpa, def);
         errdefer _ = self.ops.pop();
@@ -166,6 +181,28 @@ pub const Registry = struct {
         return &self.ops.items[id];
     }
 };
+
+test "registry: tail ports keep their closed shape — last only, string, required prefix" {
+    var reg = try Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const noopEval = struct {
+        fn f(_: *EvalCtx) EvalError!Emit {
+            return Emit.none;
+        }
+    }.f;
+    const str = types.Tag.string;
+    const good = [_]Port{ .{ .name = "gain", .ty = types.Tag.number }, .{ .name = "locator", .ty = str, .tail = true } };
+    _ = try reg.register(.{ .name = "ok", .inputs = &good, .help = "", .eval = noopEval });
+
+    const not_last = [_]Port{ .{ .name = "locator", .ty = str, .tail = true }, .{ .name = "gain", .ty = types.Tag.number } };
+    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "a", .inputs = &not_last, .help = "", .eval = noopEval }));
+
+    const not_string = [_]Port{.{ .name = "locator", .ty = types.Tag.number, .tail = true }};
+    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_string, .help = "", .eval = noopEval }));
+
+    const optional_prefix = [_]Port{ .{ .name = "gain", .ty = types.Tag.number, .optional = true }, .{ .name = "locator", .ty = str, .tail = true } };
+    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "c", .inputs = &optional_prefix, .help = "", .eval = noopEval }));
+}
 
 test "registry: register/find, duplicate rejected" {
     var reg = try Registry.init(std.testing.allocator);
