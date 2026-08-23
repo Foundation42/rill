@@ -30,7 +30,14 @@ it. Spec section numbers in parentheses.
 - **Parse order is topological order** (§4.5's tie-break falls out for free):
   names are single-assignment and must be defined before use, so upstream
   node ids are always smaller. The evaluator is one ascending sweep; there is
-  no sort anywhere.
+  no sort anywhere. **Accepted consequence: the text is the schedule.** Any
+  client that serialises a graph back to text — the visual editor, when it
+  arrives — must emit statements in dependency order, not box-creation
+  order: topologically sort, name every fan-out edge with `as`, then print.
+  The round-trip guarantee (§1) is on the AST, not on statement order; many
+  valid orders exist and the serialiser must pick one deterministically.
+  This is a constraint on a client that doesn't exist yet — written down
+  here so it's a design input, not a discovery.
 - **Predicate sections** — `where (= 0)`, `partition (< 20) hp` (§4.3): a
   parenthesized opcall in argument position becomes an ordinary node whose
   *primary port is reserved* (positional args fill from port 1, exactly as if
@@ -38,8 +45,13 @@ it. Spec section numbers in parentheses.
   first free boolean port, and whose reserved input mirrors the consumer's
   primary input source. No closures, no higher-order anything.
 - **Two-word operator lookup**: `boolean subtract` resolves before `boolean`,
-  so a host registry seeded from Matryoshka's `(verb, subop)` `Cmd` rows maps
-  one row → one OpDef with no renaming.
+  so a host registry seeded from Matryoshka's `(verb, subop)` `Cmd` rows can
+  map one row → one OpDef with no renaming. **Note the tense: G1 is passed
+  in shape, not in substance.** The gate ran against a stub registry with
+  console-shaped verbs; "every existing one-liner parses and dispatches
+  unchanged" is a prediction until step 7 seeds the real registry and runs
+  the actual 85-row verb inventory through it, table-driven. Hold that claim
+  until the receipt exists.
 - **defs close over nothing — enforced**: a `plane.…` path anywhere inside a
   def body (read *or* write) is a parse error; pass streams in through ports.
   Consequence: templates contain no subscriptions, flattening is a pure

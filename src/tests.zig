@@ -109,8 +109,10 @@ fn expectParseError(source: []const u8, needle: []const u8) !void {
 }
 
 // ---------------------------------------------------------------------------
-// G1 — compatibility shape: console one-liners parse to a chain and bind
-// exactly as dispatched today. Table-driven over console-shaped verbs.
+// G1 — compatibility *shape*: console-shaped one-liners parse to a chain and
+// bind as dispatched today, table-driven over stub verbs. The substantive G1
+// receipt — the real 85-row Cmd inventory through a seeded registry — lands
+// with Matryoshka adoption (build order step 7), not here.
 // ---------------------------------------------------------------------------
 
 test "G1: one-liners parse to single chains with literal bindings" {

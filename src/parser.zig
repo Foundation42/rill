@@ -10,7 +10,10 @@
 //! Structural consequences the rest of the library leans on:
 //!
 //! - Local names are single-assignment and must be defined before use, so
-//!   **parse order is topological order**. The evaluator never sorts.
+//!   **parse order is topological order**. The evaluator never sorts. The
+//!   accepted consequence is that the text is the schedule: a client that
+//!   serialises a graph back to text (the visual editor) must emit
+//!   statements in dependency order, not box-creation order.
 //! - `def` bodies are flattened at parse into the same arena with an
 //!   instance-name prefix; the graph does not know defs exist.
 //! - defs close over nothing: a `plane.…` path (read or write) inside a def
