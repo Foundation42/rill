@@ -5,7 +5,10 @@
 //! joints: `as` names an edge (fan-out), a bare name in argument position
 //! pulls a stream in (fan-in), `{…}` builds a live record, and any `plane.…`
 //! path in any argument position is a subscription — there is no special
-//! subscribe form.
+//! subscribe form. `use plane.player as p` (§3.10) declares a plane-side
+//! prefix alias, resolved entirely at parse: `p.health` is
+//! `plane.player.health` before the graph exists, unknown bare names stay
+//! loud errors, and nothing downstream of the parser knows aliases exist.
 //!
 //! Structural consequences the rest of the library leans on:
 //!
@@ -83,6 +86,14 @@ const Token = struct {
     line: u32,
     col: u32,
 };
+
+fn isReservedWord(s: []const u8) bool {
+    const words = [_][]const u8{ "plane", "use", "def", "as", "true", "false" };
+    for (words) |w| {
+        if (std.mem.eql(u8, s, w)) return true;
+    }
+    return false;
+}
 
 fn isNameStart(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
@@ -300,6 +311,10 @@ const Parser = struct {
     pos: usize = 0,
     program_target: Target = undefined,
     defs: std.StringArrayHashMapUnmanaged(*Template) = .empty,
+    /// `use` aliases: name → fully-expanded plane path prefix (§3.10).
+    /// Resolved entirely at parse — aliases are surface syntax and never
+    /// reach the graph, the dump, or the evaluator.
+    aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
     op_counters: std.StringArrayHashMapUnmanaged(u32) = .empty,
 
     fn a(self: *Parser) std.mem.Allocator {
@@ -357,6 +372,8 @@ const Parser = struct {
             if (t.kind == .eof) break;
             if (t.kind == .name and std.mem.eql(u8, t.text, "def")) {
                 try self.parseDef();
+            } else if (t.kind == .name and std.mem.eql(u8, t.text, "use")) {
+                try self.parseUse();
             } else {
                 _ = try self.parseStatement(&self.program_target);
             }
@@ -420,6 +437,9 @@ const Parser = struct {
                 const t = self.peek();
                 if (t.kind == .eof) break;
                 if (t.col <= def_tok.col) break; // dedent ends the body
+                if (t.kind == .name and std.mem.eql(u8, t.text, "use")) {
+                    return self.fail(t, "defs close over nothing — 'use' is not allowed inside a def body", .{});
+                }
                 last = try self.parseStatement(&target);
                 last_names = last.out_names;
                 any_stmt = true;
@@ -444,6 +464,51 @@ const Parser = struct {
         try self.defs.put(self.a(), tmpl.name, tmpl);
     }
 
+    /// usestmt := "use" path "as" name — plane aliasing (§3.10). Resolved
+    /// entirely at parse: the alias becomes a path prefix and nothing more.
+    /// The head of the path may itself be an earlier alias. Bare dotted names
+    /// never fall through to the plane — an unknown head stays a loud error;
+    /// silent recapture and typo-subscriptions are the failure modes this
+    /// design rejects.
+    fn parseUse(self: *Parser) ParseError!void {
+        _ = self.next(); // "use"
+        const head = self.next();
+        const is_plane = head.kind == .name and std.mem.eql(u8, head.text, "plane");
+        const alias_base: ?[]const u8 = if (head.kind == .name) self.aliases.get(head.text) else null;
+        if (!is_plane and alias_base == null) {
+            return self.fail(head, "use paths are plane-side — expected 'plane.…' or an existing alias", .{});
+        }
+        var path = std.ArrayListUnmanaged(u8).empty;
+        try path.appendSlice(self.a(), if (is_plane) "plane" else alias_base.?);
+        var segs: usize = 0;
+        while (self.peek().kind == .dot) {
+            _ = self.next();
+            const seg = self.next();
+            if (seg.kind != .name) return self.fail(seg, "expected path segment after '.'", .{});
+            try path.append(self.a(), '.');
+            try path.appendSlice(self.a(), seg.text);
+            segs += 1;
+        }
+        if (segs == 0) return self.fail(head, "expected '.' after '{s}'", .{head.text});
+        const as_tok = self.next();
+        if (as_tok.kind != .name or !std.mem.eql(u8, as_tok.text, "as")) {
+            return self.fail(as_tok, "expected 'as' in use statement", .{});
+        }
+        const name_tok = self.next();
+        if (name_tok.kind != .name) return self.fail(name_tok, "expected alias name after 'as'", .{});
+        if (isReservedWord(name_tok.text)) return self.fail(name_tok, "'{s}' is reserved", .{name_tok.text});
+        if (self.aliases.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' is already bound", .{name_tok.text});
+        if (self.program_target.names.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' collides with a stream name", .{name_tok.text});
+        if (self.reg.find(name_tok.text) != null or self.defs.contains(name_tok.text)) {
+            return self.fail(name_tok, "alias '{s}' shadows an operator", .{name_tok.text});
+        }
+        const end = self.peek();
+        if (end.kind != .newline and end.kind != .eof) {
+            return self.fail(end, "unexpected '{s}' — expected end of statement", .{end.text});
+        }
+        try self.aliases.put(self.a(), try self.a().dupe(u8, name_tok.text), path.items);
+    }
+
     /// chain := expr ( "|" opcall )* ( "as" namelist )?
     fn parseStatement(self: *Parser, target: *Target) ParseError!OpResult {
         var current = try self.parseExpr(target);
@@ -466,7 +531,9 @@ const Parser = struct {
             while (true) {
                 const nt = self.next();
                 if (nt.kind != .name) return self.fail(nt, "expected name after 'as'", .{});
+                if (isReservedWord(nt.text)) return self.fail(nt, "'{s}' is reserved", .{nt.text});
                 if (target.names.contains(nt.text)) return self.fail(nt, "name '{s}' is already bound (names are single-assignment)", .{nt.text});
+                if (self.aliases.contains(nt.text)) return self.fail(nt, "name '{s}' shadows a use alias", .{nt.text});
                 if (self.reg.find(nt.text) != null or self.defs.contains(nt.text)) {
                     return self.fail(nt, "name '{s}' shadows an operator", .{nt.text});
                 }
@@ -504,6 +571,9 @@ const Parser = struct {
                 return .{ .outputs = try self.oneSource(lit.source) };
             },
             .name => {
+                if (std.mem.eql(u8, t.text, "use")) {
+                    return self.fail(t, "'use' is only allowed at the top level of a program", .{});
+                }
                 if (std.mem.eql(u8, t.text, "true") or std.mem.eql(u8, t.text, "false")) {
                     const lit = try self.parseLiteral(target);
                     return .{ .outputs = try self.oneSource(lit.source) };
@@ -516,6 +586,10 @@ const Parser = struct {
                     _ = self.next();
                     const projected = try self.parseProjections(target, src);
                     return .{ .outputs = try self.oneSource(projected) };
+                }
+                if (self.aliases.contains(t.text)) {
+                    const arg = try self.parsePlaneRef(target);
+                    return .{ .outputs = try self.oneSource(arg.source) };
                 }
                 const op_tok = self.next();
                 return self.parseOpcall(target, op_tok, null, false);
@@ -594,14 +668,20 @@ const Parser = struct {
     }
 
     /// `plane` `.` segment… — returns either a plain path ref or, for the
-    /// record sugar `plane.a.{x, y}`, a record node's wire.
+    /// record sugar `plane.a.{x, y}`, a record node's wire. The head may also
+    /// be a `use` alias (§3.10), which expands to its plane prefix here —
+    /// aliasing is purely textual and over before graph construction.
     fn parsePlaneRef(self: *Parser, target: *Target) ParseError!Arg {
-        const head = self.next(); // "plane"
+        const head = self.next(); // "plane" or a use alias
         if (target.template != null) {
             return self.fail(head, "defs close over nothing — pass plane streams in through a port", .{});
         }
+        const base: []const u8 = if (std.mem.eql(u8, head.text, "plane"))
+            "plane"
+        else
+            self.aliases.get(head.text) orelse unreachable;
         var path = std.ArrayListUnmanaged(u8).empty;
-        try path.appendSlice(self.a(), "plane");
+        try path.appendSlice(self.a(), base);
         while (self.peek().kind == .dot) {
             _ = self.next();
             const seg = self.peek();
@@ -631,7 +711,7 @@ const Parser = struct {
             try path.append(self.a(), '.');
             try path.appendSlice(self.a(), seg.text);
         }
-        if (path.items.len == "plane".len) return self.fail(head, "expected '.' after 'plane'", .{});
+        if (path.items.len == base.len) return self.fail(head, "expected '.' after '{s}'", .{head.text});
         return .{ .kind = .plane_path, .source = .{ .plane = path.items }, .ty = types.Tag.any, .text = path.items, .tok = head };
     }
 
@@ -918,6 +998,9 @@ const Parser = struct {
                     _ = self.next();
                     const projected = try self.parseProjections(target, src);
                     return .{ .kind = .stream, .source = projected, .ty = self.sourceTy(target, projected), .tok = t };
+                }
+                if (self.aliases.contains(t.text)) {
+                    return self.parsePlaneRef(target);
                 }
                 // a bare word: static word (label) or an error at bind time
                 _ = self.next();

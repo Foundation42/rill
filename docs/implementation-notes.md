@@ -54,6 +54,15 @@ it. Spec section numbers in parentheses.
   piped, so `(< 20)` computes `x < 20`), whose output binds to the consumer's
   first free boolean port, and whose reserved input mirrors the consumer's
   primary input source. No closures, no higher-order anything.
+- **`use` aliasing (§3.10, spec v0.1)** is implemented exactly as specced:
+  pure parse-time prefix expansion, invisible to the graph, the dump, and
+  the evaluator (the frozen G2 hash did not move). Resolution precedence
+  for a bare name: locals (`as` bindings / def ports) → `use` aliases →
+  operators; collisions are loud in every direction and alias heads may be
+  earlier aliases. `use` is top-level only — inside a def body it gets the
+  close-over-nothing error, like the `plane.` paths it stands for. Small
+  hardening that rode along: `as` can no longer bind reserved words
+  (`plane use def as true false`).
 - **Two-word operator lookup**: `boolean subtract` resolves before `boolean`,
   so a host registry seeded from Matryoshka's `(verb, subop)` `Cmd` rows can
   map one row → one OpDef with no renaming. **Note the tense: G1 is passed

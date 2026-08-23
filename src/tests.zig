@@ -496,3 +496,72 @@ test "G2: frozen reference — the canonical dump hashes to a committed value" {
     // find the accident.
     try testing.expectEqualStrings("462382bf2da08de4b62f3c7fbf7a6ac02f62d04602d2221c758422a465164beb", &hex);
 }
+
+// ---------------------------------------------------------------------------
+// use — plane aliasing (§3.10): resolved entirely at parse; aliases are
+// surface syntax and never reach the graph, the dump, or the evaluator.
+// ---------------------------------------------------------------------------
+
+test "use: aliases expand in chains, args, record sugar, and sinks" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\use plane.player as p
+        \\use p.vitals as v
+        \\p.health | clamp 0 100 | div 100 | set plane.ui.hp
+        \\v.{mana, stamina} as pools
+        \\select p.underwater 1 0 as tint
+    , .{ .{ "plane.player.health", @as(i64, 50) }, .{ "plane.player.underwater", false } });
+    defer fx.deinit();
+    // every subscription is fully expanded — no alias residue anywhere
+    const expected_subs = [_][]const u8{
+        "plane.player.health",
+        "plane.player.vitals.mana",
+        "plane.player.vitals.stamina",
+        "plane.player.underwater",
+    };
+    try testing.expectEqual(expected_subs.len, fx.prog.subs.items.len);
+    for (expected_subs, fx.prog.subs.items) |want, sub| {
+        try testing.expectEqualStrings(want, sub.path);
+    }
+    try testing.expectEqualStrings("plane.ui.hp", fx.mock.writes.items[0].path);
+    try testing.expectEqual(@as(f64, 0.5), types.asNumber(fx.mock.writes.items[0].value).?);
+}
+
+test "use: cycle detection sees through aliases" {
+    try expectParseError(
+        \\use plane.a as pa
+        \\pa.x | add 1 | set pa.x
+    , "cycle");
+}
+
+test "use: the loud-error properties survive aliasing" {
+    // bare dotted names never fall through to the plane
+    try expectParseError("q.health | tap t", "unknown operator or name 'q'");
+    // aliases are plane-side declarations only
+    try expectParseError("use q.health as h", "plane-side");
+    // single-assignment holds across aliases and stream names, both ways
+    try expectParseError(
+        \\use plane.a as p
+        \\use plane.b as p
+    , "already bound");
+    try expectParseError(
+        \\use plane.a as p
+        \\plane.b | add 0 as p
+    , "shadows a use alias");
+    // defs close over nothing — neither use statements nor alias references
+    try expectParseError(
+        \\use plane.player as p
+        \\def bad(x: number) =
+        \\  x | add 1
+        \\  use p.q as z
+        \\
+        \\plane.v | bad | tap t
+    , "close over nothing");
+    try expectParseError(
+        \\use plane.player as p
+        \\def bad(x: number) =
+        \\  x | add p.offset
+        \\
+        \\plane.v | bad | tap t
+    , "close over nothing");
+}

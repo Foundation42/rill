@@ -200,7 +200,24 @@ def rivet(m: mesh, n: int) =
 - defs live in the rig/Project like everything else: cut, mounted, provenance-tracked. A pack
   can ship operators, not just assets.
 
-### 3.10 Optional sugar (later, not v0)
+### 3.10 `use` — plane aliasing (v0.1, agreed 2026-08-23)
+
+```
+use plane.player as p
+p.health | dropped_below 20 | play heartbeat
+```
+
+Resolved entirely at parse: `p.` expands to `plane.player.` before graph construction. The
+alias is *declared* plane-side, so everything that depends on plane refs being syntactically
+distinguishable survives intact — unknown bare names stay loud parse errors, `as` bindings can
+never silently recapture a path, the def close-over-nothing rule remains parse-enforceable
+(`use` is banned inside def bodies for the same reason `plane.` is), and a program's full I/O
+contract is still auditable from the text. Bare dotted names falling through to the plane is
+**rejected** as a design: silent recapture and typo-subscriptions are the failure modes.
+REPL-only affordance permitted: at the interactive prompt, an unresolved dotted expression may
+*offer* plane completion — never in a `.rill` file.
+
+### 3.11 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:
 

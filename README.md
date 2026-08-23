@@ -9,14 +9,16 @@ and operators are the valves that decide whether a change continues
 downstream.
 
 ```
+use plane.player as p
+
 # player vitals, live as one record
-plane.player.{health, stamina} as stats
+p.{health, stamina} as stats
 
 # healthbar: clamp, normalise, write back
 stats.health | clamp 0 100 | div 100 | set plane.ui.healthbar
 
 # heartbeat: an occurrence when health crosses below 20
-plane.player.health | dropped_below 20 | play heartbeat
+p.health | dropped_below 20 | play heartbeat
 ```
 
 The pipe is the 90% case and is exactly the console you already have. Names
