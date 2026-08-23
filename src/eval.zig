@@ -22,6 +22,16 @@
 //! bit-identical slot states, every tick. Per-node eval/error counters and
 //! per-tick µs are kept from day one (they are nearly free) — counters are
 //! deterministic and belong to the dump; timings are measured and do not.
+//!
+//! Time is fed, ambient, and never subscribable. `tick(now)` carries the pair
+//! {frame, time_ns}; temporal operators read it through EvalCtx when they
+//! fire and arm the per-runtime timer wheel for their deadlines. The wheel is
+//! the *only* subscription to time: nothing goes dirty because the clock
+//! moved — only nodes whose deadlines have passed. A thousand mounted
+//! watchdogs mid-window cost zero evaluations per tick. Fed time is
+//! contractually non-decreasing on both lanes; a regression is a loud
+//! error.TimeRegression, never a clamp — a clamped regression would replay
+//! differently than it ran.
 
 const std = @import("std");
 const struple = @import("struple");
@@ -37,7 +47,18 @@ const Plane = plane_mod.Plane;
 const Delta = plane_mod.Delta;
 
 pub const MountError = error{Cycle} || plane_mod.PlaneError || std.mem.Allocator.Error;
-pub const TickError = plane_mod.PlaneError || std.mem.Allocator.Error;
+pub const TickError = error{TimeRegression} || plane_mod.PlaneError || std.mem.Allocator.Error;
+
+/// The fed time pair. Real time and frame count ride together because both
+/// duration lanes are honest units (`5s` needs time_ns, `3f` needs frame) —
+/// deriving one from the other would fake it. The host feeds engine time;
+/// tests feed a script; nobody reads a wall clock.
+pub const Now = struct {
+    frame: u64 = 0,
+    time_ns: u64 = 0,
+};
+
+const WheelEntry = struct { deadline: u64, node: NodeId };
 
 const ValueBuf = std.ArrayListUnmanaged(u8);
 
@@ -65,6 +86,11 @@ pub const MountOpts = struct {
     log_ctx: ?*anyopaque = null,
     publish_fn: ?PublishFn = null,
     publish_ctx: ?*anyopaque = null,
+    /// The fed time tick 0 runs at. A rill mounted mid-session must baseline
+    /// its windows against the *current* frame time, not zero — the one-shot
+    /// console dispatch exercises this on every line. Zero is a legitimate
+    /// epoch for hosts with no clock; it is still fed data, still monotonic.
+    now: Now = .{},
 };
 
 pub const Runtime = struct {
@@ -91,6 +117,16 @@ pub const Runtime = struct {
 
     // path → slot, for watch/override addressing
     slot_by_path: std.StringHashMapUnmanaged(SlotId) = .empty,
+
+    // The timer wheel: two lanes of (absolute deadline, node), sorted by
+    // deadline. Expiry marks nodes dirty at the top of the tick; entries are
+    // consumed on firing — a stale wake (the op's real deadline moved) is
+    // answered by the op re-arming, so each armed node keeps ~one live entry.
+    wheel_ns: std.ArrayListUnmanaged(WheelEntry) = .empty,
+    wheel_frame: std.ArrayListUnmanaged(WheelEntry) = .empty,
+    /// Last fed time (dump-serialized: the monotonicity contract and every
+    /// stored deadline are relative to *fed* history, which restore resumes).
+    now: Now = .{},
 
     tick_index: u64 = 0,
     last_tick_ns: u64 = 0, // measured, never serialized
@@ -131,9 +167,13 @@ pub const Runtime = struct {
             }
         }
 
-        // Tick 0: everything evaluates once, in topo order.
+        // Tick 0: everything evaluates once, in topo order, at the mount
+        // moment's fed time — window baselines are real from the first eval.
         for (0..prog.nodeCount()) |n| try rt.markNode(@intCast(n));
-        try rt.tick();
+        rt.tick(opts.now) catch |err| switch (err) {
+            error.TimeRegression => unreachable, // now starts at zero
+            else => |e| return e,
+        };
         return rt;
     }
 
@@ -200,6 +240,8 @@ pub const Runtime = struct {
         for (self.write_queue.items) |w| self.gpa.free(w.value);
         self.write_queue.deinit(self.gpa);
         self.slot_by_path.deinit(self.gpa);
+        self.wheel_ns.deinit(self.gpa);
+        self.wheel_frame.deinit(self.gpa);
     }
 
     // -- feeding ------------------------------------------------------------
@@ -239,9 +281,44 @@ pub const Runtime = struct {
         return self.values[sid].items;
     }
 
+    // -- the timer wheel ----------------------------------------------------
+
+    /// Arm a wheel entry: `node` goes dirty at the first tick whose fed time
+    /// reaches `deadline`. Sorted insert, stable on ties; an exact duplicate
+    /// (same node, same deadline) is dropped so re-arming is free.
+    pub fn arm(self: *Runtime, deadline: registry.Deadline, node: NodeId) !void {
+        const list, const at = switch (deadline) {
+            .ns => |v| .{ &self.wheel_ns, v },
+            .frame => |v| .{ &self.wheel_frame, v },
+        };
+        var i = list.items.len;
+        while (i > 0 and list.items[i - 1].deadline > at) i -= 1;
+        var j = i;
+        while (j > 0 and list.items[j - 1].deadline == at) : (j -= 1) {
+            if (list.items[j - 1].node == node) return;
+        }
+        try list.insert(self.gpa, i, .{ .deadline = at, .node = node });
+    }
+
+    fn expireWheel(self: *Runtime, list: *std.ArrayListUnmanaged(WheelEntry), now_val: u64) TickError!void {
+        var k: usize = 0;
+        while (k < list.items.len and list.items[k].deadline <= now_val) : (k += 1) {
+            try self.markNode(list.items[k].node);
+        }
+        // Shrinking replaceRange never allocates.
+        if (k > 0) list.replaceRange(self.gpa, 0, k, &.{}) catch unreachable;
+    }
+
     // -- the tick -----------------------------------------------------------
 
-    pub fn tick(self: *Runtime) TickError!void {
+    pub fn tick(self: *Runtime, now: Now) TickError!void {
+        // Fed time is non-decreasing on both lanes, by contract. Loud, not
+        // clamped: a clamp would replay differently than it ran.
+        if (now.time_ns < self.now.time_ns or now.frame < self.now.frame) {
+            return error.TimeRegression;
+        }
+        self.now = now;
+
         var timer: ?std.time.Timer = std.time.Timer.start() catch null;
 
         var arena_impl = std.heap.ArenaAllocator.init(self.gpa);
@@ -257,6 +334,11 @@ pub const Runtime = struct {
         }
         for (self.pending.values()) |v| self.gpa.free(v);
         self.pending.clearRetainingCapacity();
+
+        // Mark: expired wheel deadlines. Entries armed *during* this tick's
+        // sweep land behind the expiry scan and fire next tick at soonest.
+        try self.expireWheel(&self.wheel_ns, now.time_ns);
+        try self.expireWheel(&self.wheel_frame, now.frame);
 
         // Evaluate: ascending node id = topological order. Propagation only
         // marks forward, so one sweep suffices and no node runs twice.
@@ -295,11 +377,16 @@ pub const Runtime = struct {
         const n = self.prog.node(node_id);
         const def = self.prog.reg.get(n.op);
 
-        // All non-optional inputs must have a value; otherwise stay quiet
-        // until the graph fills in (startup, absent plane paths).
+        // All required inputs must have a value; otherwise stay quiet until
+        // the graph fills in (startup, absent plane paths). An *optional*
+        // port bound to a stream that hasn't produced yet reads as null —
+        // same as unbound — instead of blocking the node: the gates' `off`/
+        // `on` controls may sit on paths that fire rarely or never.
         for (n.inputs) |sid| {
             const s = self.prog.slot(sid);
-            if (s.source != .none and !self.has[sid]) return;
+            if (s.source == .none or self.has[sid]) continue;
+            if (s.port < def.inputs.len and def.inputs[s.port].optional) continue;
+            return;
         }
 
         const in = try arena.alloc(?[]const u8, n.inputs.len);
@@ -311,6 +398,7 @@ pub const Runtime = struct {
         const out = try arena.alloc(struple.Packer, n.outputs.len);
         for (out) |*o| o.* = struple.Packer.init(arena);
 
+        var wake_thunk = WakeThunk{ .rt = self, .node = node_id };
         var ctx = registry.EvalCtx{
             .arena = arena,
             .in = in,
@@ -324,6 +412,10 @@ pub const Runtime = struct {
             .log_fn = self.log_fn,
             .log_ctx = self.log_ctx,
             .host = self.host_ctx,
+            .now_ns = self.now.time_ns,
+            .now_frame = self.now.frame,
+            .wake_fn = WakeThunk.wake,
+            .wake_ctx = &wake_thunk,
         };
 
         self.eval_count[node_id] += 1;
@@ -382,6 +474,16 @@ pub const Runtime = struct {
         self.dirty[nid] = true;
         try self.touched_nodes.append(self.gpa, nid);
     }
+
+    const WakeThunk = struct {
+        rt: *Runtime,
+        node: NodeId,
+
+        fn wake(ctx: *anyopaque, deadline: registry.Deadline) registry.EvalError!void {
+            const self: *WakeThunk = @ptrCast(@alignCast(ctx));
+            self.rt.arm(deadline, self.node) catch return error.OutOfMemory;
+        }
+    };
 
     fn queueWriteThunk(ctx: *anyopaque, path: []const u8, val: []const u8) registry.EvalError!void {
         const self: *Runtime = @ptrCast(@alignCast(ctx));

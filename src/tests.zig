@@ -211,8 +211,8 @@ test "G1: wire-time type check rejects mesh → number with a pointed message" {
 // ---------------------------------------------------------------------------
 
 const g2_source =
-    \\plane.player.{health, stamina} as stats
-    \\stats.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+    \\plane.player.{health, stamina} as vitals
+    \\vitals.health | clamp 0 100 | div 100 | set plane.ui.healthbar
     \\select plane.player.underwater 1 0 | mul 0.5 as tint
     \\plane.player.health | dropped_below 20 | tap low
 ;
@@ -234,7 +234,7 @@ fn g2Run(gpa: std.mem.Allocator, dumps: *std.ArrayListUnmanaged([]u8)) !void {
     };
     for (feeds) |f| {
         try feedValue(&fx.rt, gpa, f[0], f[1]);
-        try fx.rt.tick();
+        try fx.rt.tick(.{});
         try dumps.append(gpa, try rill.dump(&fx.rt, gpa));
     }
 }
@@ -273,7 +273,7 @@ test "G3: two writes to one path in a tick evaluate downstream once, with the la
     const before = fx.rt.eval_count[add_id];
     try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 10));
     try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 30));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(before + 1, fx.rt.eval_count[add_id]);
     // the flushed write carries the coalesced (last) value: 30 + 0 = 30.0
     const last = fx.mock.writes.items[fx.mock.writes.items.len - 1];
@@ -283,14 +283,14 @@ test "G3: two writes to one path in a tick evaluate downstream once, with the la
 test "G3: health+stamina in one tick ⇒ the record evaluates once" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.player.{health, stamina} as stats
+        \\plane.player.{health, stamina} as vitals
     , .{ .{ "plane.player.health", @as(i64, 100) }, .{ "plane.player.stamina", @as(i64, 100) } });
     defer fx.deinit();
     const rec_id = nodeIdOf(&fx.prog, "record1").?;
     const before = fx.rt.eval_count[rec_id];
     try feedValue(&fx.rt, testing.allocator, "plane.player.health", @as(i64, 55));
     try feedValue(&fx.rt, testing.allocator, "plane.player.stamina", @as(i64, 66));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(before + 1, fx.rt.eval_count[rec_id]);
 }
 
@@ -308,7 +308,7 @@ test "G4: value 20→20 is silence" {
     const add_id = nodeIdOf(&fx.prog, "add1").?;
     const before = fx.rt.eval_count[add_id];
     try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 20));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(before, fx.rt.eval_count[add_id]);
 }
 
@@ -323,7 +323,7 @@ test "G4: occurrences with identical payloads both propagate" {
     const wave = [_]bool{ true, false, true };
     for (wave) |v| {
         try feedValue(&fx.rt, testing.allocator, "plane.b", v);
-        try fx.rt.tick();
+        try fx.rt.tick(.{});
     }
     // two rising edges → two identical `true` occurrences → tap ran twice
     try testing.expectEqual(before + 2, fx.rt.eval_count[tap_id]);
@@ -342,13 +342,13 @@ test "G5: where false ⇒ downstream never evaluates" {
     defer fx.deinit();
     const tap_id = nodeIdOf(&fx.prog, "tap1").?;
     try feedValue(&fx.rt, testing.allocator, "plane.n", @as(i64, 7));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try feedValue(&fx.rt, testing.allocator, "plane.n", @as(i64, 9));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(@as(u64, 0), fx.rt.eval_count[tap_id]);
     // and the gate opens when the predicate holds
     try feedValue(&fx.rt, testing.allocator, "plane.n", @as(i64, -3));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(@as(u64, 1), fx.rt.eval_count[tap_id]);
 }
 
@@ -366,7 +366,7 @@ test "G5: partition routes every input to exactly one side" {
     const feeds = [_]i64{ 15, 25, 10, 90, 3 }; // 3 low, 2 ok (+1 ok at mount)
     for (feeds) |v| {
         try feedValue(&fx.rt, testing.allocator, "plane.hp", v);
-        try fx.rt.tick();
+        try fx.rt.tick(.{});
     }
     const total_inputs: u64 = feeds.len + 1; // + the mount-time value (50 → ok)
     try testing.expectEqual(@as(u64, 3), fx.rt.eval_count[tap_low]);
@@ -410,7 +410,7 @@ test "G7: def internals are addressable, overridable, and the override survives 
     const three = try packOne(testing.allocator, @as(i64, 3));
     defer testing.allocator.free(three);
     try fx.rt.setInput(knob, three);
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     const w1 = fx.mock.writes.items[fx.mock.writes.items.len - 1];
     try testing.expectEqual(@as(f64, 130.0), types.asNumber(w1.value).?);
 
@@ -428,7 +428,7 @@ test "G7: def internals are addressable, overridable, and the override survives 
 
     // and the restored graph keeps computing with the override
     try feedValue(&rt2, testing.allocator, "plane.v", @as(i64, 20));
-    try rt2.tick();
+    try rt2.tick(.{});
     const w2 = mock2.writes.items[mock2.writes.items.len - 1];
     try testing.expectEqual(@as(f64, 160.0), types.asNumber(w2.value).?);
 }
@@ -447,7 +447,7 @@ test "G8: dump → load → dump is byte-identical" {
     });
     defer fx.deinit();
     try feedValue(&fx.rt, testing.allocator, "plane.player.health", @as(i64, 30));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
 
     const dump1 = try rill.dump(&fx.rt, testing.allocator);
     defer testing.allocator.free(dump1);
@@ -482,14 +482,14 @@ test "mount runs tick 0: the program is live before the first delta" {
 test "records: projection follows field changes; wire slots are watchable" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.player.{health, mana} as stats
-        \\stats.mana | add 0 as m
+        \\plane.player.{health, mana} as vitals
+        \\vitals.mana | add 0 as m
     , .{ .{ "plane.player.health", @as(i64, 100) }, .{ "plane.player.mana", @as(i64, 30) } });
     defer fx.deinit();
     const add_out = "programs.p.add1.out.out";
     try testing.expectEqual(@as(f64, 30.0), types.asNumber(fx.rt.readSlot(add_out).?).?);
     try feedValue(&fx.rt, testing.allocator, "plane.player.mana", @as(i64, 75));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(@as(f64, 75.0), types.asNumber(fx.rt.readSlot(add_out).?).?);
 }
 
@@ -510,7 +510,7 @@ test "select chooses per tick without an if statement" {
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 20), types.asNumber(fx.mock.writes.items[0].value).?);
     try feedValue(&fx.rt, testing.allocator, "plane.under", true);
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     const last = fx.mock.writes.items[fx.mock.writes.items.len - 1];
     try testing.expectEqual(@as(f64, 10), types.asNumber(last.value).?);
 }
@@ -529,7 +529,11 @@ test "G2: frozen reference — the canonical dump hashes to a committed value" {
     // Frozen 2026-08-23. If this fails, the change altered mounted-program
     // semantics or the dump format — either bump fmt_version with intent, or
     // find the accident.
-    try testing.expectEqualStrings("462382bf2da08de4b62f3c7fbf7a6ac02f62d04602d2221c758422a465164beb", &hex);
+    // Re-frozen 2026-08-23 (same day, deliberate, twice over): fmt v2 added
+    // the "now"/"wheel" sections for temporal operators, and the fixture's
+    // local renamed stats → vitals because `stats` became a core operator
+    // (the shadow ban firing on our own test was the rename's receipt).
+    try testing.expectEqualStrings("4d1439393d01ef25fea10c322cdb9eb6aebe57a8c1524de1a679efd905900792", &hex);
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +632,7 @@ test "publish hook: freshened wires reach the host each tick, then go quiet" {
 
     // a change publishes every touched slot on the chain, by stable path
     try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 80));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     var saw_div_out = false;
     for (Collector.paths.items) |p| {
         if (std.mem.eql(u8, p, "programs.p.div1.out.out")) saw_div_out = true;
@@ -639,7 +643,7 @@ test "publish hook: freshened wires reach the host each tick, then go quiet" {
     // suppression means silence: same value again publishes nothing
     Collector.reset();
     try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 80));
-    try fx.rt.tick();
+    try fx.rt.tick(.{});
     try testing.expectEqual(@as(usize, 0), Collector.paths.items.len);
 }
 
@@ -873,4 +877,361 @@ test "tail: dump → load → dump survives a tail literal byte-identically" {
     const dump2 = try rill.dump(&rt2, testing.allocator);
     defer testing.allocator.free(dump2);
     try testing.expectEqualSlices(u8, dump1, dump2);
+}
+
+// ---------------------------------------------------------------------------
+// Temporal operators (agents doc §2) — time is fed, ambient, wheel-delivered.
+// Every clock in this section is a script; the suite contains no sleeps.
+// ---------------------------------------------------------------------------
+
+const ms = std.time.ns_per_ms;
+
+fn tickAt(fx: *Fixture, ns: u64) !void {
+    try fx.rt.tick(.{ .time_ns = ns });
+}
+
+fn slotNum(fx: *Fixture, path: []const u8) ?f64 {
+    const v = fx.rt.readSlot(path) orelse return null;
+    return types.asNumber(v);
+}
+
+test "durations: literals encode lane and count canonically" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.a | sample 5s as d1
+        \\plane.a | sample 250ms as d2
+        \\plane.a | sample 2m as d3
+        \\plane.a | sample 3f as d4
+        \\plane.a | sample 2.5s as d5
+    , &diag);
+    defer prog.deinit();
+    const expect = [_]struct { []const u8, bool, u64 }{
+        .{ "sample1", false, 5_000_000_000 },
+        .{ "sample2", false, 250_000_000 },
+        .{ "sample3", false, 120_000_000_000 },
+        .{ "sample4", true, 3 },
+        .{ "sample5", false, 2_500_000_000 },
+    };
+    for (expect) |e| {
+        const n = prog.node(nodeIdOf(&prog, e[0]).?);
+        const lit = prog.slot(n.inputs[1]).source.literal;
+        const d = types.asDuration(lit).?;
+        try testing.expectEqual(e[1], d.frames);
+        try testing.expectEqual(e[2], d.count);
+    }
+}
+
+test "durations: bad spellings are loud, each with its own message" {
+    try expectParseError("plane.a | sample 5", "takes a duration");
+    try expectParseError("add 5s 1", "expected number, got duration");
+    try expectParseError("plane.a | sample 5x", "unknown duration unit 'x'");
+    try expectParseError("plane.a | sample 2.5f", "whole frames");
+    try expectParseError("plane.a | sample -5s", "cannot be negative");
+}
+
+test "sample: leading edge immediate, trailing edge via the wheel, quiet is free" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.v | sample 100ms as s
+    , .{.{ "plane.v", @as(i64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.sample1.out.out";
+    const sid = nodeIdOf(&fx.prog, "sample1").?;
+    // mount (t=0): leading edge passes
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+
+    // changes inside the window coalesce to the latest, nothing emits yet
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(i64, 2));
+    try tickAt(&fx, 10 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(i64, 3));
+    try tickAt(&fx, 50 * ms);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+
+    // mid-window quiet ticks cost zero evaluations — the wheel is the only
+    // subscription to time
+    const evals = fx.rt.eval_count[sid];
+    try tickAt(&fx, 60 * ms);
+    try tickAt(&fx, 99 * ms);
+    try testing.expectEqual(evals, fx.rt.eval_count[sid]);
+
+    // the period boundary delivers the trailing edge
+    try tickAt(&fx, 100 * ms);
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, out).?);
+}
+
+test "debounce: a storm collapses to its last edge, emitted once after quiet" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.e | debounce 50ms | tap t
+    , .{});
+    defer fx.deinit();
+    const out = "programs.p.tap1.out.out";
+    const tap = nodeIdOf(&fx.prog, "tap1").?;
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 1));
+    try tickAt(&fx, 1 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 2));
+    try tickAt(&fx, 2 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 3));
+    try tickAt(&fx, 3 * ms);
+    try testing.expect(fx.rt.readSlot(out) == null); // storm still raging
+    // superseded wheel entries stale-fire into silence and re-arm the truth
+    try tickAt(&fx, 51 * ms);
+    try tickAt(&fx, 52 * ms);
+    try testing.expect(fx.rt.readSlot(out) == null);
+    try tickAt(&fx, 53 * ms);
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, out).?);
+    try testing.expectEqual(@as(u64, 1), fx.rt.eval_count[tap]); // once, not thrice
+}
+
+test "throttle: first passes, the window eats the rest" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.e | throttle 50ms | tap t
+    , .{});
+    defer fx.deinit();
+    const out = "programs.p.tap1.out.out";
+    const tap = nodeIdOf(&fx.prog, "tap1").?;
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 1));
+    try tickAt(&fx, 1 * ms);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 2));
+    try tickAt(&fx, 10 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 3));
+    try tickAt(&fx, 40 * ms);
+    try testing.expectEqual(@as(u64, 1), fx.rt.eval_count[tap]); // both eaten
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 4));
+    try tickAt(&fx, 60 * ms);
+    try testing.expectEqual(@as(f64, 4), slotNum(&fx, out).?);
+    try testing.expectEqual(@as(u64, 2), fx.rt.eval_count[tap]);
+}
+
+test "window + stats: a spike decays on schedule with no input at all" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.n | window 100ms | stats as t
+    , .{});
+    defer fx.deinit();
+    const out = "programs.p.stats1.out.out";
+    try feedValue(&fx.rt, testing.allocator, "plane.n", @as(i64, 5));
+    try tickAt(&fx, 0);
+    try feedValue(&fx.rt, testing.allocator, "plane.n", @as(i64, 9));
+    try tickAt(&fx, 10 * ms);
+
+    const rec1 = fx.rt.readSlot(out).?;
+    const inner1 = try (struple.view(rec1).containedItems(testing.allocator));
+    defer testing.allocator.free(inner1.?);
+    const m1 = struple.MapView.init(inner1.?);
+    var kp = struple.Packer.init(testing.allocator);
+    defer kp.deinit();
+    try kp.appendString("max");
+    try testing.expectEqual(@as(f64, 9), types.asNumber((try m1.get(kp.bytes())).?).?);
+    kp.reset();
+    try kp.appendString("mean");
+    try testing.expectEqual(@as(f64, 7), types.asNumber((try m1.get(kp.bytes())).?).?);
+    kp.reset();
+    try kp.appendString("n");
+    try testing.expectEqual(@as(f64, 2), types.asNumber((try m1.get(kp.bytes())).?).?);
+
+    // t=105ms: the 5 (stamped t=0) aged out through the wheel; the 9 remains
+    try tickAt(&fx, 105 * ms);
+    const rec2 = fx.rt.readSlot(out).?;
+    const inner2 = try (struple.view(rec2).containedItems(testing.allocator));
+    defer testing.allocator.free(inner2.?);
+    const m2 = struple.MapView.init(inner2.?);
+    kp.reset();
+    try kp.appendString("mean");
+    try testing.expectEqual(@as(f64, 9), types.asNumber((try m2.get(kp.bytes())).?).?);
+
+    // t=115ms: empty window — zeros with n = 0, so a crossing detector re-arms
+    try tickAt(&fx, 115 * ms);
+    const rec3 = fx.rt.readSlot(out).?;
+    const inner3 = try (struple.view(rec3).containedItems(testing.allocator));
+    defer testing.allocator.free(inner3.?);
+    const m3 = struple.MapView.init(inner3.?);
+    kp.reset();
+    try kp.appendString("max");
+    try testing.expectEqual(@as(f64, 0), types.asNumber((try m3.get(kp.bytes())).?).?);
+    kp.reset();
+    try kp.appendString("n");
+    try testing.expectEqual(@as(f64, 0), types.asNumber((try m3.get(kp.bytes())).?).?);
+}
+
+test "delay: occurrences arrive late; same-tick maturities collapse to the newest" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.e | delay 30ms | tap t
+    , .{});
+    defer fx.deinit();
+    const out = "programs.p.tap1.out.out";
+    const tap = nodeIdOf(&fx.prog, "tap1").?;
+
+    // separated maturities deliver separately
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 1));
+    try tickAt(&fx, 1 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 2));
+    try tickAt(&fx, 5 * ms);
+    try testing.expect(fx.rt.readSlot(out) == null);
+    try tickAt(&fx, 31 * ms);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+    try tickAt(&fx, 35 * ms);
+    try testing.expectEqual(@as(f64, 2), slotNum(&fx, out).?);
+    try testing.expectEqual(@as(u64, 2), fx.rt.eval_count[tap]);
+
+    // a late tick that matures both delivers only the newest
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 3));
+    try tickAt(&fx, 40 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 4));
+    try tickAt(&fx, 45 * ms);
+    try tickAt(&fx, 200 * ms);
+    try testing.expectEqual(@as(f64, 4), slotNum(&fx, out).?);
+    try testing.expectEqual(@as(u64, 3), fx.rt.eval_count[tap]);
+}
+
+test "arm/disarm: the latch gates occurrences; controls latch ahead of the stream; on wins a tie" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.e | arm off: plane.stop on: plane.go | tap t
+    , .{});
+    defer fx.deinit();
+    const out = "programs.p.tap1.out.out";
+    const tap = nodeIdOf(&fx.prog, "tap1").?;
+
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 1));
+    try tickAt(&fx, 1 * ms);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+
+    // off and the occurrence in the same tick: controls apply first
+    try feedValue(&fx.rt, testing.allocator, "plane.stop", @as(i64, 1));
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 2));
+    try tickAt(&fx, 2 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 3));
+    try tickAt(&fx, 3 * ms);
+    try testing.expectEqual(@as(u64, 1), fx.rt.eval_count[tap]);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.go", @as(i64, 1));
+    try tickAt(&fx, 4 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 4));
+    try tickAt(&fx, 5 * ms);
+    try testing.expectEqual(@as(f64, 4), slotNum(&fx, out).?);
+
+    // tie: both controls fire with the occurrence — on wins (fail-safe armed)
+    try feedValue(&fx.rt, testing.allocator, "plane.stop", @as(i64, 2));
+    try feedValue(&fx.rt, testing.allocator, "plane.go", @as(i64, 2));
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 5));
+    try tickAt(&fx, 6 * ms);
+    try testing.expectEqual(@as(f64, 5), slotNum(&fx, out).?);
+}
+
+test "disarm starts closed; a control ahead of the first occurrence is not lost" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.e | disarm on: plane.go | tap t
+    , .{});
+    defer fx.deinit();
+    const out = "programs.p.tap1.out.out";
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 1));
+    try tickAt(&fx, 1 * ms);
+    try testing.expect(fx.rt.readSlot(out) == null);
+    // `on` arrives while the stream is quiet — the latch must keep it
+    try feedValue(&fx.rt, testing.allocator, "plane.go", @as(i64, 1));
+    try tickAt(&fx, 2 * ms);
+    try feedValue(&fx.rt, testing.allocator, "plane.e", @as(i64, 2));
+    try tickAt(&fx, 3 * ms);
+    try testing.expectEqual(@as(f64, 2), slotNum(&fx, out).?);
+}
+
+test "frame durations run on the frame lane; the ns clock may stand still" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.v | sample 3f as s
+    , .{.{ "plane.v", @as(i64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.sample1.out.out";
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(i64, 2));
+    try fx.rt.tick(.{ .frame = 1 });
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+    try fx.rt.tick(.{ .frame = 3 }); // time_ns still 0 — frames are the unit
+    try testing.expectEqual(@as(f64, 2), slotNum(&fx, out).?);
+}
+
+test "fed time is a contract: a regression on either lane errors loud, never clamps" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.v | add 0 as a
+    , .{.{ "plane.v", @as(i64, 1) }});
+    defer fx.deinit();
+    try fx.rt.tick(.{ .frame = 5, .time_ns = 100 });
+    try testing.expectError(error.TimeRegression, fx.rt.tick(.{ .frame = 5, .time_ns = 50 }));
+    try testing.expectError(error.TimeRegression, fx.rt.tick(.{ .frame = 4, .time_ns = 200 }));
+    try fx.rt.tick(.{ .frame = 5, .time_ns = 100 }); // equal is fine: non-decreasing
+}
+
+test "G8 extends to time: a program restored mid-window stays the same distance from its deadline" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.v | sample 100ms as s
+        \\plane.e | cooldown 100ms | tap c
+    , .{ .{ "plane.v", @as(i64, 1) }, .{ "plane.e", @as(i64, 1) } });
+    defer fx.deinit();
+    // t=40ms: sample holds a pending 2, wheel armed for t=100ms; the
+    // cooldown that fired at mount is deaf until t=100ms
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(i64, 2));
+    try tickAt(&fx, 40 * ms);
+
+    const dump1 = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(dump1);
+    var prog2 = try rill.loadProgram(testing.allocator, &fx.reg, dump1);
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
+    defer rt2.deinit();
+    try rill.restoreState(&rt2, dump1);
+
+    // the dump is bit-stable through the round trip (now + wheel included)
+    const dump2 = try rill.dump(&rt2, testing.allocator);
+    defer testing.allocator.free(dump2);
+    try testing.expectEqualSlices(u8, dump1, dump2);
+
+    // 60ms out from the save, both runtimes fire their trailing edge on the
+    // same tick — and an occurrence inside the remaining cooldown is eaten
+    // by both
+    const s_out = "programs.p.sample1.out.out";
+    try feedValue(&rt2, testing.allocator, "plane.e", @as(i64, 2));
+    try rt2.tick(.{ .time_ns = 70 * ms });
+    try testing.expectEqual(@as(u64, 1), rt2.eval_count[nodeIdOf(&prog2, "tap1").?]);
+    try rt2.tick(.{ .time_ns = 100 * ms });
+    try testing.expectEqual(@as(f64, 2), types.asNumber(rt2.readSlot(s_out).?).?);
+    try tickAt(&fx, 100 * ms);
+    try testing.expectEqual(@as(f64, 2), slotNum(&fx, s_out).?);
+    try testing.expectEqualSlices(u8, fx.rt.readSlot(s_out).?, rt2.readSlot(s_out).?);
+}
+
+test "a rill mounted mid-session baselines at the mount moment, not zero" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.v", @as(i64, 1));
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.v | sample 100ms as s
+    , &diag);
+    defer prog.deinit();
+    const t0: u64 = 1000 * std.time.ns_per_s;
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .now = .{ .time_ns = t0 } });
+    defer rt.deinit();
+    const out = "programs.p.sample1.out.out";
+    try testing.expectEqual(@as(f64, 1), types.asNumber(rt.readSlot(out).?).?);
+    // 50ms after mount is mid-window — a zero baseline would emit here
+    const enc = try packOne(testing.allocator, @as(i64, 2));
+    defer testing.allocator.free(enc);
+    try rt.feed(.{ .path = "plane.v", .value = enc });
+    try rt.tick(.{ .time_ns = t0 + 50 * ms });
+    try testing.expectEqual(@as(f64, 1), types.asNumber(rt.readSlot(out).?).?);
+    try rt.tick(.{ .time_ns = t0 + 100 * ms });
+    try testing.expectEqual(@as(f64, 2), types.asNumber(rt.readSlot(out).?).?);
 }

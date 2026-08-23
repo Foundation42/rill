@@ -77,6 +77,7 @@ pub const Diag = struct {
 const TokKind = enum {
     name, // identifier or keyword
     number,
+    duration, // number glued to a unit suffix: 5s, 250ms, 2m, 3f
     string, // raw span between quotes (escapes not yet applied)
     sym, // = != < <= > >=
     pipe,
@@ -177,6 +178,16 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
                 end -= 1;
                 i -= 1;
                 col -= 1;
+            }
+            // A unit suffix glued to the number is a duration literal
+            // (§3.13): 5s, 250ms, 2m, 3f. Only the *shape* is spotted here —
+            // the parser validates the unit, so `5x` errors loud instead of
+            // splitting into a number and a name. Alphabetic only: `1/2`
+            // stays number-raw-number and keeps its own loud error.
+            if (i < src.len and std.ascii.isAlphabetic(src[i])) {
+                while (i < src.len and std.ascii.isAlphabetic(src[i])) : (i += 1) col += 1;
+                try toks.append(a, .{ .kind = .duration, .text = src[start..i], .line = tl, .col = tc, .off = to });
+                continue;
             }
             try toks.append(a, .{ .kind = .number, .text = src[start..end], .line = tl, .col = tc, .off = to });
             continue;
@@ -651,7 +662,44 @@ const Parser = struct {
         _ = target;
         const t = self.next();
         var pk = struple.Packer.init(self.a());
+        var ty_override: ?types.TypeId = null;
         switch (t.kind) {
+            .duration => {
+                // number + unit, one token. The unit set is closed (ratified
+                // 2026-08-23): s / ms / m / f — frames only where frames are
+                // the honest unit, and always whole.
+                var split = t.text.len;
+                while (split > 0 and std.ascii.isAlphabetic(t.text[split - 1])) split -= 1;
+                const num_part = t.text[0..split];
+                const unit = t.text[split..];
+                if (num_part.len == 0 or num_part[0] == '-') {
+                    return self.fail(t, "a duration cannot be negative: '{s}'", .{t.text});
+                }
+                const frames = std.mem.eql(u8, unit, "f");
+                const factor: u64 = if (frames)
+                    1
+                else if (std.mem.eql(u8, unit, "ms"))
+                    std.time.ns_per_ms
+                else if (std.mem.eql(u8, unit, "s"))
+                    std.time.ns_per_s
+                else if (std.mem.eql(u8, unit, "m"))
+                    std.time.ns_per_min
+                else
+                    return self.fail(t, "unknown duration unit '{s}' in '{s}' (s, ms, m, f)", .{ unit, t.text });
+                var count: u64 = 0;
+                if (std.mem.indexOfAny(u8, num_part, ".eE") != null) {
+                    if (frames) return self.fail(t, "frame durations are whole frames: '{s}'", .{t.text});
+                    const v = std.fmt.parseFloat(f64, num_part) catch return self.fail(t, "bad number '{s}'", .{num_part});
+                    const scaled = @round(v * @as(f64, @floatFromInt(factor)));
+                    if (!(scaled >= 0) or scaled >= 9.22e18) return self.fail(t, "duration out of range: '{s}'", .{t.text});
+                    count = @intFromFloat(scaled);
+                } else {
+                    const v = std.fmt.parseInt(u64, num_part, 10) catch return self.fail(t, "bad number '{s}'", .{num_part});
+                    count = std.math.mul(u64, v, factor) catch return self.fail(t, "duration out of range: '{s}'", .{t.text});
+                }
+                types.appendDuration(&pk, self.a(), .{ .frames = frames, .count = count }) catch return error.OutOfMemory;
+                ty_override = types.Tag.duration;
+            },
             .number => {
                 if (std.mem.indexOfAny(u8, t.text, ".eE") != null) {
                     const v = std.fmt.parseFloat(f64, t.text) catch return self.fail(t, "bad number '{s}'", .{t.text});
@@ -675,7 +723,7 @@ const Parser = struct {
             else => return self.fail(t, "expected a literal, got '{s}'", .{t.text}),
         }
         const bytes = pk.toOwnedSlice() catch return error.OutOfMemory;
-        return .{ .source = .{ .literal = bytes }, .ty = types.typeOfValue(bytes) };
+        return .{ .source = .{ .literal = bytes }, .ty = ty_override orelse types.typeOfValue(bytes) };
     }
 
     fn unescape(self: *Parser, raw: []const u8) ![]const u8 {
@@ -903,6 +951,10 @@ const Parser = struct {
             };
             const val_ty = if (arg.kind == .section) self.sourceTy(target, arg.source) else arg.ty;
             if (!types.accepts(port.ty, val_ty)) {
+                if (port.ty == types.Tag.duration and val_ty == types.Tag.number) {
+                    // §2.2: `sample 5` is a wire-time type error, with the fix named.
+                    return self.fail(arg.tok, "'{s}' port '{s}' takes a duration — write it with a unit: 5s, 250ms, 3f", .{ op_name, port.name });
+                }
                 return self.fail(arg.tok, "'{s}' port '{s}': expected {s}, got {s}", .{
                     op_name, port.name, self.reg.types.name(port.ty), self.reg.types.name(val_ty),
                 });
@@ -1070,7 +1122,7 @@ const Parser = struct {
     fn parseArgValue(self: *Parser, target: *Target) ParseError!Arg {
         const t = self.peek();
         switch (t.kind) {
-            .number, .string => {
+            .number, .duration, .string => {
                 const lit = try self.parseLiteral(target);
                 return .{ .kind = .literal, .source = lit.source, .ty = lit.ty, .tok = t };
             },

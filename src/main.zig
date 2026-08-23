@@ -94,7 +94,7 @@ pub fn main() !void {
             try pk.appendInt(d.value);
             try rt.feed(.{ .path = d.path, .value = pk.bytes() });
         }
-        try rt.tick();
+        try rt.tick(.{ .frame = tick_no, .time_ns = tick_no * std.time.ns_per_ms * 16 });
         writes_seen = report(&mock, writes_seen, tick_no);
     }
 

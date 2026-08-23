@@ -76,6 +76,14 @@ pub const Emit = packed struct {
 
 pub const EvalError = error{ BadValue, PlaneWrite } || std.mem.Allocator.Error;
 
+/// An absolute point on one of the two fed-time lanes (never a relative
+/// offset — absolute is the honest form: it serializes, and a program
+/// restored mid-window stays exactly as far from its deadline as it was).
+pub const Deadline = union(enum) {
+    ns: u64, // fed real time, nanoseconds
+    frame: u64, // fed frame index
+};
+
 /// What an operator sees when it evaluates. Input values are struple-encoded
 /// element streams borrowed from the slot arena (valid only for the call);
 /// outputs are written through per-port packers backed by the tick arena.
@@ -107,6 +115,18 @@ pub const EvalCtx = struct {
     /// write/log channels can't express — the engine plane, correlation ids,
     /// a reply slot. Core operators never touch it.
     host: ?*anyopaque = null,
+    /// Ambient fed time — what the host passed to `tick(now)`. Read, never
+    /// subscribed: nothing in the graph depends on time as a stream, so a
+    /// quiet program stays quiet while the clock runs. Temporal operators
+    /// consume these and the wheel; everything else ignores them.
+    now_ns: u64 = 0,
+    now_frame: u64 = 0,
+    /// Timer wheel arm: ask the runtime to re-evaluate this node once fed
+    /// time reaches `deadline` (a deadline at or before the current tick
+    /// fires on the *next* tick — arming never re-enters the sweep). Null
+    /// when the host mounted no wheel; `wake` then fails loud.
+    wake_fn: ?*const fn (ctx: *anyopaque, deadline: Deadline) EvalError!void = null,
+    wake_ctx: ?*anyopaque = null,
 
     pub fn write(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
         return self.write_fn(self.write_ctx, path, val);
@@ -119,6 +139,17 @@ pub const EvalCtx = struct {
     pub fn setState(self: *EvalCtx, bytes: []const u8) !void {
         self.state.clearRetainingCapacity();
         try self.state.appendSlice(self.state_gpa, bytes);
+    }
+
+    /// The current time on `deadline`'s lane — the comparison temporal
+    /// operators make against their stored absolute deadlines.
+    pub fn nowOn(self: *const EvalCtx, frames: bool) u64 {
+        return if (frames) self.now_frame else self.now_ns;
+    }
+
+    pub fn wake(self: *EvalCtx, deadline: Deadline) EvalError!void {
+        const f = self.wake_fn orelse return error.BadValue;
+        return f(self.wake_ctx.?, deadline);
     }
 };
 

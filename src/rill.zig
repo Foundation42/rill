@@ -27,7 +27,7 @@
 //!
 //!     var rt = try rill.Runtime.mount(gpa, &prog, plane);
 //!     defer rt.deinit();
-//!     // per frame: rt.feed(delta)…; rt.tick();
+//!     // per frame: rt.feed(delta)…; rt.tick(.{ .frame = f, .time_ns = t });
 //!
 //! A program is a *rill*. You *mount* a rill. Files are `.rill`.
 
@@ -61,6 +61,8 @@ pub const MockPlane = plane.MockPlane;
 pub const Delta = plane.Delta;
 pub const Runtime = eval.Runtime;
 pub const MountOpts = eval.MountOpts;
+pub const Now = eval.Now;
+pub const Deadline = registry.Deadline;
 pub const dump = serialize.dump;
 pub const loadProgram = serialize.loadProgram;
 pub const restoreState = serialize.restoreState;

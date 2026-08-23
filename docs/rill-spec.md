@@ -252,7 +252,28 @@ tokenizer about `/`, `#`, or `:`.
   fails loud instead of silently swallowing the pipe into the string. A fully-quoted tail
   (`say "a | b"`) unwraps, applies escapes, and may contain anything.
 
-### 3.12 Optional sugar (later, not v0)
+### 3.12 Duration literals (v0.2, ratified 2026-08-23)
+
+```
+p.gpu.traversal_ms | window 10s | stats as t
+plane.hp | changed | debounce 250ms | tap calm
+plane.v | sample 3f as v_lite
+```
+
+A number glued to a unit suffix is a **duration** — a distinct struple-typed literal
+(`[lane, count]` on the wire), never a bare number. The unit set is closed: `s`, `ms`, `m`
+(minutes) on the real-time lane (counted in nanoseconds), `f` on the frame lane, for
+engine-side rills where frames are the honest unit. The two lanes never convert — `3f` is
+three actual frames, not a faked 50 ms.
+
+- `sample 5` is a **wire-time type error** with the fix named ("write it with a unit: 5s,
+  250ms, 3f"); `5x` is an unknown unit, not a number and a name; durations are non-negative;
+  frame durations are whole frames. Fractional real-time (`2.5s`) is fine.
+- The suffix must be glued: `5 s` is a number and (probably unknown) name, as before. A
+  side effect of the gluing rule, ruled acceptable: `2m` was previously two tokens (`2`,
+  local `m`) — an accident of lexing, not a promised spelling. Spaced forms still work.
+
+### 3.13 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:
 
@@ -273,10 +294,11 @@ match plane.player.state { idle: idleAnim, running: runAnim }
 ### 4.1 The tick
 
 1. **Collect** plane deltas since last tick (host decides tick cadence; Matryoshka ties it to
-   the frame).
+   the frame). The tick call carries the fed time pair `{frame, time_ns}` (§4.6).
 2. **Coalesce** per path: at most one new value per subscribed path per tick. A node sees a
    consistent snapshot of all its inputs as of the tick.
-3. **Mark** dirty bits on the slots subscribed to changed paths.
+3. **Mark** dirty bits on the slots subscribed to changed paths — and on nodes whose timer
+   wheel deadlines the fed time has passed (§4.6).
 4. **Evaluate** dirty nodes in topological order. An operator that emits marks its downstream
    slots dirty; one that doesn't emit lets the wave die there.
 5. **Flush** `set` writes through the plane's write path.
@@ -347,7 +369,38 @@ explicit one-tick-delay operator.
 - Given the same mounted program and the same delta sequence, slot states are bit-identical
   every tick. This is a hard acceptance gate (see §8).
 
-### 4.6 Budget behaviour (later, designed-for now)
+### 4.6 Time (v0.2, ratified 2026-08-23 — fed, ambient, wheel-delivered)
+
+**Temporal operators consume time as data. They never read a wall clock.** The host feeds
+`tick(now)` the pair `{frame, time_ns}`; tests feed a script; a transcript replays the
+recorded values — so a replayed session's watchdog fires at the identical tick and G2
+survives the fourth dimension.
+
+Time is **ambient, not subscribable**. The tempting design — a `time.now` path fed like any
+other delta — has a hidden storm in it: every temporal node would subscribe to time, time
+changes every tick, so every temporal node goes dirty every tick, and the wave-dies-upstream
+property is dead for exactly the operators that exist to create quiet. Instead, the **timer
+wheel is the only subscription to time**: an operator arms an absolute deadline through its
+eval ctx; the runtime marks the node dirty on the first tick whose fed time reaches it. A
+thousand mounted watchdogs mid-window cost zero evaluations per tick. Operators tolerate a
+stale wake (their real deadline moved since arming) by re-arming — the wheel stays a dumb
+multiset and every op is self-healing across restore.
+
+Rules, all load-bearing:
+
+- **Monotonic by contract.** Fed time is non-decreasing on both lanes; a regression is a loud
+  `error.TimeRegression`, never a clamp — a clamped regression would replay differently than
+  it ran. Equal times on consecutive ticks are fine.
+- **Absolute deadlines.** Temporal state stores absolute lane values and the wheel serializes
+  them with the dump (G8 extends to cover both): a program restored mid-window stays exactly
+  as far from its deadline as it was — `cooldown 30s` saved 12 s in is still 18 s from
+  re-arming. Relative-remaining encoding would drift; absolute is the honest form.
+- **Mount time matters.** `mount` takes the current fed time so tick 0 baselines windows at
+  the mount moment, not zero — the one-shot console dispatch exercises this on every line.
+- **Deadlines never re-enter the sweep.** An entry armed during a tick — even one already
+  due — fires on the next tick at the soonest.
+
+### 4.7 Budget behaviour (later, designed-for now)
 
 The tick is Sponge-shaped: only touch what changed, in priority order. A future increment lets
 the host hand rill a budget; expensive programs coarsen (skip ticks / batch coalescing windows)
@@ -422,6 +475,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 |---|---|
 | flow | `select`, `lerp`, `where`, `partition`, `changed`, `latch` |
 | events | `dropped_below`, `rose_above`, `edge` (value→occurrence adapters) |
+| temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `arm`, `disarm` (§4.6; durations §3.12) |
 | math | `add sub mul div min max clamp abs floor round`, comparators |
 | record | record construction `{…}`, projection `.field`, `merge` |
 | plane | `set <path>` (sink), path read (implicit source) |

@@ -28,9 +28,13 @@ const registry = @import("registry.zig");
 const graph = @import("graph.zig");
 const eval = @import("eval.zig");
 
-pub const LoadError = error{ Malformed, UnknownOp, UnknownType } || std.mem.Allocator.Error;
+pub const LoadError = error{ Malformed, UnknownOp, UnknownType, UnsupportedFormat } || std.mem.Allocator.Error;
 
-const fmt_version: i64 = 1;
+/// v2 (2026-08-23): added "now" (last fed time pair) and "wheel" (armed
+/// timer deadlines, absolute) for the temporal operators. v1 dumps load with
+/// the defined default — zero epoch, nothing armed — which is exactly what a
+/// pre-temporal program meant. Anything newer is refused loud.
+const fmt_version: i64 = 2;
 
 // ---------------------------------------------------------------------------
 // Dump
@@ -156,6 +160,31 @@ pub fn dump(rt: *const eval.Runtime, gpa: std.mem.Allocator) ![]u8 {
     }
     try putEntry(&entries, a, "tick", try packInt(a, @intCast(rt.tick_index)));
 
+    // fed time + armed wheel (fmt v2). Both are fed data: deadlines are
+    // absolute lane values, so a program restored mid-window stays exactly
+    // as far from firing as it was. Lane lists dump in wheel order (sorted
+    // by deadline, FIFO on ties) and restore through the same insert.
+    {
+        var stream = struple.Packer.init(a);
+        try stream.appendUint(rt.now.frame);
+        try stream.appendUint(rt.now.time_ns);
+        try putEntry(&entries, a, "now", try packArrayOf(a, stream.bytes()));
+    }
+    {
+        var stream = struple.Packer.init(a);
+        for (rt.wheel_ns.items) |e| {
+            try stream.appendUint(0);
+            try stream.appendUint(e.deadline);
+            try stream.appendUint(e.node);
+        }
+        for (rt.wheel_frame.items) |e| {
+            try stream.appendUint(1);
+            try stream.appendUint(e.deadline);
+            try stream.appendUint(e.node);
+        }
+        try putEntry(&entries, a, "wheel", try packArrayOf(a, stream.bytes()));
+    }
+
     var top = struple.Packer.init(gpa);
     defer top.deinit();
     try top.appendMap(entries.items);
@@ -175,6 +204,8 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
     const scratch = scratch_impl.allocator();
 
     const top = try mapOf(scratch, bytes);
+    const fmt = try asInt((try mapGet(top, scratch, "fmt")) orelse return error.Malformed);
+    if (fmt != 1 and fmt != 2) return error.UnsupportedFormat;
     const name_enc = (try mapGet(top, scratch, "name")) orelse return error.Malformed;
 
     var prog = try graph.Program.init(gpa, reg, try asStr(scratch, name_enc));
@@ -309,6 +340,32 @@ pub fn restoreState(rt: *eval.Runtime, bytes: []const u8) LoadError!void {
 
     const tick_enc = (try mapGet(top, scratch, "tick")) orelse return error.Malformed;
     rt.tick_index = @intCast(try asInt(tick_enc));
+
+    // Fed time + wheel (absent in v1 dumps: zero epoch, nothing armed — the
+    // defined default; no temporal op could have been mounted under v1).
+    if (try mapGet(top, scratch, "now")) |now_enc| {
+        const inner = try arrayItems(scratch, now_enc);
+        var r = struple.reader(inner);
+        const frame = try asInt(r.nextView() catch null orelse return error.Malformed);
+        const t_ns = try asInt(r.nextView() catch null orelse return error.Malformed);
+        rt.now = .{ .frame = @intCast(frame), .time_ns = @intCast(t_ns) };
+    }
+    if (try mapGet(top, scratch, "wheel")) |wheel_enc| {
+        const inner = try arrayItems(scratch, wheel_enc);
+        var r = struple.reader(inner);
+        while (r.nextView() catch return error.Malformed) |lane_enc| {
+            const lane = try asInt(lane_enc);
+            const deadline: u64 = @intCast(try asInt(r.nextView() catch null orelse return error.Malformed));
+            const node = try asInt(r.nextView() catch null orelse return error.Malformed);
+            if (node < 0 or node >= rt.node_state.len) return error.Malformed;
+            const dl: registry.Deadline = switch (lane) {
+                0 => .{ .ns = deadline },
+                1 => .{ .frame = deadline },
+                else => return error.Malformed,
+            };
+            try rt.arm(dl, @intCast(node));
+        }
+    }
 }
 
 fn loadCounts(scratch: std.mem.Allocator, top: struple.MapView, key: []const u8, out: []u64) LoadError!void {

@@ -167,6 +167,58 @@ it. Spec section numbers in parentheses.
   Checked at end of parse; the diagnostic names the node, the written path,
   and the subscription.
 
+## Temporal operators (2026-08-23, spec §3.12/§4.6, agents doc §2)
+
+- **Ambient time, never a path.** `tick(now)` takes `{frame, time_ns}`; ops
+  read it from EvalCtx when they fire; the wheel is the only subscription to
+  time. Feeding `time.now` as a delta would dirty every temporal node every
+  tick — the storm the operators exist to prevent. (Chris's ruling, verbatim
+  reasoning in spec §4.6.)
+- **The wheel is a dumb multiset**, two sorted lanes of absolute
+  `(deadline, node)`; exact duplicates dedup at insert so re-arming is free.
+  Ops tolerate stale wakes (deadline moved since arming) by re-arming the
+  truth — one live entry per armed node in steady state, self-healing across
+  restore, no per-tick scans. Entries armed during a sweep fire next tick.
+- **Monotonicity is `error.TimeRegression`**, checked before anything else in
+  the tick. Never clamped: a clamped regression replays differently than it
+  ran. Equal is fine (a zero-clock test suite ticks at {0,0} forever).
+- **Dump fmt v2**: `now` (fed pair) + `wheel` (lane, deadline, node — in
+  wheel order, ties FIFO) sections. v1 dumps load with the defined default —
+  zero epoch, nothing armed (no temporal op existed under v1). Unknown fmt
+  refuses with `error.UnsupportedFormat`. The frozen G2 hash was re-frozen
+  for the format change, deliberately, comment says why.
+- **Duration encoding** is a two-int struple array `[lane, count]` (0=ns,
+  1=frames), decoded strictly (`types.asDuration`); a plain number at a
+  duration port is BadValue at runtime and a pointed type error at parse.
+  `typeOfValue` cannot spot a duration (it looks like an array) — the parser
+  carries `Tag.duration` on the literal instead; acceptable until a real
+  program is bitten.
+- **Temporal node state is opaque little-endian bytes**, not struple — same
+  license the threshold ops took for their side byte. Payloads inside stay
+  struple elements and are re-validated by appendRaw on the way out.
+- **Semantics choices**: `sample` = leading edge + coalesced trailing edge at
+  the boundary (a value stream may be late, never wrong — the last change
+  must not vanish because the input went quiet). `throttle`/`cooldown` are
+  one eval with two names — mechanism identical, intent documented. `window`
+  ages out through the wheel so a spike decays on schedule with no input;
+  `stats` over an empty window is zeros with `n: 0` (n is the honesty
+  marker; decaying to zero is what re-arms a crossing detector). `delay`
+  maturities landing on one tick collapse to the newest (one value per slot
+  per tick; keep-latest is the mailbox policy transcribed). Gates: controls
+  apply before the passthrough; `on` beats `off` on a tie (fail-safe toward
+  armed); `in` is *optional* so controls latch even before the stream first
+  flows.
+- **Eval guard refinement**: a bound-but-quiet input now blocks a node only
+  if the port is *required*; optional ports read null. Without this the
+  gates' rarely-firing control paths would gag the stream they gate.
+- **Core namespace grew**: `sample debounce throttle cooldown window stats
+  delay arm disarm` are operator words now; `as stats` in older text errors
+  loud under the shadow ban (our own G2 fixture was the first casualty —
+  renamed to `vitals`, hash re-frozen).
+- **`2m` lexes as a duration**, where it used to be number-then-name. Ruled
+  a lexing accident, not a promised spelling; spaced `2 m` still means two
+  tokens.
+
 ## Shape of the code
 
 | file | what |
@@ -176,7 +228,7 @@ it. Spec section numbers in parentheses.
 | parser.zig | tokenizer + parser → flat graph; sections, records, defs, two-word ops |
 | graph.zig | Node/Slot/Source, Program (one arena), downstream adjacency, cycle check |
 | ops.zig | the §6 core set, one comptime table |
-| eval.zig | Runtime: mount/feed/tick/setInput/readSlot; suppression; write flush |
+| eval.zig | Runtime: mount/feed/tick(now)/setInput/readSlot; suppression; write flush; timer wheel |
 | serialize.zig | dump (one struple map) / loadProgram / restoreState |
 | plane.zig | Plane vtable (borrowed) + MockPlane |
 | tests.zig | acceptance gates G1–G9 + frozen-reference hash |

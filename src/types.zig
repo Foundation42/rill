@@ -25,9 +25,10 @@ pub const Tag = struct {
     pub const record: TypeId = 4; // struple map, canonical (key-sorted)
     pub const bytes: TypeId = 5;
     pub const array: TypeId = 6;
+    pub const duration: TypeId = 7; // [lane, count] — see Duration below
 };
 
-const builtin_names = [_][]const u8{ "any", "number", "boolean", "string", "record", "bytes", "array" };
+const builtin_names = [_][]const u8{ "any", "number", "boolean", "string", "record", "bytes", "array", "duration" };
 
 /// Spelling aliases accepted in `def` port declarations and host registrations.
 const aliases = [_]struct { []const u8, TypeId }{
@@ -101,6 +102,47 @@ pub fn typeOfValue(encoded: []const u8) TypeId {
     return Tag.any;
 }
 
+/// A duration value (§2.2 of the agents/time doc). Two lanes, never mixed:
+/// real time counts nanoseconds, frame time counts engine frames — `3f` is
+/// three honest frames, not a faked 50ms. On the wire a duration is a
+/// two-int struple array `[lane, count]` (lane 0 = ns, 1 = frames), so the
+/// unit rides with the value and a bare number arriving at a duration port
+/// is a BadValue, not a guess.
+pub const Duration = struct {
+    frames: bool,
+    count: u64,
+};
+
+/// Strict decode of a duration element: exactly one array of exactly two
+/// non-negative ints, lane 0 or 1. Anything else is null — temporal operators
+/// turn that into BadValue (the wave dies, counted).
+pub fn asDuration(encoded: []const u8) ?Duration {
+    var r = struple.reader(encoded);
+    const elem = (r.next() catch return null) orelse return null;
+    if (elem != .array) return null;
+    var buf: [64]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const v = struple.view(encoded);
+    const inner = ((v.containedItems(fba.allocator()) catch return null) orelse return null);
+    var ir = struple.reader(inner);
+    const lane_e = (ir.next() catch return null) orelse return null;
+    const count_e = (ir.next() catch return null) orelse return null;
+    if ((ir.next() catch return null) != null) return null;
+    if (lane_e != .int or count_e != .int) return null;
+    const lane = lane_e.int;
+    if (lane != 0 and lane != 1) return null;
+    if (count_e.int < 0) return null;
+    return .{ .frames = lane == 1, .count = @intCast(count_e.int) };
+}
+
+/// Encode a duration in its canonical wire shape (see Duration).
+pub fn appendDuration(pk: *struple.Packer, scratch: std.mem.Allocator, d: Duration) !void {
+    var inner = struple.Packer.init(scratch);
+    try inner.appendInt(if (d.frames) 1 else 0);
+    try inner.appendInt(@intCast(d.count));
+    try pk.appendArray(inner.bytes());
+}
+
 /// Decode a single-element number (int or float) as f64. Math operators
 /// promote to f64 uniformly so the output encoding is canonical per operator.
 pub fn asNumber(encoded: []const u8) ?f64 {
@@ -131,6 +173,42 @@ pub fn asBool(encoded: []const u8) ?bool {
         .boolean => |b| b,
         else => null,
     };
+}
+
+test "durations: canonical encode/decode, strict shape, both lanes" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const a = arena_impl.allocator();
+
+    var pk = struple.Packer.init(a);
+    try appendDuration(&pk, a, .{ .frames = false, .count = 5_000_000_000 });
+    const d = asDuration(pk.bytes()).?;
+    try std.testing.expect(!d.frames);
+    try std.testing.expectEqual(@as(u64, 5_000_000_000), d.count);
+
+    var pf = struple.Packer.init(a);
+    try appendDuration(&pf, a, .{ .frames = true, .count = 3 });
+    const f = asDuration(pf.bytes()).?;
+    try std.testing.expect(f.frames);
+    try std.testing.expectEqual(@as(u64, 3), f.count);
+
+    // not durations: a bare number, a wrong-lane array, a three-element array
+    var pn = struple.Packer.init(a);
+    try pn.appendInt(5);
+    try std.testing.expect(asDuration(pn.bytes()) == null);
+    var pw = struple.Packer.init(a);
+    var inner = struple.Packer.init(a);
+    try inner.appendInt(2);
+    try inner.appendInt(5);
+    try pw.appendArray(inner.bytes());
+    try std.testing.expect(asDuration(pw.bytes()) == null);
+    var p3 = struple.Packer.init(a);
+    var inner3 = struple.Packer.init(a);
+    try inner3.appendInt(0);
+    try inner3.appendInt(5);
+    try inner3.appendInt(5);
+    try p3.appendArray(inner3.bytes());
+    try std.testing.expect(asDuration(p3.bytes()) == null);
 }
 
 test "type table: builtins, aliases, interning" {
