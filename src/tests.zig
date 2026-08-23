@@ -113,7 +113,7 @@ fn mountFixture(gpa: std.mem.Allocator, fx: *Fixture, source: []const u8, seed: 
         return err;
     };
     errdefer fx.prog.deinit();
-    fx.rt = try rill.Runtime.mount(gpa, &fx.prog, fx.mock.asPlane());
+    fx.rt = try rill.Runtime.mount(gpa, &fx.prog, fx.mock.asPlane(), .{});
 }
 
 fn expectParseError(source: []const u8, needle: []const u8) !void {
@@ -406,7 +406,7 @@ test "G7: def internals are addressable, overridable, and the override survives 
     defer prog2.deinit();
     var mock2 = rill.MockPlane.init(testing.allocator);
     defer mock2.deinit();
-    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane());
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
     defer rt2.deinit();
     try rill.restoreState(&rt2, bytes);
     try testing.expectEqual(@as(f64, 3.0), types.asNumber(rt2.readSlot(knob).?).? );
@@ -441,7 +441,7 @@ test "G8: dump → load → dump is byte-identical" {
     defer prog2.deinit();
     var mock2 = rill.MockPlane.init(testing.allocator);
     defer mock2.deinit();
-    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane());
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
     defer rt2.deinit();
     try rill.restoreState(&rt2, dump1);
 
@@ -720,6 +720,36 @@ test "tail: raw characters outside a tail still fail loud" {
     try expectParseError("cube 2 | bevel /tmp/x", "unexpected '/' in arguments");
 }
 
+test "host context is live at tick 0 — one-shot command programs depend on it" {
+    // A host-seeded effect op that counts its evals through EvalCtx.host.
+    // Mount runs tick 0, so the count must be 1 before any explicit tick —
+    // this is the exact contract one-shot console dispatch (mount → effects
+    // → unmount) stands on.
+    const pokeEval = struct {
+        fn f(ctx: *rill.EvalCtx) registry.EvalError!registry.Emit {
+            const count: *usize = @ptrCast(@alignCast(ctx.host orelse return error.BadValue));
+            count.* += 1;
+            return registry.Emit.none;
+        }
+    }.f;
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
+    _ = try reg.register(.{ .name = "poke", .inputs = &in_num, .help = "stub", .class = .effect, .eval = pokeEval });
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "poke 7", &diag);
+    defer prog.deinit();
+
+    var count: usize = 0;
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .host_ctx = &count });
+    defer rt.deinit();
+    try testing.expectEqual(@as(usize, 1), count);
+}
+
 test "tail: dump → load → dump survives a tail literal byte-identically" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx, "sound play pack:horns#audio.stem", .{});
@@ -730,7 +760,7 @@ test "tail: dump → load → dump survives a tail literal byte-identically" {
     defer prog2.deinit();
     var mock2 = rill.MockPlane.init(testing.allocator);
     defer mock2.deinit();
-    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane());
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
     defer rt2.deinit();
     try rill.restoreState(&rt2, dump1);
     const dump2 = try rill.dump(&rt2, testing.allocator);

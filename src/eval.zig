@@ -54,6 +54,19 @@ pub const LogFn = *const fn (ctx: ?*anyopaque, label: []const u8, val: []const u
 /// Bytes are borrowed for the call.
 pub const PublishFn = *const fn (ctx: ?*anyopaque, path: []const u8, value: []const u8) void;
 
+/// Everything a host can hand the runtime at mount/restore time. The hooks
+/// are also plain Runtime fields a host may set later; `host_ctx` is not —
+/// mount runs tick 0, and a one-shot command program fires its effects right
+/// there, so the host world must be in hand before the first eval.
+pub const MountOpts = struct {
+    /// Surfaced to every eval as `EvalCtx.host`; core operators ignore it.
+    host_ctx: ?*anyopaque = null,
+    log_fn: ?LogFn = null,
+    log_ctx: ?*anyopaque = null,
+    publish_fn: ?PublishFn = null,
+    publish_ctx: ?*anyopaque = null,
+};
+
 pub const Runtime = struct {
     gpa: std.mem.Allocator,
     prog: *const Program,
@@ -85,11 +98,14 @@ pub const Runtime = struct {
     log_ctx: ?*anyopaque = null,
     publish_fn: ?PublishFn = null,
     publish_ctx: ?*anyopaque = null,
+    host_ctx: ?*anyopaque = null,
 
     /// Mount a parsed program on a plane: subscribe, seed, and run tick 0 so
-    /// the program is live (effects included) before this returns.
-    pub fn mount(gpa: std.mem.Allocator, prog: *const Program, pl: Plane) MountError!Runtime {
-        var rt = try init(gpa, prog, pl);
+    /// the program is live (effects included) before this returns — with
+    /// `opts` hooks and host context already attached, so tick 0 is a full
+    /// citizen (effects see the host, freshened wires publish).
+    pub fn mount(gpa: std.mem.Allocator, prog: *const Program, pl: Plane, opts: MountOpts) MountError!Runtime {
+        var rt = try init(gpa, prog, pl, opts);
         errdefer rt.deinit();
 
         // Subscribe every deduplicated path; SubId is the index into prog.subs.
@@ -124,8 +140,8 @@ pub const Runtime = struct {
     /// Rebuild a runtime from serialized state (see serialize.zig): subscribe,
     /// restore slot/node state verbatim, and do NOT tick — the dump already
     /// contains a live snapshot.
-    pub fn restore(gpa: std.mem.Allocator, prog: *const Program, pl: Plane) MountError!Runtime {
-        var rt = try init(gpa, prog, pl);
+    pub fn restore(gpa: std.mem.Allocator, prog: *const Program, pl: Plane, opts: MountOpts) MountError!Runtime {
+        var rt = try init(gpa, prog, pl, opts);
         errdefer rt.deinit();
         for (prog.subs.items, 0..) |s, i| {
             try pl.subscribe(s.path, @intCast(i));
@@ -133,7 +149,7 @@ pub const Runtime = struct {
         return rt;
     }
 
-    fn init(gpa: std.mem.Allocator, prog: *const Program, pl: Plane) MountError!Runtime {
+    fn init(gpa: std.mem.Allocator, prog: *const Program, pl: Plane, opts: MountOpts) MountError!Runtime {
         const n_slots = prog.slotCount();
         const n_nodes = prog.nodeCount();
         var rt = Runtime{
@@ -147,6 +163,11 @@ pub const Runtime = struct {
             .dirty = try gpa.alloc(bool, n_nodes),
             .eval_count = try gpa.alloc(u64, n_nodes),
             .error_count = try gpa.alloc(u64, n_nodes),
+            .log_fn = opts.log_fn,
+            .log_ctx = opts.log_ctx,
+            .publish_fn = opts.publish_fn,
+            .publish_ctx = opts.publish_ctx,
+            .host_ctx = opts.host_ctx,
         };
         for (rt.values) |*v| v.* = .empty;
         @memset(rt.has, false);
@@ -302,6 +323,7 @@ pub const Runtime = struct {
             .write_ctx = self,
             .log_fn = self.log_fn,
             .log_ctx = self.log_ctx,
+            .host = self.host_ctx,
         };
 
         self.eval_count[node_id] += 1;

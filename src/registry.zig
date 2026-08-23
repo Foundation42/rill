@@ -97,6 +97,11 @@ pub const EvalCtx = struct {
     /// Debug/log bus for `tap`; null when the host wired none.
     log_fn: ?*const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void = null,
     log_ctx: ?*anyopaque = null,
+    /// Opaque host world, passed at mount (`MountOpts.host_ctx`) and live
+    /// from tick 0. Host-seeded operators downcast this to reach what the
+    /// write/log channels can't express — the engine plane, correlation ids,
+    /// a reply slot. Core operators never touch it.
+    host: ?*anyopaque = null,
 
     pub fn write(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
         return self.write_fn(self.write_ctx, path, val);

@@ -60,6 +60,7 @@ pub const Plane = plane.Plane;
 pub const MockPlane = plane.MockPlane;
 pub const Delta = plane.Delta;
 pub const Runtime = eval.Runtime;
+pub const MountOpts = eval.MountOpts;
 pub const dump = serialize.dump;
 pub const loadProgram = serialize.loadProgram;
 pub const restoreState = serialize.restoreState;

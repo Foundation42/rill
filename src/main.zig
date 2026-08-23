@@ -69,7 +69,7 @@ pub fn main() !void {
         prog.nodeCount(), prog.slotCount(), prog.subs.items.len,
     });
 
-    var rt = try rill.Runtime.mount(gpa, &prog, mock.asPlane());
+    var rt = try rill.Runtime.mount(gpa, &prog, mock.asPlane(), .{});
     defer rt.deinit();
     rt.log_fn = logThunk;
 
