@@ -48,6 +48,12 @@ const QueuedWrite = struct {
 
 pub const LogFn = *const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void;
 
+/// Called once per freshened slot at the end of each tick, before the fresh
+/// flags clear — the host's hook for mirroring live wires onto its plane
+/// (`programs.<p>.<node>.<in|out>.<port>` becomes readable store state, §5).
+/// Bytes are borrowed for the call.
+pub const PublishFn = *const fn (ctx: ?*anyopaque, path: []const u8, value: []const u8) void;
+
 pub const Runtime = struct {
     gpa: std.mem.Allocator,
     prog: *const Program,
@@ -77,6 +83,8 @@ pub const Runtime = struct {
     last_tick_ns: u64 = 0, // measured, never serialized
     log_fn: ?LogFn = null,
     log_ctx: ?*anyopaque = null,
+    publish_fn: ?PublishFn = null,
+    publish_ctx: ?*anyopaque = null,
 
     /// Mount a parsed program on a plane: subscribe, seed, and run tick 0 so
     /// the program is live (effects included) before this returns.
@@ -246,7 +254,13 @@ pub const Runtime = struct {
             try self.plane.write(w.path, w.value);
         }
 
-        // Sweep flags.
+        // Publish freshened wires to the host, then sweep flags.
+        if (self.publish_fn) |publish| {
+            for (self.touched_slots.items) |sid| {
+                const s = self.prog.slot(sid);
+                if (s.path.len > 0) publish(self.publish_ctx, s.path, self.values[sid].items);
+            }
+        }
         for (self.touched_slots.items) |sid| self.fresh[sid] = false;
         self.touched_slots.clearRetainingCapacity();
         for (self.touched_nodes.items) |nid| self.dirty[nid] = false;

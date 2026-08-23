@@ -565,3 +565,45 @@ test "use: the loud-error properties survive aliasing" {
         \\plane.v | bad | tap t
     , "close over nothing");
 }
+
+test "publish hook: freshened wires reach the host each tick, then go quiet" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.hp | clamp 0 100 | div 100 as frac
+    , .{.{ "plane.hp", @as(i64, 50) }});
+    defer fx.deinit();
+
+    const Collector = struct {
+        var paths: std.ArrayListUnmanaged([]u8) = .empty;
+        var gpa: std.mem.Allocator = undefined;
+        fn publish(_: ?*anyopaque, path: []const u8, _: []const u8) void {
+            paths.append(gpa, gpa.dupe(u8, path) catch return) catch {};
+        }
+        fn reset() void {
+            for (paths.items) |p| gpa.free(p);
+            paths.clearRetainingCapacity();
+        }
+    };
+    Collector.gpa = testing.allocator;
+    defer {
+        Collector.reset();
+        Collector.paths.deinit(testing.allocator);
+    }
+    fx.rt.publish_fn = Collector.publish;
+
+    // a change publishes every touched slot on the chain, by stable path
+    try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 80));
+    try fx.rt.tick();
+    var saw_div_out = false;
+    for (Collector.paths.items) |p| {
+        if (std.mem.eql(u8, p, "programs.p.div1.out.out")) saw_div_out = true;
+    }
+    try testing.expect(saw_div_out);
+    try testing.expect(Collector.paths.items.len >= 4); // clamp in/out, div in/out at least
+
+    // suppression means silence: same value again publishes nothing
+    Collector.reset();
+    try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(i64, 80));
+    try fx.rt.tick();
+    try testing.expectEqual(@as(usize, 0), Collector.paths.items.len);
+}
