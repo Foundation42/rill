@@ -105,6 +105,25 @@ it. Spec section numbers in parentheses.
   `render/grade/exposure` is one word and knob-path *arguments* need no
   special case. Filesystem paths (leading `/`, may contain spaces) belong on
   tail ports instead.
+
+  **The two path spellings, pinned** (so it's read here, not rediscovered):
+  `render/grade/exposure` and `plane.render.grade.exposure` can both appear
+  in rill source, and they are different *types*, not synonyms. Slash-form
+  is a **string literal that names a path** — data, an argument, bound to a
+  string port; the operator it reaches decides what the name means (which
+  knob to override, which field to revert). Dot-form is a **live reference**
+  — a subscription edge in the graph, with dirty-propagation semantics.
+  Nothing converts between them in the language: an operator that wants a
+  value subscribes (dot), an operator that wants to *talk about* a path
+  takes a string (slash), and the D1 lexical map at the engine boundary is
+  the only place the spellings meet. Both can even reach the same string
+  port without ambiguity: `volume override v1 render/grade/exposure 0.5`
+  names the path directly, while a dot-form ref in that position would be a
+  *subscription* whose current **value** names the path — "this path"
+  versus "the path named by what's flowing here". The spellings never
+  coerce into each other. Tokenizer edges pinned by test: `1/2` is
+  number-raw-number (a loud error, never a quotient, never a word), and
+  only a name-start character opens a slash-absorbing word.
   `EvalCtx.host` + `MountOpts` rode the same push: host context is attached
   at mount because one-shot command programs fire effects at tick 0.
 - **Two-word operator lookup**: `boolean subtract` resolves before `boolean`,

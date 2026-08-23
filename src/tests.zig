@@ -747,6 +747,25 @@ test "console words: knob-path arguments ride the slash-in-word coercion" {
     try testing.expectEqualStrings("render/grade/exposure", types.asString(prog.slot(prog.node(0).inputs[0]).source.literal).?);
 }
 
+test "console words: '/' never makes a division-shaped surprise" {
+    // after a number, '/' is a raw byte — `1/2` is not a word and not a
+    // quotient, it is a loud error
+    try expectParseError("add 1/2", "unexpected '/' in arguments");
+    // after a name-start, the slash glues into one word — which a number
+    // port then refuses by name, loudly
+    try expectParseError("add x/2", "unknown name 'x/2'");
+}
+
+test "console words: a number-typed local at a string port is a type error, never a coercion" {
+    // `v1` is a live number stream; `volume set` wants a string name at
+    // port 0. The local wins resolution and fails the type check — the
+    // word→string coercion must never paper over a name collision.
+    try expectParseError(
+        \\cube 2 | bevel 0.1 as v1
+        \\volume set v1 0.5 2 1
+    , "expected string, got mesh");
+}
+
 test "console words: the '-' unbind sentinel is a word; negative numbers survive" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
