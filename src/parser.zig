@@ -148,8 +148,13 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             while (i < src.len and src[i] != '\n') : (i += 1) col += 1;
             continue;
         }
-        if (isNameStart(c)) {
+        // `-` opens a name when it does NOT open a negative number — the
+        // console's unbind sentinel (`light arche l1 -`) is a word, and
+        // rill has no infix minus (subtraction is the `sub` word).
+        if (isNameStart(c) or (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1])))) {
             const start = i;
+            i += 1;
+            col += 1;
             while (i < src.len and isNameChar(src[i])) : (i += 1) col += 1;
             try toks.append(a, .{ .kind = .name, .text = src[start..i], .line = tl, .col = tc, .off = to });
             continue;

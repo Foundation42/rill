@@ -747,6 +747,17 @@ test "console words: knob-path arguments ride the slash-in-word coercion" {
     try testing.expectEqualStrings("render/grade/exposure", types.asString(prog.slot(prog.node(0).inputs[0]).source.literal).?);
 }
 
+test "console words: the '-' unbind sentinel is a word; negative numbers survive" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "volume set - -1.5 2 1", &diag);
+    defer prog.deinit();
+    const n = prog.node(0);
+    try testing.expectEqualStrings("-", types.asString(prog.slot(n.inputs[0]).source.literal).?);
+    try testing.expectEqual(@as(f64, -1.5), types.asNumber(prog.slot(n.inputs[1]).source.literal).?);
+}
+
 // ---------------------------------------------------------------------------
 // Console words (D5): bare words bind string ports as string literals; the
 // port type keeps the coercion narrow. `one_of` enforces enum args at parse.
