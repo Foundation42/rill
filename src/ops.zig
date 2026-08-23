@@ -46,6 +46,16 @@ fn raw(ctx: *EvalCtx, i: usize) EvalError![]const u8 {
     return ctx.in[i] orelse error.BadValue;
 }
 
+/// Emit pre-encoded bytes on output port `i`. appendRaw validates structure;
+/// foreign bytes that fail it surface as BadValue against this node (counted,
+/// wave dies — same policy as any runtime type mismatch).
+fn splice(ctx: *EvalCtx, i: usize, encoded: []const u8) EvalError!void {
+    ctx.out[i].appendRaw(encoded) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.BadValue,
+    };
+}
+
 fn emitF64(ctx: *EvalCtx, v: f64) EvalError!Emit {
     try ctx.out[0].appendF64(v);
     return Emit.first;
@@ -69,7 +79,7 @@ fn innerOf(ctx: *EvalCtx, encoded: []const u8) EvalError![]const u8 {
 
 fn evalSelect(ctx: *EvalCtx) EvalError!Emit {
     const cond = try boolean(ctx, 0);
-    try ctx.out[0].appendRaw(try raw(ctx, if (cond) 1 else 2));
+    try splice(ctx, 0, try raw(ctx, if (cond) 1 else 2));
     return Emit.first;
 }
 
@@ -83,7 +93,7 @@ fn evalLerp(ctx: *EvalCtx) EvalError!Emit {
 fn evalWhere(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none; // gates pass arrivals, not re-reads
     if (!(try boolean(ctx, 1))) return Emit.none;
-    try ctx.out[0].appendRaw(try raw(ctx, 0));
+    try splice(ctx, 0, try raw(ctx, 0));
     return Emit.first;
 }
 
@@ -91,20 +101,20 @@ fn evalPartition(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none;
     const input = try raw(ctx, 0);
     const side: u5 = if (try boolean(ctx, 1)) 0 else 1;
-    try ctx.out[side].appendRaw(input);
+    try splice(ctx, side, input);
     return Emit.bit(side);
 }
 
 fn evalChanged(ctx: *EvalCtx) EvalError!Emit {
     // value slots already compare-and-suppress upstream, so fresh == changed
     if (!ctx.in_fresh[0]) return Emit.none;
-    try ctx.out[0].appendRaw(try raw(ctx, 0));
+    try splice(ctx, 0, try raw(ctx, 0));
     return Emit.first;
 }
 
 fn evalLatch(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[1]) return Emit.none; // sample-and-hold on trigger
-    try ctx.out[0].appendRaw(try raw(ctx, 0));
+    try splice(ctx, 0, try raw(ctx, 0));
     return Emit.first;
 }
 
@@ -122,7 +132,7 @@ fn evalThreshold(ctx: *EvalCtx, comptime fire_when_below: bool) EvalError!Emit {
     try ctx.setState(&.{below});
     const fire_side: u8 = if (fire_when_below) 2 else 1;
     if (prev != side_unset and prev != fire_side and below == fire_side) {
-        try ctx.out[0].appendRaw(try raw(ctx, 0));
+        try splice(ctx, 0, try raw(ctx, 0));
         return Emit.first;
     }
     return Emit.none;
@@ -261,7 +271,7 @@ fn evalProject(ctx: *EvalCtx) EvalError!Emit {
     try kp.appendString(ctx.statics[0].word);
     const m = struple.MapView.init(inner);
     const val = (m.get(kp.bytes()) catch return error.BadValue) orelse return Emit.none;
-    try ctx.out[0].appendRaw(val);
+    try splice(ctx, 0, val);
     return Emit.first;
 }
 
@@ -295,14 +305,14 @@ fn evalSet(ctx: *EvalCtx) EvalError!Emit {
 }
 
 fn evalConst(ctx: *EvalCtx) EvalError!Emit {
-    try ctx.out[0].appendRaw(ctx.statics[0].literal);
+    try splice(ctx, 0, ctx.statics[0].literal);
     return Emit.first;
 }
 
 fn evalTap(ctx: *EvalCtx) EvalError!Emit {
     const v = try raw(ctx, 0);
     ctx.log(ctx.statics[0].word, v);
-    try ctx.out[0].appendRaw(v);
+    try splice(ctx, 0, v);
     return Emit.first;
 }
 

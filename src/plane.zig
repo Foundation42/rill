@@ -121,7 +121,10 @@ pub const MockPlane = struct {
     fn readThunk(ctx: *anyopaque, path: []const u8, out: *struple.Packer) PlaneError!void {
         const self: *MockPlane = @ptrCast(@alignCast(ctx));
         const v = self.store.get(path) orelse return error.NotFound;
-        try out.appendRaw(v);
+        out.appendRaw(v) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.Backend, // a corrupt store value is the backend's fault
+        };
     }
 
     fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8) PlaneError!void {
