@@ -30,6 +30,11 @@ pub const Port = struct {
     /// literal bound here. Last input port only — `register` enforces the
     /// closed shape. A locator is freeform text, not structure.
     tail: bool = false,
+    /// Non-empty on a string port: the closed value set a bound literal must
+    /// belong to, checked at parse ("wire time"). This is the console's enum
+    /// argument made enforceable — the same list the browser tab-completes
+    /// from. Streams bound to the port are not (cannot be) checked at parse.
+    one_of: []const []const u8 = &.{},
 };
 
 /// Static (non-stream) parameters an operator consumes at parse time:
@@ -137,7 +142,7 @@ pub const OpDef = struct {
 
 pub const OpId = u32;
 
-pub const RegistryError = error{ DuplicateOp, BadTailPort } || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort } || std.mem.Allocator.Error;
 
 /// The operator table. Owns nothing but its own arrays: `OpDef` port/static
 /// slices are borrowed from the registrant (comptime tables for built-ins;
@@ -170,6 +175,11 @@ pub const Registry = struct {
                 if (p.tail) return error.BadTailPort;
                 if (last.tail and p.optional) return error.BadTailPort;
             }
+        }
+        // `one_of` is a string-port contract — a value set on any other type
+        // could never be satisfied by a literal and would gate nothing.
+        for (def.inputs) |p| {
+            if (p.one_of.len > 0 and p.ty != types.Tag.string) return error.BadEnumPort;
         }
         const id: OpId = @intCast(self.ops.items.len);
         try self.ops.append(self.gpa, def);

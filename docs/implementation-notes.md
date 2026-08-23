@@ -90,6 +90,18 @@ it. Spec section numbers in parentheses.
   - Known edge, accepted: a lone unmatched `"` inside a tail is still an
     "unterminated string" at tokenize time (the tokenizer must pair quotes
     before the parser knows a tail is coming). Quote the whole tail.
+- **Console words + `one_of` (§3.4, spec v0.1)** — the second console-grammar
+  shim, landed with tail ports ahead of Matryoshka's Phase C. A bare word
+  coerces to a string literal at the *bind moment*, decided by the port's
+  declared type (resolution stays locals → aliases → operators → coercion, so
+  bound names shadow and the property "unknown words fail loud" survives
+  everywhere a string port isn't). Applies to positionals, kwargs, def ports,
+  and the fixed prefix of a tail op. `one_of` membership is checked at parse
+  for literals (words included); a *stream* bound to a `one_of` port can't be
+  checked until eval, and isn't — the handler stays the authority there. The
+  registry rejects `one_of` on non-string ports (`error.BadEnumPort`).
+  `EvalCtx.host` + `MountOpts` rode the same push: host context is attached
+  at mount because one-shot command programs fire effects at tick 0.
 - **Two-word operator lookup**: `boolean subtract` resolves before `boolean`,
   so a host registry seeded from Matryoshka's `(verb, subop)` `Cmd` rows can
   map one row → one OpDef with no renaming. **Note the tense: G1 is passed

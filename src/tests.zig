@@ -49,6 +49,19 @@ fn hostRegistry(gpa: std.mem.Allocator) !rill.Registry {
         var ports_tail_opt = [_]registry.Port{.{ .name = "text", .ty = types.Tag.string, .tail = true, .optional = true }};
         var statics_emitter = [_]registry.StaticDecl{.{ .name = "name", .kind = .word }};
         var out_str = [_]registry.Port{.{ .name = "out", .ty = types.Tag.string }};
+        // console-shaped string/enum ports (word coercion + one_of, D5)
+        var mode_vals = [_][]const u8{ "ambient", "loop", "once", "shot" };
+        var ports_vol_set = [_]registry.Port{
+            .{ .name = "name", .ty = types.Tag.string },
+            .{ .name = "inner", .ty = types.Tag.number },
+            .{ .name = "falloff", .ty = types.Tag.number },
+            .{ .name = "weight", .ty = types.Tag.number },
+        };
+        var ports_emitter_mode: [2]registry.Port = undefined;
+    };
+    host.ports_emitter_mode = .{
+        .{ .name = "name", .ty = types.Tag.string },
+        .{ .name = "mode", .ty = types.Tag.string, .one_of = &host.mode_vals },
     };
     host.out_mesh = .{.{ .name = "out", .ty = mesh }};
     host.ports_mesh_num = .{ .{ .name = "m", .ty = mesh }, .{ .name = "amount", .ty = types.Tag.number } };
@@ -61,6 +74,8 @@ fn hostRegistry(gpa: std.mem.Allocator) !rill.Registry {
     _ = try reg.register(.{ .name = "sound play", .inputs = &host.ports_tail, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
     _ = try reg.register(.{ .name = "emitter drop", .inputs = &host.ports_gain_tail, .statics = &host.statics_emitter, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
     _ = try reg.register(.{ .name = "say", .inputs = &host.ports_tail_opt, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "volume set", .inputs = &host.ports_vol_set, .outputs = &host.out_str, .help = "stub", .class = .effect, .eval = stubEval });
+    _ = try reg.register(.{ .name = "emitter mode", .inputs = &host.ports_emitter_mode, .outputs = &host.out_str, .help = "stub", .class = .effect, .eval = stubEval });
     return reg;
 }
 
@@ -718,6 +733,56 @@ test "tail: closed at the joints — no sections, no piping into a tail-only op"
 
 test "tail: raw characters outside a tail still fail loud" {
     try expectParseError("cube 2 | bevel /tmp/x", "unexpected '/' in arguments");
+}
+
+// ---------------------------------------------------------------------------
+// Console words (D5): bare words bind string ports as string literals; the
+// port type keeps the coercion narrow. `one_of` enforces enum args at parse.
+// ---------------------------------------------------------------------------
+
+test "console words: a bare word binds a string-typed port as a string literal" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "volume set v1 0.5 2 1", &diag);
+    defer prog.deinit();
+    const n = prog.node(0);
+    try testing.expectEqualStrings("v1", types.asString(prog.slot(n.inputs[0]).source.literal).?);
+    try testing.expectEqual(@as(f64, 0.5), types.asNumber(prog.slot(n.inputs[1]).source.literal).?);
+    // kwarg spelling coerces identically
+    var prog2 = try rill.parse(testing.allocator, &reg, "p", "volume set name: v2 0.5 2 1", &diag);
+    defer prog2.deinit();
+    try testing.expectEqualStrings("v2", types.asString(prog2.slot(prog2.node(0).inputs[0]).source.literal).?);
+}
+
+test "console words: unknown words stay loud everywhere else" {
+    // a word aimed at a number port is not a string in disguise
+    try expectParseError("cube 2 | bevel soft", "unknown name 'soft'");
+    // bound names still shadow the coercion: v1 resolves to its binding
+    // ("hello"), not to the text "v1" the coercion would have produced
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\"hello" as v1
+        \\volume set v1 0.5 2 1
+    , &diag);
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "volume set1").?);
+    try testing.expectEqualStrings("hello", types.asString(prog.slot(n.inputs[0]).source.literal).?);
+}
+
+test "one_of: enum args are enforced at parse, quoted or bare" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "emitter mode e1 loop", &diag);
+    defer prog.deinit();
+    try testing.expectEqualStrings("loop", types.asString(prog.slot(prog.node(0).inputs[1]).source.literal).?);
+    try expectParseError("emitter mode e1 wobble", "not an allowed value");
+    try expectParseError(
+        \\emitter mode e1 "wobble"
+    , "not an allowed value");
 }
 
 test "host context is live at tick 0 — one-shot command programs depend on it" {

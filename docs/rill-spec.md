@@ -134,6 +134,14 @@ lerp base lid t: 0.3
 A bare name in argument position pulls that stream in. With declared ports, `b: lid` is always
 available when positional order is unclear.
 
+**Console words (v0.1, agreed 2026-08-23):** a bare word that is *not* a bound name, alias, or
+operator becomes a **string literal** when — and only when — it binds a string-typed port:
+`volume set v1 0.5 2 1` is the entire console grammar, and entity names are strings. The port
+type keeps the coercion narrow; an unknown word anywhere else stays a loud parse error, and
+bound names always shadow (quote the text if a name collides). A string port may declare a
+closed `one_of` value set — the same list the console tab-completes from — and a bound literal
+is checked against it at parse: tab-complete metadata, finally enforced.
+
 ### 3.5 Multiple outputs
 
 ```

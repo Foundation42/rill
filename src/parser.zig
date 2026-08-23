@@ -29,6 +29,12 @@
 //! - Operator lookup tries the two-word form first (`boolean subtract`), so a
 //!   host registry seeded from (verb, subop) command pairs maps one row to
 //!   one operator.
+//! - A bare word bound to a *string-typed* port becomes a string literal at
+//!   the bind moment — the console's entity names (`volume set v1 …`) are
+//!   strings, and the port type keeps the coercion narrow: local names and
+//!   aliases resolve first, and an unknown word anywhere else stays a loud
+//!   error. A `one_of` port additionally checks a bound literal's membership
+//!   at parse.
 //! - A `tail` port (last input only, §3.11) binds the rest of the line
 //!   *verbatim from the raw source* as a string literal — locators like
 //!   `/tmp/loop.wav` and `pack:horns#audio.stem` are text, not structure.
@@ -859,7 +865,7 @@ const Parser = struct {
             if (arg.kw.len == 0) continue;
             const pi = portIndex(ports, arg.kw) orelse return self.fail(arg.tok, "'{s}' has no port '{s}'", .{ op_name, arg.kw });
             if (bound[pi] != null) return self.fail(arg.tok, "port '{s}' of '{s}' bound twice", .{ arg.kw, op_name });
-            bound[pi] = arg;
+            bound[pi] = try self.bindArg(arg, ports[pi], op_name);
         }
         for (stream_args) |arg| {
             if (arg.kw.len > 0 or arg.kind != .section) continue;
@@ -870,11 +876,10 @@ const Parser = struct {
         }
         for (stream_args) |arg| {
             if (arg.kw.len > 0 or arg.kind == .section) continue;
-            if (arg.kind == .word) return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             const pi = for (ports, 0..) |_, i| {
                 if (bound[i] == null) break i;
             } else return self.fail(arg.tok, "too many arguments for '{s}' ({d} port(s))", .{ op_name, ports.len });
-            bound[pi] = arg;
+            bound[pi] = try self.bindArg(arg, ports[pi], op_name);
         }
 
         // Type check + collect sources.
@@ -920,6 +925,33 @@ const Parser = struct {
         }
 
         return .{ .node = node_id, .outputs = try self.outsOf(target, node_id) };
+    }
+
+    /// The bind moment for one positional/kwarg argument, where the port's
+    /// declaration decides two console-shaped rules (D5): a bare word in a
+    /// *string-typed* port position is a string literal — `volume set v1 …`
+    /// is the entire console grammar, and the type gate keeps the coercion
+    /// narrow: anywhere else an unknown word stays a loud error. And a
+    /// `one_of` port checks a bound string literal's membership here, at
+    /// wire time — the browser's tab-complete list, finally enforced.
+    fn bindArg(self: *Parser, arg: Arg, port: registry.Port, op_name: []const u8) ParseError!Arg {
+        var out = arg;
+        if (arg.kind == .word) {
+            if (port.ty != types.Tag.string) return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
+            var pk = struple.Packer.init(self.a());
+            pk.appendString(arg.text) catch return error.OutOfMemory;
+            const bytes = pk.toOwnedSlice() catch return error.OutOfMemory;
+            out = .{ .kind = .literal, .source = .{ .literal = bytes }, .ty = types.Tag.string, .text = arg.text, .kw = arg.kw, .tok = arg.tok };
+        }
+        if (port.one_of.len > 0 and out.kind == .literal) {
+            if (types.asString(out.source.literal)) |s| {
+                const ok = for (port.one_of) |v| {
+                    if (std.mem.eql(u8, s, v)) break true;
+                } else false;
+                if (!ok) return self.fail(arg.tok, "'{s}' is not an allowed value for '{s}' port '{s}'", .{ s, op_name, port.name });
+            }
+        }
+        return out;
     }
 
     fn portIndex(ports: []const registry.Port, name: []const u8) ?usize {
@@ -1166,16 +1198,15 @@ const Parser = struct {
                 if (std.mem.eql(u8, pd.name, arg.kw)) break i;
             } else return self.fail(arg.tok, "'{s}' has no port '{s}'", .{ tmpl.name, arg.kw });
             if (bound[pi] != null) return self.fail(arg.tok, "port '{s}' of '{s}' bound twice", .{ arg.kw, tmpl.name });
-            bound[pi] = arg;
+            bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name);
         }
         for (args.items) |arg| {
             if (arg.kw.len > 0) continue;
-            if (arg.kind == .word) return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             if (arg.kind == .section) return self.fail(arg.tok, "predicates cannot bind to def ports (v0)", .{});
             const pi = for (tmpl.ports, 0..) |_, i| {
                 if (bound[i] == null) break i;
             } else return self.fail(arg.tok, "too many arguments for '{s}' ({d} port(s))", .{ tmpl.name, tmpl.ports.len });
-            bound[pi] = arg;
+            bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name);
         }
         const port_sources = try self.a().alloc(Source, tmpl.ports.len);
         for (tmpl.ports, 0..) |pd, i| {
