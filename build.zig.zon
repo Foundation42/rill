@@ -1,0 +1,22 @@
+.{
+    .name = .rill,
+    .version = "0.0.0",
+    .fingerprint = 0x2a384e7cfcec1390, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.14.1",
+    .dependencies = .{
+        .struple = .{
+            .path = "../struple",
+        },
+    },
+    .paths = .{
+        "LICENSE",
+        "LICENSE-APACHE",
+        "LICENSE-COMMERCIAL.md",
+        "NOTICE",
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "docs",
+        "README.md",
+    },
+}

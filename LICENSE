@@ -1,0 +1,46 @@
+rill — dual-licensed
+=====================
+
+rill is available under either of:
+
+  - the Apache License, Version 2.0 (see LICENSE-APACHE), OR
+  - a commercial license offered by Foundation42 / Entrained.ai
+    (see LICENSE-COMMERCIAL.md and contact chris@foundation42.org).
+
+You may pick whichever fits your use case. Open-source users, students,
+researchers, and most downstream projects should use Apache 2.0 — it
+imposes no copyleft and grants explicit patent rights.
+
+The commercial license is for organizations that want:
+
+  - a path free of Apache 2.0's attribution / NOTICE-file requirements,
+  - indemnification, support, or a contractual SLA,
+  - use without distributing the corresponding NOTICE.
+
+Both licenses cover the same code. There is no "open core" / "premium
+features" split — the entire rill library (parser, evaluator, core
+operator set, serialization, and tooling) is available under either
+license at the licensee's choice.
+
+Contact
+-------
+
+Christian Beaumont — chris@foundation42.org
+Foundation42 — https://foundation42.org
+Entrained.ai  — https://entrained.ai
+
+Third-party
+-----------
+
+The ideas rill builds on are prior art: synchronous and reactive
+dataflow languages, spreadsheet-style incremental evaluation, and
+node-graph editors are well-published territory. The design and the
+Zig implementation in this repo are original. rill depends on the
+sibling struple library, which carries its own (identical, dual)
+license in its own repository.
+
+The Apache 2.0 license file applies to all source code and
+documentation in this repository (`src/`, `docs/`, `build.zig`,
+`build.zig.zon`, `README.md`). It does not extend to values or
+programs that hosts feed through a mounted rill at runtime — those
+belong to their authors.
