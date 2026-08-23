@@ -1235,3 +1235,20 @@ test "a rill mounted mid-session baselines at the mount moment, not zero" {
     try rt.tick(.{ .time_ns = t0 + 100 * ms });
     try testing.expectEqual(@as(f64, 2), types.asNumber(rt.readSlot(out).?).?);
 }
+
+test "the guard's other half: a required port still blocks until its stream arrives" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.a | add plane.b as x
+    , .{.{ "plane.a", @as(i64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.add1.out.out";
+    const add_id = nodeIdOf(&fx.prog, "add1").?;
+    // plane.b has never produced: the node waits — no eval, no half-fed output
+    // (the optional-ports-read-null ruling must not have widened into this)
+    try testing.expectEqual(@as(u64, 0), fx.rt.eval_count[add_id]);
+    try testing.expect(fx.rt.readSlot(out) == null);
+    try feedValue(&fx.rt, testing.allocator, "plane.b", @as(i64, 2));
+    try fx.rt.tick(.{});
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, out).?);
+}
