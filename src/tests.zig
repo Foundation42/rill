@@ -732,7 +732,19 @@ test "tail: closed at the joints — no sections, no piping into a tail-only op"
 }
 
 test "tail: raw characters outside a tail still fail loud" {
+    // a leading '/' is no word start — still a loud raw character
     try expectParseError("cube 2 | bevel /tmp/x", "unexpected '/' in arguments");
+    // slash-in-word tokenizes as one word, but a number port still refuses it
+    try expectParseError("cube 2 | bevel render/grade", "unknown name 'render/grade'");
+}
+
+test "console words: knob-path arguments ride the slash-in-word coercion" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "emitter mode render/grade/exposure loop", &diag);
+    defer prog.deinit();
+    try testing.expectEqualStrings("render/grade/exposure", types.asString(prog.slot(prog.node(0).inputs[0]).source.literal).?);
 }
 
 // ---------------------------------------------------------------------------

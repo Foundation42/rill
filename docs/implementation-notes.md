@@ -100,6 +100,11 @@ it. Spec section numbers in parentheses.
   for literals (words included); a *stream* bound to a `one_of` port can't be
   checked until eval, and isn't — the handler stays the authority there. The
   registry rejects `one_of` on non-string ports (`error.BadEnumPort`).
+  `/` became a name-interior character in the same push (never a name start
+  — a leading `/` is still a loud raw byte): rill has no slash operator, so
+  `render/grade/exposure` is one word and knob-path *arguments* need no
+  special case. Filesystem paths (leading `/`, may contain spaces) belong on
+  tail ports instead.
   `EvalCtx.host` + `MountOpts` rode the same push: host context is attached
   at mount because one-shot command programs fire effects at tick 0.
 - **Two-word operator lookup**: `boolean subtract` resolves before `boolean`,

@@ -140,7 +140,9 @@ operator becomes a **string literal** when — and only when — it binds a stri
 type keeps the coercion narrow; an unknown word anywhere else stays a loud parse error, and
 bound names always shadow (quote the text if a name collides). A string port may declare a
 closed `one_of` value set — the same list the console tab-completes from — and a bound literal
-is checked against it at parse: tab-complete metadata, finally enforced.
+is checked against it at parse: tab-complete metadata, finally enforced. `/` is a name-interior
+character (rill has no `/` operator; division is `div`), so store-spelled knob paths like
+`render/grade/exposure` are single words and ride the same coercion.
 
 ### 3.5 Multiple outputs
 

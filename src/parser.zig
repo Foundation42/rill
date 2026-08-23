@@ -114,8 +114,12 @@ fn isNameStart(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
 }
 
+/// `/` is a name-interior character (never a name start): rill has no `/`
+/// operator — division is the `div` word — so `render/grade/exposure` is
+/// unambiguous, and the console's knob-path arguments ride the bare-word →
+/// string-port coercion with no special case.
 fn isNameChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_';
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '/';
 }
 
 fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Token {
