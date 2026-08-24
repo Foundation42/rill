@@ -55,17 +55,29 @@ pub const Plane = struct {
 /// wrong. An OCCURRENCE delta does neither. A trigger pulled twice is two
 /// pulls, and identical bytes are the normal case for a trigger — an enemy at
 /// the gate, then an enemy at the gate again.
-/// Reserved third kind: `inc` sums its deltas within a tick and applies the
-/// sum once, silencing a net-zero tick. It is here now, unimplemented, because
-/// widening this enum later would be the second refactor this reservation
-/// exists to avoid — and because the taxonomy is the point: three coalescing
-/// rules, one per kind, chosen by the path's policy rather than by the caller.
+/// Third kind, ACCUMULATE (`inc`): sums its deltas within a tick and applies
+/// the sum once, silencing a net-zero tick. Not sugar for `x | add 1 | set x`
+/// — that reads a path it writes and the cycle check rightly refuses it. A
+/// blind delta reads nothing, so it passes legitimately, and being commutative
+/// it is MORE deterministic than read-modify-write: arrival order stops
+/// mattering.
 ///
-/// Why it is not sugar for `x | add 1 | set x`: that reads a path it writes,
-/// and the cycle check rightly refuses it. A blind delta reads nothing, so it
-/// passes legitimately — and being commutative, it is MORE deterministic than
-/// read-modify-write, since arrival order stops mattering.
-pub const DeltaKind = enum(u2) { value, occurrence, accumulate };
+/// Fourth kind, MEMBERSHIP (`tag`): reserved, not built (ironwood.md R6). It
+/// unions adds minus removes within a tick and suppresses a net-no-change
+/// tick. **Idempotence is what separates it from accumulate** — twice is
+/// double for a counter, twice is once for a set. A soldier cannot be in the
+/// shield wall one and a half times, which is also why the assembly tally
+/// eventually wants membership rather than a blind `inc`: a set cannot drift
+/// the way a counter can.
+///
+/// Both reservations are here before their implementations for the same
+/// reason: widening this enum later is precisely the second refactor a
+/// reservation exists to prevent, and every switch over it is exhaustive, so
+/// the compiler points at each arm that has to answer for a new kind. The
+/// taxonomy is the point — four coalescing rules, one per kind, chosen by what
+/// a write MEANS rather than by which function the caller happened to reach
+/// for. `enum(u2)` holds all four, so the fourth cost nothing but the arms.
+pub const DeltaKind = enum(u2) { value, occurrence, accumulate, membership };
 
 pub const Delta = struct {
     path: []const u8,
@@ -178,6 +190,10 @@ pub const MockPlane = struct {
         switch (kind) {
             .value, .occurrence => try self.put(path, val),
             .accumulate => try self.applyDelta(path, val),
+            // Reserved (ironwood.md R6). A mock that quietly stored a tag write
+            // as a value would let the first `tag` test pass while proving
+            // nothing — the same trap `applyDelta` exists to avoid.
+            .membership => return error.Denied,
         }
     }
 

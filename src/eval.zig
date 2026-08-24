@@ -301,12 +301,15 @@ pub const Runtime = struct {
                 try oq.value_ptr.append(self.gpa, try self.gpa.dupe(u8, delta.value));
                 return;
             },
-            // Reserved. Nothing produces one yet; when the accumulate beat
-            // lands, its sum-per-tick rule goes HERE, and this arm is what the
-            // compiler points at. Refused rather than silently treated as a
-            // value, because a wrong coalescing rule is the quiet kind of
-            // wrong this taxonomy exists to prevent.
-            .accumulate => return error.UnsupportedDeltaKind,
+            // INBOUND accumulate and membership are both still reserved. `inc`
+            // produces an accumulate WRITE (rill → plane), but nothing feeds
+            // one back the other way: the plane publishes the resulting value,
+            // not the delta, so a subscriber sees a value delta like any other.
+            // If that ever changes, the sum-per-tick rule goes here — and the
+            // union-adds-minus-removes rule beside it. Refused rather than
+            // silently treated as a value, because a wrong coalescing rule is
+            // the quiet kind of wrong this taxonomy exists to prevent.
+            .accumulate, .membership => return error.UnsupportedDeltaKind,
         }
         const gop = try self.pending.getOrPut(self.gpa, sub.path);
         if (gop.found_existing) self.gpa.free(gop.value_ptr.*);

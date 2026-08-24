@@ -2058,3 +2058,25 @@ test "an op that emits occurrences is never cacheable" {
         }
     }
 }
+
+test "reserved delta kinds are refused, never quietly treated as values" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.v | tap seen");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    const enc = try packOne(testing.allocator, @as(i64, 1));
+    defer testing.allocator.free(enc);
+    for ([_]rill.DeltaKind{ .accumulate, .membership }) |k| {
+        try testing.expectError(error.UnsupportedDeltaKind, rt.feed(.{ .path = "plane.v", .value = enc, .kind = k }));
+    }
+    // A membership WRITE is refused at the plane too, for the same reason: a
+    // tag stored as a value would silently lose idempotence, which is the one
+    // property that distinguishes it from accumulate.
+    try testing.expectError(error.Denied, mock.asPlane().write("plane.tags", enc, .membership));
+}

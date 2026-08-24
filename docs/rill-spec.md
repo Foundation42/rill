@@ -424,8 +424,22 @@ Every stream is either:
 
 A third kind is **accumulate** (v0.2, ratified 2026-08-24): `inc` writes a blind delta, and
 the plane sums the deltas for a path within a tick and applies the sum once, silencing a
-net-zero tick. The three coalescing rules are last-write-wins (value), append-all-in-order
-(occurrence), and sum-then-apply (accumulate).
+net-zero tick. A fourth, **membership** (`tag`), is **reserved, not built** — see
+`ironwood.md` R6. The four coalescing rules:
+
+| kind | coalesce rule | suppress? | idempotent? |
+|---|---|---|---|
+| set (value) | last-write-wins per tick | same-bytes | n/a |
+| occurrence | append all, in order | never | no — twice is twice |
+| accumulate (`inc`) | sum per tick, apply once | net-zero tick | no — twice is double |
+| membership (`tag`, reserved) | union adds minus removes per tick | net-no-change | **yes — twice is once** |
+
+**Idempotence is what separates membership from accumulate**: a soldier cannot be in the
+shield wall one and a half times. It is reserved ahead of its implementation for the reason
+the third kind was — widening this enum later is precisely the second refactor a reservation
+prevents — and because every switch over it is exhaustive, so the compiler names each arm
+that has to answer for a new kind. Both reserved kinds are *refused*, never quietly treated
+as values: a wrong coalescing rule is the quiet kind of wrong the taxonomy exists to stop.
 
 The taxonomy runs **both ways across the boundary**, which is the point: an inbound delta
 carries a kind and so does an outbound write, because what a write *means* is what decides
