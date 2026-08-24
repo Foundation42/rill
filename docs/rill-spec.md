@@ -193,21 +193,30 @@ the main-thread drain, so rill writes are ordered with everything else and appea
 command log / undo machinery like any other authored change, subject to the host's
 mutating/affects_output classification).
 
-**`notify <path> [record]`** is `set` aimed at an occurrence channel — the same write, and
-the path's own mailbox policy still decides whether it appends. It exists so intent is on the
-sleeve (`notify signals/horn` says "this is a sighting" where `set` would read as "this is the
-state"), and it carries one thing `set` does not: an **optional `record` port**, so a signal
-piped a *rousing* can still carry its own payload:
+**The sink shape is `<verb> <path> [value]`** (v0.2, ratified 2026-08-24), shared by `set`
+and `notify`. Port 0 is always the **rousing** — it decides *when* — and the optional `value`
+port, when bound, decides *what*:
+
+> **Piped value: write what's flowing. Bound value: write this, because something flowed.**
 
 ```
-sensors/tower/visible_enemies | rose_above 0
-  | notify plane.signals.horn { kind: "approach", from: "tower" }
+plane.hp | clamp 0 100 | set plane.ui.bar                      # what's flowing
+plane.signals.horn | set plane.gate.drawbridge_target 1        # this, because something flowed
+plane.enemies | rose_above 0 | notify plane.signals.horn { kind: "approach" }
 ```
 
-Without that port the canonical sentinel is unsayable, because the pipe takes the only port.
-Unpiped, the record binds port 0 and is both rousing and payload; unbound, the in-flowing
-value is written. A change in `record` alone is not a signal — the payload says *what*, the
-rousing says *when*.
+Unpiped, the value binds port 0 and is both rousing and payload, so the console's whole
+`set <path> <value>` grammar is untouched. A change in `value` alone is not a write — the
+payload says *what*, the rousing says *when*, the same rule `inc` applies to `by`.
+
+Without that port, "on a rousing, write a constant" has no spelling: the pipe takes the only
+port, so the constant has to be held in a `latch` and sampled — three nodes to say one word.
+`notify` hit that wall first (the canonical sentinel carries a record), `set` hit it one
+scenario later ("at the sound of the alarm, raise the drawbridge"), and the second time made
+it the sink *shape* rather than one op's exception. `notify` is otherwise exactly `set`: same
+ports, same write, same eval. What distinguishes it is intent — `notify signals/horn` says
+"this is a sighting" where `set` would read as "this is the state" — and the path's own
+mailbox policy, not the verb, still decides whether the write appends.
 
 **`inc <path> <by>`** adds instead of replacing (v0.2, ratified 2026-08-24). It is the one
 sink whose port 0 is a **rousing rather than a payload** — an increment takes nothing from

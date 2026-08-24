@@ -533,7 +533,12 @@ test "G2: frozen reference — the canonical dump hashes to a committed value" {
     // the "now"/"wheel" sections for temporal operators, and the fixture's
     // local renamed stats → vitals because `stats` became a core operator
     // (the shadow ban firing on our own test was the rename's receipt).
-    try testing.expectEqualStrings("4d1439393d01ef25fea10c322cdb9eb6aebe57a8c1524de1a679efd905900792", &hex);
+    // Re-frozen 2026-08-24, deliberate: `set` gained its optional `value`
+    // port, so every `set` node carries a second (here unbound) input slot.
+    // The fixture holds exactly one `set` and no `notify`, so that is the
+    // whole of the difference — and the test below pins the CAUSE, so a
+    // future move of this hash cannot be waved through with the same excuse.
+    try testing.expectEqualStrings("6fdc7346e5597174845ba80c74d119241d20cce0dcbebc1ca62f2f5dfe3d8041", &hex);
 }
 
 // ---------------------------------------------------------------------------
@@ -2079,4 +2084,116 @@ test "reserved delta kinds are refused, never quietly treated as values" {
     // tag stored as a value would silently lose idempotence, which is the one
     // property that distinguishes it from accumulate.
     try testing.expectError(error.Denied, mock.asPlane().write("plane.tags", enc, .membership));
+}
+
+// ---------------------------------------------------------------------------
+// The sink shape: `<verb> <path> [value]`, shared by `set` and `notify`.
+// Piped value: write what's flowing. Bound value: write this, because
+// something flowed.
+// ---------------------------------------------------------------------------
+
+test "set: a rousing writes a constant, in one node" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    // Ironwood's gate.rill: "at the sound of the alarm, drop the portcullis."
+    // Before the `value` port this took three nodes to say one word — hold the
+    // constant in a latch, sample it on the rousing, pipe it to the sink.
+    var prog = try parseOk(testing.allocator, &reg, "plane.signals.horn | set plane.gate.portcullis 1");
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.nodeCount());
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    // Nothing has flowed, so nothing has been written — a constant is not a
+    // reason to write, a rousing is.
+    try testing.expectEqual(@as(usize, 0), mock.writes.items.len);
+
+    const enc = try packOne(testing.allocator, @as(i64, 7));
+    defer testing.allocator.free(enc);
+    try rt.feed(.{ .path = "plane.signals.horn", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 1 });
+    // The horn carried 7. The portcullis is 1.
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+    try testing.expectEqual(@as(f64, 1), types.asNumber(mock.writes.items[0].value).?);
+
+    // Two blasts, two writes: the sink is roused, not level-triggered.
+    try rt.feed(.{ .path = "plane.signals.horn", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 2 });
+    try testing.expectEqual(@as(usize, 2), mock.writes.items.len);
+}
+
+test "set: the older forms are unchanged" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    // Piped, value unbound: write what's flowing.
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | clamp 0 100 | set plane.ui.bar");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.hp", @as(i64, 40));
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    try testing.expectEqual(@as(f64, 40), types.asNumber(mock.writes.items[0].value).?);
+
+    // Unpiped: the value binds port 0 and is both rousing and payload — the
+    // console's entire `set <path> <value>` grammar, untouched.
+    var prog2 = try parseOk(testing.allocator, &reg, "set plane.ui.bar 0.5");
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.mount(testing.allocator, &prog2, mock2.asPlane(), .{});
+    defer rt2.deinit();
+    try testing.expectEqual(@as(usize, 1), mock2.writes.items.len);
+    try testing.expectEqual(@as(f64, 0.5), types.asNumber(mock2.writes.items[0].value).?);
+}
+
+test "set: a change in the value alone is not a write" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.pulse | set plane.out plane.amount");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.amount", @as(i64, 5));
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    const enc = try packOne(testing.allocator, @as(i64, 1));
+    defer testing.allocator.free(enc);
+    try rt.feed(.{ .path = "plane.pulse", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 1 });
+    try testing.expectEqual(@as(f64, 5), types.asNumber(mock.writes.items[0].value).?);
+
+    // The payload moves; nothing rouses. The payload says what, the rousing
+    // says when — the same rule `inc` applies to `by`.
+    try feedValue(&rt, testing.allocator, "plane.amount", @as(i64, 9));
+    try rt.tick(.{ .frame = 2 });
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+}
+
+test "set and notify are the same shape, and that is the point" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const set = reg.get(reg.find("set").?);
+    const notify = reg.get(reg.find("notify").?);
+    // They diverged for exactly one day — notify grew the payload port first,
+    // because the pipe took its only port and the sentinel was unsayable, and
+    // `set` met the identical wall one scenario later. The port is the sink
+    // SHAPE now, not one op's exception. What is left is intent.
+    try testing.expectEqual(set.inputs.len, notify.inputs.len);
+    for (set.inputs, notify.inputs) |a, b| {
+        try testing.expectEqualStrings(a.name, b.name);
+        try testing.expectEqual(a.optional, b.optional);
+    }
+    try testing.expectEqual(set.class, notify.class);
+    try testing.expectEqual(@as(usize, 0), set.outputs.len);
+    // This is the slot the G2 hash moved for: unbound, but present.
+    try testing.expect(set.inputs[1].optional);
 }

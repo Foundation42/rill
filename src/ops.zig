@@ -590,24 +590,26 @@ fn evalMerge(ctx: *EvalCtx) EvalError!Emit {
 // Plane / util
 // ---------------------------------------------------------------------------
 
-fn evalSet(ctx: *EvalCtx) EvalError!Emit {
-    try ctx.write(ctx.statics[0].path, try raw(ctx, 0));
-    return Emit.none;
-}
-
-/// `notify <path> [record]` — when `record` is bound, port 0 is the ROUSING
-/// and the record is what gets written. That is what makes the canonical
-/// sentinel sayable:
+/// The sink shape, shared by `set` and `notify`: `<verb> <path> [value]`.
 ///
-///     sensors/tower/visible_enemies | rose_above 0
-///       | notify signals/horn { kind: "approach", from: "tower" }
+/// **Piped value: write what's flowing. Bound value: write this, because
+/// something flowed.** Port 0 is always the rousing — it decides *when* — and
+/// when `value` is bound it decides *what*, which is the only spelling for
+/// "on a rousing, write a constant":
 ///
-/// Unpiped, the record binds port 0 and is both rousing and payload, so the
-/// standalone form is unchanged. Unbound, the in-flowing value is written, so
-/// `x | notify p` is unchanged too. A change in `record` alone is not a
-/// signal — the same rule `inc` applies to `by`, for the same reason: the
-/// payload says what, the rousing says when.
-fn evalNotify(ctx: *EvalCtx) EvalError!Emit {
+///     signals/horn | set gate/drawbridge.target 1
+///     visible_enemies | rose_above 0 | notify signals/horn { kind: "approach" }
+///
+/// Without it that sentence takes three nodes to say one word — hold the
+/// constant in a `latch`, sample it on the rousing, pipe it to the sink —
+/// which is what Ironwood's gate.rill did until this port existed.
+///
+/// Unpiped, the value binds port 0 and is both rousing and payload, so
+/// `set p 3` is unchanged. Unbound, the in-flowing value is written, so
+/// `x | set p` is unchanged. A change in `value` alone is not a write: the
+/// payload says what, the rousing says when — the same rule `inc` applies to
+/// `by`, for the same reason.
+fn evalSink(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none;
     try ctx.write(ctx.statics[0].path, ctx.in[1] orelse try raw(ctx, 0));
     return Emit.none;
@@ -711,23 +713,20 @@ const CORE = [_]registry.OpDef{
     .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },
     .{ .name = "merge", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .help = "Merge two records; b's fields win.", .eval = evalMerge },
     // plane / util
-    .{ .name = "set", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write the input to a plane path, through the host's write path.", .class = .effect, .eval = evalSet },
-    // `notify` began as `set` under another name — same write, same path, same
-    // eval — because a write to a mailbox path already follows the mailbox's
-    // policy (append, count, deliver every one), so the difference a reader
-    // needs is INTENT, not mechanism: `notify defense/alerts` says "this is a
+    .{ .name = "set", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write to a plane path — `set <path> [value]`; piped, the input is the rousing and `value` is what gets written.", .class = .effect, .eval = evalSink },
+    // `notify` IS `set` — same ports, same write, same eval — and it is worth
+    // saying that they diverged for exactly one day and came back. `notify`
+    // grew the optional payload port first, because the pipe took its only
+    // port and the canonical sentinel was unsayable; `set` met the identical
+    // wall one scenario later ("on the alarm, raise the drawbridge" is a
+    // constant on a rousing), so the port became the sink SHAPE rather than
+    // one op's exception.
+    //
+    // What remains is intent, which is the whole reason `notify` exists: a
+    // write to a mailbox path already follows the mailbox's policy (append,
+    // count, deliver every one), so `notify defense/alerts` says "this is a
     // sighting" where `set` would read as "this is the state".
-    //
-    // It has since earned one thing `set` does not have: an optional `record`
-    // port, so that a signal can be piped a ROUSING and still carry its own
-    // payload. Without it the canonical sentinel is unsayable, because the
-    // pipe takes the only port:
-    //
-    //     visible_enemies | rose_above 0 | notify signals/horn { kind: … }
-    //
-    // The write itself is still `set`'s write. The path's policy still decides
-    // whether it appends. Only the question "which value?" is now notify's own.
-    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("record", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path — `notify <path> [record]`; piped, the input is the rousing and `record` is the payload.", .class = .effect, .eval = evalNotify },
+    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path — `notify <path> [value]`; same write as `set`, states the intent.", .class = .effect, .eval = evalSink },
     // The third write kind. `plane.x | add 1 | set plane.x` reads a path it
     // writes, so the cycle check rightly refuses it — which leaves counters
     // inexpressible. A blind delta reads nothing and passes legitimately.
