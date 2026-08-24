@@ -1286,3 +1286,31 @@ test "OpClass: a reads op with a path static is not a writer; effect is" {
     try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "plane.x | pokeat plane.x", &diag2));
     try testing.expect(std.mem.indexOf(u8, diag2.msg(), "cycle") != null);
 }
+
+// ---------------------------------------------------------------------------
+// The program's result slot — what a one-shot console line echoes when its
+// last statement is an expression rather than a sink (rillbook §2). An effect
+// line has no result: every effect op declares no outputs, so its
+// acknowledgement stands alone rather than echoing a fabricated value.
+// ---------------------------------------------------------------------------
+
+test "resultSlot: an expression line has a value; an effect line has none" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.a | add 1 | mul 3
+    , .{.{ "plane.a", @as(i64, 4) }});
+    defer fx.deinit();
+    const sid = fx.prog.resultSlot() orelse return error.TestUnexpectedResult;
+    // the LAST node's output, not the first: (4 + 1) * 3
+    try testing.expectEqual(@as(f64, 15), types.asNumber(fx.rt.readSlotId(sid).?).?);
+
+    // a sink-terminated line: `set` produces nothing, so the result is the
+    // expression feeding it — never the write itself
+    var fx2: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx2,
+        \\plane.a | add 1 | set plane.out
+    , .{.{ "plane.a", @as(i64, 4) }});
+    defer fx2.deinit();
+    const sid2 = fx2.prog.resultSlot() orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(f64, 5), types.asNumber(fx2.rt.readSlotId(sid2).?).?);
+}

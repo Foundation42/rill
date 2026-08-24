@@ -117,6 +117,23 @@ pub const Program = struct {
         return self.nodes.items.len;
     }
 
+    /// The program's RESULT: the first output of the last node that produces
+    /// one. A one-shot host uses this to echo the value of a line whose final
+    /// statement is an expression rather than a sink — "what does this print"
+    /// having no answer is a console defect, not a language property. Null when
+    /// nothing in the program produces a value (every effect op — `set`, and
+    /// every seeded console verb — declares no outputs, so a pure effect line
+    /// echoes nothing and its acknowledgement stands alone).
+    pub fn resultSlot(self: *const Program) ?SlotId {
+        var i = self.nodes.items.len;
+        while (i > 0) {
+            i -= 1;
+            const n = self.nodes.items[i];
+            if (n.outputs.len > 0) return n.outputs[0];
+        }
+        return null;
+    }
+
     /// Find (or create) the deduplicated subscription record for `path`.
     pub fn subFor(self: *Program, path: []const u8) !*Sub {
         for (self.subs.items) |*s| {

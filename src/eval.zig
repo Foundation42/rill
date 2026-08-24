@@ -277,7 +277,14 @@ pub const Runtime = struct {
     /// watches wires through exactly this.
     pub fn readSlot(self: *const Runtime, path: []const u8) ?[]const u8 {
         const sid = self.slot_by_path.get(path) orelse return null;
-        if (!self.has[sid]) return null;
+        return self.readSlotId(sid);
+    }
+
+    /// Read a slot by id — the path-free half of `readSlot`, for a caller that
+    /// already holds the id (`Program.resultSlot`, notably). Null while the
+    /// slot has never carried a value.
+    pub fn readSlotId(self: *const Runtime, sid: graph.SlotId) ?[]const u8 {
+        if (sid >= self.has.len or !self.has[sid]) return null;
         return self.values[sid].items;
     }
 
