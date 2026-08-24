@@ -156,7 +156,16 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             const start = i;
             i += 1;
             col += 1;
-            while (i < src.len and isNameChar(src[i])) : (i += 1) col += 1;
+            // `-` is name-INTERIOR when it joins two name characters, the same
+            // license `/` has: `key-light` is one entity name. A lone `-` is
+            // still the unbind sentinel and `-5` is still a negative number,
+            // because both fail the "joins two name characters" test — and rill
+            // has no infix minus (subtraction is the `sub` word), so nothing
+            // else wants this spelling. Without it every hyphenated name an
+            // authoring tool produces is unsayable: `light move key-light 1 2 3`
+            // arrives as five arguments for a four-port row.
+            while (i < src.len and (isNameChar(src[i]) or
+                (src[i] == '-' and i + 1 < src.len and isNameChar(src[i + 1])))) : (i += 1) col += 1;
             try toks.append(a, .{ .kind = .name, .text = src[start..i], .line = tl, .col = tc, .off = to });
             continue;
         }

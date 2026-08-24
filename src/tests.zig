@@ -1314,3 +1314,45 @@ test "resultSlot: an expression line has a value; an effect line has none" {
     const sid2 = fx2.prog.resultSlot() orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(f64, 5), types.asNumber(fx2.rt.readSlotId(sid2).?).?);
 }
+
+// ---------------------------------------------------------------------------
+// Hyphens in names. Found 2026-08-24 by Chris dragging a light in the web
+// scene view: nothing moved, and (because a bare verb acked nowhere) nothing
+// said why. `key-light` was arriving as three tokens, so every hyphenated
+// entity an authoring tool produces was unsayable from the console.
+// ---------------------------------------------------------------------------
+
+test "hyphen is name-interior, and the lone `-` sentinel survives it" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+
+    // one word: a four-port row takes it as ONE argument, not three
+    var prog = try rill.parse(testing.allocator, &reg, "p", "volume set key-light 1 2 3", &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.nodeCount());
+
+    // interior digits are fine too (`cam-2` is a name, not arithmetic — rill
+    // has no infix minus, so there is nothing for it to collide with)
+    var diag2 = rill.Diag{};
+    var prog2 = try rill.parse(testing.allocator, &reg, "p", "volume set cam-2 1 2 3", &diag2);
+    defer prog2.deinit();
+    try testing.expectEqual(@as(usize, 1), prog2.nodeCount());
+
+    // the sentinel is untouched: a lone `-` is still its own word
+    var diag3 = rill.Diag{};
+    var prog3 = try rill.parse(testing.allocator, &reg, "p", "volume set - 1 2 3", &diag3);
+    defer prog3.deinit();
+    try testing.expectEqual(@as(usize, 1), prog3.nodeCount());
+
+    // and a negative number is still a number, not a name
+    var diag4 = rill.Diag{};
+    var prog4 = try rill.parse(testing.allocator, &reg, "p", "volume set v1 -1.5 2 3", &diag4);
+    defer prog4.deinit();
+    try testing.expectEqual(@as(usize, 1), prog4.nodeCount());
+
+    // a TRAILING hyphen still separates: `v1-` is the name then the sentinel,
+    // so an unbind written tight against a name keeps meaning unbind
+    var diag5 = rill.Diag{};
+    try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "volume set v1- 1 2 3", &diag5));
+}
