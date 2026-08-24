@@ -33,6 +33,15 @@ is expressible in the other, and they round-trip.
    This is the frozen-reference discipline applied to programs.
 7. **defs are archetypes.** A user-defined operator is indistinguishable from a built-in or a
    host-injected one. Its instances are addressable; its internals expose knob paths.
+8. **Silence must be spoken to be heard** (2026-08-24). Propagation is push-based, so it can
+   only report what *happened* — never what stopped being. A dataflow evaluator therefore
+   cannot subscribe to a thing that is not there: **absence is unobservable by construction.**
+   Every absence a program cares about must be *reified as a presence* — a death is a
+   `despawned` occurrence, not a path that quietly stops existing; a timeout is a message, not
+   a reply that failed to arrive; an empty program list is `"programs": []`, not an omitted
+   key. The failure mode is always the same and always quiet: a rill watching a despawned
+   entity holds its last reading forever, so `dropped_below 20` sits armed on a corpse's final
+   number, indistinguishable from a man standing very still.
 
 ### Non-goals (v0)
 

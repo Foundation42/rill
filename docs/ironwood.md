@@ -254,6 +254,16 @@ the digest, and nobody per-entity-subscribes a thousand members.
   §4.1 rounds), it is ordered and replayable, and it makes "what does `@tom`
   mean after Tom dies" answerable *on the stream* instead of by a reader
   noticing nothing arrived.
+- **OPEN for the R6 beat — what happens to the stale value slots?** Two
+  honest answers. *Retain-plus-occurrence*: `@tom.health` keeps its last
+  reading as the record, and `@tom.despawned` is the notification. *Tombstone*:
+  subsequent reads go NotFound loudly, and the corpse problem cannot happen at
+  all. Chris's lean is retain-plus-occurrence — the occurrence is the
+  notification, the retained value is the history, and a program that ignores
+  `despawned` was going to be wrong under any semantics. Decide it against the
+  first real death rather than in the abstract, which the raid conveniently
+  supplies: **the lead rider, pinned to the dirt by a wall arrow, is the test
+  case.**
 - **Kind, condition, behaviour are three systems on one entity:**
   `^soldier` stamps the entity, `def soldier(n)` mounts the behaviour,
   `#garrison` connects them — the assembly count watches the tag regardless

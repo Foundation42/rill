@@ -232,6 +232,28 @@ value, and it is not an error at all.)*
 Explicitly rejected: silent skip (invisible failure), and tick-aborting
 (one bad program must not stall the frame's dataflow).
 
+**FINDING (CC, 2026-08-24): the supervision tree cannot currently see a
+death.** This section designs for "a sentinel rill watching
+`programs/*/errors` — the system supervising its own machines", and item 3
+above has the watchdog *unmount* a program that breaches its budget. But
+unmount calls `Plane.removeDynamicPrefix("programs/<name>/")`, which emits
+**no deltas by design** ("readers simply find nothing"), and
+`noteRillUnmounted` only edits an internal bookkeeping list. Nothing reaches
+the stream. So the sentinel keeps the dead program's last error forever and
+never learns it died — spec §1's principle 8 (*silence must be spoken to be
+heard*) violated in exactly the machinery built to notice failure, and the
+same corpse problem Ironwood R6 found for despawned entities.
+
+Recommended shape, deliberately not built yet because the path naming sits in
+a namespace under active revision (R6's `^`/`@`/`#` rows): publish an
+**unmount occurrence** before the prefix is removed — the mailbox machinery
+this doc already specifies, so it is ordered, replayable and never
+suppressed. One question to rule on with it: whether the dead program's
+published wires are *retained* as a last reading (history, corpse problem
+persists for anyone not watching the occurrence) or *tombstoned* so reads
+fail loudly — the identical choice R6 flags for despawned entities, and worth
+deciding once for both.
+
 ---
 
 ## 7. Format versioning (one integer now, a compat layer later)
