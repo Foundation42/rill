@@ -1888,3 +1888,75 @@ test "thresholds: each op is strict on its own comparison, and they mirror" {
         };
     }
 }
+
+test "the spec's §3.14 example parses, verbatim" {
+    // Copied character for character out of docs/rill-spec.md. An example a
+    // doc ships and nothing executes is an example that goes stale silently —
+    // the demo's `as stats` sat broken for two days on exactly that.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg,
+        \\use plane.defense as d
+        \\
+        \\plane.gate.enemy_count | rose_above 0
+        \\  | also { inc d.sightings 1 }
+        \\  | notify d.alerts
+    );
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
+}
+
+test "notify: piped, the input is the rousing and the record is the payload" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    // Ironwood's canonical sentinel (docs/ironwood.md §2), which needs the
+    // record to survive being piped into.
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.sensors.tower.visible_enemies | rose_above 0 | notify plane.signals.horn { kind: \"approach\", from: \"tower\" }");
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.sensors.tower.visible_enemies", @as(i64, 0));
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    try feedValue(&rt, testing.allocator, "plane.sensors.tower.visible_enemies", @as(i64, 3));
+    try rt.tick(.{ .frame = 1 });
+
+    // The horn carries the signal vocabulary, not the enemy count.
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+    try testing.expectEqualStrings("plane.signals.horn", mock.writes.items[0].path);
+    const rec = mock.writes.items[0].value;
+    try testing.expectEqual(types.Tag.record, types.typeOfValue(rec));
+}
+
+test "notify: the other two forms are unchanged" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    // Unbound record: the in-flowing value IS the payload, as before.
+    var prog = try parseOk(testing.allocator, &reg, "plane.alerts | notify plane.signals.horn");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    const enc = try packOne(testing.allocator, @as(i64, 7));
+    defer testing.allocator.free(enc);
+    try rt.feed(.{ .path = "plane.alerts", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 1 });
+    try testing.expectEqual(@as(f64, 7), types.asNumber(mock.writes.items[0].value).?);
+
+    // Unpiped: the record binds port 0 and is both rousing and payload.
+    var prog2 = try parseOk(testing.allocator, &reg, "notify plane.signals.horn { kind: \"imminent\" }");
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.mount(testing.allocator, &prog2, mock2.asPlane(), .{});
+    defer rt2.deinit();
+    try testing.expectEqual(@as(usize, 1), mock2.writes.items.len);
+    try testing.expectEqual(types.Tag.record, types.typeOfValue(mock2.writes.items[0].value));
+}

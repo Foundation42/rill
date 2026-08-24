@@ -595,6 +595,24 @@ fn evalSet(ctx: *EvalCtx) EvalError!Emit {
     return Emit.none;
 }
 
+/// `notify <path> [record]` — when `record` is bound, port 0 is the ROUSING
+/// and the record is what gets written. That is what makes the canonical
+/// sentinel sayable:
+///
+///     sensors/tower/visible_enemies | rose_above 0
+///       | notify signals/horn { kind: "approach", from: "tower" }
+///
+/// Unpiped, the record binds port 0 and is both rousing and payload, so the
+/// standalone form is unchanged. Unbound, the in-flowing value is written, so
+/// `x | notify p` is unchanged too. A change in `record` alone is not a
+/// signal — the same rule `inc` applies to `by`, for the same reason: the
+/// payload says what, the rousing says when.
+fn evalNotify(ctx: *EvalCtx) EvalError!Emit {
+    if (!ctx.in_fresh[0]) return Emit.none;
+    try ctx.write(ctx.statics[0].path, ctx.in[1] orelse try raw(ctx, 0));
+    return Emit.none;
+}
+
 /// `inc` is a SINK WITH NO PAYLOAD: port 0 is the rousing, not the amount.
 /// That is why it does not read like `set`, and it is the honest signature —
 /// an increment takes nothing from the stream, so binding the in-flowing value
@@ -638,6 +656,9 @@ const p = struct {
     }
     fn optOcc(n: []const u8, ty: types.TypeId) registry.Port {
         return .{ .name = n, .ty = ty, .kind = .occurrence, .optional = true };
+    }
+    fn opt(n: []const u8, ty: types.TypeId) registry.Port {
+        return .{ .name = n, .ty = ty, .optional = true };
     }
 };
 
@@ -691,12 +712,22 @@ const CORE = [_]registry.OpDef{
     .{ .name = "merge", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .help = "Merge two records; b's fields win.", .eval = evalMerge },
     // plane / util
     .{ .name = "set", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write the input to a plane path, through the host's write path.", .class = .effect, .eval = evalSet },
-    // `notify` IS `set` — same write, same path, same eval. It exists because
-    // a write to a mailbox path already follows the mailbox's policy (append,
-    // count, deliver every one), so the difference a reader needs is INTENT,
-    // not mechanism: `notify defense/alerts` says "this is a sighting" where
-    // `set` would read as "this is the state". Wearing intent on its sleeve.
-    .{ .name = "notify", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path (`set` for mailbox paths — same write, states the intent).", .class = .effect, .eval = evalSet },
+    // `notify` began as `set` under another name — same write, same path, same
+    // eval — because a write to a mailbox path already follows the mailbox's
+    // policy (append, count, deliver every one), so the difference a reader
+    // needs is INTENT, not mechanism: `notify defense/alerts` says "this is a
+    // sighting" where `set` would read as "this is the state".
+    //
+    // It has since earned one thing `set` does not have: an optional `record`
+    // port, so that a signal can be piped a ROUSING and still carry its own
+    // payload. Without it the canonical sentinel is unsayable, because the
+    // pipe takes the only port:
+    //
+    //     visible_enemies | rose_above 0 | notify signals/horn { kind: … }
+    //
+    // The write itself is still `set`'s write. The path's policy still decides
+    // whether it appends. Only the question "which value?" is now notify's own.
+    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("record", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path — `notify <path> [record]`; piped, the input is the rousing and `record` is the payload.", .class = .effect, .eval = evalNotify },
     // The third write kind. `plane.x | add 1 | set plane.x` reads a path it
     // writes, so the cycle check rightly refuses it — which leaves counters
     // inexpressible. A blind delta reads nothing and passes legitimately.

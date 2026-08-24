@@ -193,6 +193,22 @@ the main-thread drain, so rill writes are ordered with everything else and appea
 command log / undo machinery like any other authored change, subject to the host's
 mutating/affects_output classification).
 
+**`notify <path> [record]`** is `set` aimed at an occurrence channel — the same write, and
+the path's own mailbox policy still decides whether it appends. It exists so intent is on the
+sleeve (`notify signals/horn` says "this is a sighting" where `set` would read as "this is the
+state"), and it carries one thing `set` does not: an **optional `record` port**, so a signal
+piped a *rousing* can still carry its own payload:
+
+```
+sensors/tower/visible_enemies | rose_above 0
+  | notify plane.signals.horn { kind: "approach", from: "tower" }
+```
+
+Without that port the canonical sentinel is unsayable, because the pipe takes the only port.
+Unpiped, the record binds port 0 and is both rousing and payload; unbound, the in-flowing
+value is written. A change in `record` alone is not a signal — the payload says *what*, the
+rousing says *when*.
+
 **`inc <path> <by>`** adds instead of replacing (v0.2, ratified 2026-08-24). It is the one
 sink whose port 0 is a **rousing rather than a payload** — an increment takes nothing from
 the stream, so the in-flowing value says *when*, and `by` says *how much*:
@@ -311,11 +327,15 @@ match plane.player.state { idle: idleAnim, running: runAnim }
 ### 3.14 `also` — a side branch, inline (v0.2, ratified 2026-08-24)
 
 ```
+use plane.defense as d
+
 plane.gate.enemy_count | rose_above 0
-  | also { inc plane.defense.sightings }
-  | also { notify plane.defense.alerts }
-  | trigger attack
+  | also { inc d.sightings 1 }
+  | notify d.alerts
 ```
+
+(This exact program is parsed by a gate test — a spec example that does not
+parse is the failure mode the demo's two silent days already taught us.)
 
 **`also { … }` runs a side branch and passes the value along unchanged.** It is pure
 parse-time desugaring to fan-out off an anonymous branch:
