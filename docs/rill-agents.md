@@ -232,27 +232,36 @@ value, and it is not an error at all.)*
 Explicitly rejected: silent skip (invisible failure), and tick-aborting
 (one bad program must not stall the frame's dataflow).
 
-**FINDING (CC, 2026-08-24): the supervision tree cannot currently see a
-death.** This section designs for "a sentinel rill watching
-`programs/*/errors` — the system supervising its own machines", and item 3
-above has the watchdog *unmount* a program that breaches its budget. But
-unmount calls `Plane.removeDynamicPrefix("programs/<name>/")`, which emits
-**no deltas by design** ("readers simply find nothing"), and
-`noteRillUnmounted` only edits an internal bookkeeping list. Nothing reaches
-the stream. So the sentinel keeps the dead program's last error forever and
-never learns it died — spec §1's principle 8 (*silence must be spoken to be
-heard*) violated in exactly the machinery built to notice failure, and the
-same corpse problem Ironwood R6 found for despawned entities.
+**The death certificate (built 2026-08-24, resolving a finding of the same
+day).** This section designs for "a sentinel rill watching `programs/*/errors`
+— the system supervising its own machines", and item 3 has the watchdog
+*unmount* a program that breaches its budget. But unmount removes the
+program's paths, and removal emits **no deltas by design**, so the sentinel
+kept the dead program's last error forever and never learned it died —
+spec §1 principle 8 violated in exactly the machinery built to notice failure.
 
-Recommended shape, deliberately not built yet because the path naming sits in
-a namespace under active revision (R6's `^`/`@`/`#` rows): publish an
-**unmount occurrence** before the prefix is removed — the mailbox machinery
-this doc already specifies, so it is ordered, replayable and never
-suppressed. One question to rule on with it: whether the dead program's
-published wires are *retained* as a last reading (history, corpse problem
-persists for anyone not watching the occurrence) or *tombstoned* so reads
-fail loudly — the identical choice R6 flags for despawned entities, and worth
-deciding once for both.
+Deaths are now **said**, on `rills/unmounted`: one host-owned occurrence
+mailbox, declared before anything can mount, outside `programs/` (where a
+program named `unmounted` would collide with it). It could not live on the
+dying program's own paths — those go away with it, and nothing can subscribe
+to a path that will not exist. Each certificate carries `[name, reason, frame,
+errors]`, and the **reason** is the load-bearing field: a supervisor reacts
+differently to "the operator retired it" and "the watchdog killed it", so it
+is stated rather than inferred from timing.
+
+The reason rides the transcript's `source_text` field for unmount events
+(empty until now), because a certificate that said `watchdog` live and
+`replay` on replay would make a supervisor's tally diverge between the two —
+the precise failure this section already warns about. Transcripts recorded
+before reasons existed replay as `unknown`, which is honest, rather than
+guessing one that would then be wrong.
+
+**The corpse is still removed, and the ruling is the same for entities**
+(ironwood.md R6). See there for the reasoning; the short form is that the
+post-mortem was never in the corpse. Every error was *already* published as an
+occurrence on `programs/<name>/errors` before the program died, so a
+supervisor that was watching has the whole history. The certificate is the
+notification that there will be no more.
 
 ---
 

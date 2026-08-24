@@ -254,16 +254,32 @@ the digest, and nobody per-entity-subscribes a thousand members.
   §4.1 rounds), it is ordered and replayable, and it makes "what does `@tom`
   mean after Tom dies" answerable *on the stream* instead of by a reader
   noticing nothing arrived.
-- **OPEN for the R6 beat — what happens to the stale value slots?** Two
-  honest answers. *Retain-plus-occurrence*: `@tom.health` keeps its last
-  reading as the record, and `@tom.despawned` is the notification. *Tombstone*:
-  subsequent reads go NotFound loudly, and the corpse problem cannot happen at
-  all. Chris's lean is retain-plus-occurrence — the occurrence is the
-  notification, the retained value is the history, and a program that ignores
-  `despawned` was going to be wrong under any semantics. Decide it against the
-  first real death rather than in the abstract, which the raid conveniently
-  supplies: **the lead rider, pinned to the dirt by a wall arrow, is the test
-  case.**
+- **RULED 2026-08-24, once for both: death is an occurrence that carries its
+  own record, and the corpse is removed.** Built first for programs (the
+  supervision tree had the same hole — see rill-agents §6); entities follow the
+  same rule when R6 lands. This *deviates from the retain-plus-occurrence lean*
+  and the reasons are worth keeping, because two of them only appeared once the
+  code was written:
+  - **Tombstone was never really a contender.** It is a read-path fix for a
+    push-path problem: subscribers never poll, so making the store `NotFound`
+    pushes nothing to them and changes nothing about the failure mode.
+  - **Retaining conflicts with a ruling already made.** §6 says the remedy for
+    a watchdog trip is "remount (restart, not resume)". A program's error
+    mailbox lives under its own prefix, so retaining it means a remounted
+    program inherits the dead one's error window — a restart that inherits the
+    corpse's tally is not a restart. Removal is what keeps remount honest.
+  - **The post-mortem was never in the corpse.** Every error was already
+    published as an occurrence *before* the death, so whoever was watching
+    holds the history. Retention would only serve someone who was not watching
+    — and that program was going to be wrong under any semantics.
+  - **Two sources that cannot disagree.** `programs[]` says what is alive and
+    `programs/**` holds its wires; retention would let a wire outlive its
+    listing, which is principle 8's failure wearing the opposite mask — a
+    presence that means nothing, with nothing to say so.
+  For entities the payload is the place to put whatever the corpse would have
+  held: the certificate is the record, so a despawn may carry a final digest
+  if the game wants one. The lead rider, pinned to the dirt, is still the test
+  case — he just leaves a certificate rather than a body.
 - **Kind, condition, behaviour are three systems on one entity:**
   `^soldier` stamps the entity, `def soldier(n)` mounts the behaviour,
   `#garrison` connects them — the assembly count watches the tag regardless
