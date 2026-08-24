@@ -12,10 +12,10 @@ const struple = @import("struple");
 
 const program_src =
     \\# player vitals, live as one record
-    \\plane.player.{health, stamina} as stats
+    \\plane.player.{health, stamina} as vitals
     \\
     \\# healthbar: clamp, normalise, write back
-    \\stats.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+    \\vitals.health | clamp 0 100 | div 100 | set plane.ui.healthbar
     \\
     \\# heartbeat: an occurrence when health crosses below 20
     \\plane.player.health | dropped_below 20 | tap heartbeat | set plane.audio.heartbeat
@@ -41,6 +41,25 @@ fn fmtValue(encoded: []const u8) []const u8 {
         .map => "{…}",
         else => "?",
     };
+}
+
+test "the demo program still parses" {
+    // `zig build test` does not build this executable, and building it does not
+    // PARSE this string — only running it did, so `as stats` sat broken here
+    // from the moment the temporal quarter made `stats` an operator until Chris
+    // ran the demo. The shadow ban was right both times; the gap was that
+    // nothing checked the one program the repo ships as its front door.
+    const gpa = std.testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = rill.parse(gpa, &reg, "hud", program_src, &diag) catch |err| {
+        std.debug.print("demo program no longer parses (line {d}, col {d}): {s}\n", .{ diag.line, diag.col, diag.msg() });
+        return err;
+    };
+    defer prog.deinit();
+    try std.testing.expect(prog.nodeCount() > 0);
 }
 
 pub fn main() !void {

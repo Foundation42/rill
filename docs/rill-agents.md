@@ -201,14 +201,24 @@ verifies its own work by reading back the wires it created.
 
 ## 6. Failure semantics (normative — needed before Phase C retypes handlers)
 
-What happens when a mounted rill's operator errors at tick 47 (`div` meets a
-live zero):
+What happens when a mounted rill's operator errors at tick 47 — say a string
+arrives where a number port was declared, and `add` cannot make sense of it:
+
+*(This example used to be "`div` meets a live zero", which is wrong and was
+caught by writing the gate against it and watching it not fail: rill's `div`
+is IEEE and yields ±inf on purpose. A division approaching zero should ease
+toward infinity, not kill the wave — that is the useful answer for a dataflow
+value, and it is not an error at all.)*
 
 1. **The wave dies at the failing node.** An error is a valve that jams shut
    — consistent with §4.3. Sibling branches and other programs are untouched;
    the tick completes.
 2. **An error occurrence lands on `programs.<name>.errors`** carrying
-   `{node, port, tick, error, input_digest}`. Errors are watchable streams
+   `{node, op, tick, error, input_digest}`. *(Built 2026-08-24 — `port` was
+   in this list and is not carried: an `EvalError` names no port, so the
+   runtime does not know which input offended and would emit an empty field
+   forever. `op` is carried instead; it is known, and it is what a reader
+   wants next.)* Errors are watchable streams
    like everything else — a sentinel rill watching `programs.*/errors` is the
    system supervising its own machines.
 3. **A knob-settable per-program error budget** (count per window, using §2

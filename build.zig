@@ -46,4 +46,9 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+    // …and the demo's own module, whose program source is a STRING: building
+    // the executable never parses it, so only running the demo used to catch a
+    // program that had stopped being valid. `zig build test` parses it now.
+    const demo_tests = b.addTest(.{ .root_module = exe_mod });
+    test_step.dependOn(&b.addRunArtifact(demo_tests).step);
 }
