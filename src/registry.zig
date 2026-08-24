@@ -153,9 +153,23 @@ pub const EvalCtx = struct {
     }
 };
 
+/// What an operator's evaluation touches. Three states, because two conflated
+/// two independent facts: "may the evaluator cache this" and "does this write
+/// the plane". A host op that *reads* the world (a pose, a histogram, a report)
+/// is neither — not cacheable, not a writer — and calling it `pure` licenses a
+/// future cache pass to be wrong. `reads` is that third honest answer.
 pub const OpClass = enum {
     pure, // output depends only on inputs; evaluator may cache/skip
-    effect, // touches the world through the plane (set/play/trigger)
+    reads, // reads world state through the host; writes nothing (never cacheable)
+    effect, // writes the world through the plane (set/play/trigger)
+
+    /// Writers register their `path` statics in the program's write list, which
+    /// is what the cycle check reads. The two call sites (parser bind, dump
+    /// restore) ask this question, never `== .pure`, so a `reads` op that ever
+    /// grows a path static still can't slip out of the check silently.
+    pub fn writes(self: OpClass) bool {
+        return self == .effect;
+    }
 };
 
 pub const OpDef = struct {

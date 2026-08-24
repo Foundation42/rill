@@ -219,6 +219,38 @@ it. Spec section numbers in parentheses.
   a lexing accident, not a promised spelling; spaced `2 m` still means two
   tokens.
 
+## OpClass gained a third state (2026-08-24)
+
+`OpClass` was `{pure, effect}`, and `pure`'s docstring promised two unrelated
+things: "output depends only on inputs" *and* "evaluator may cache/skip". A
+host operator that **reads** the world — a camera pose, a histogram, a BVH
+report — is neither of those and not a writer either, so both available
+answers were lies. Declaring it `pure` licenses a future cache pass to serve
+a stale pose; declaring it `effect` puts a non-writer in the write list.
+
+Now `{pure, reads, effect}`:
+
+- `pure` — input-only, genuinely cacheable (the whole §6 math core).
+- `reads` — reads world state through the host, writes nothing, never
+  cacheable.
+- `effect` — writes the world; the only class that registers `path` statics
+  in the program's write list.
+
+The write list is what the cycle check reads, so that question now goes
+through one predicate, `OpClass.writes()`, at both call sites (parser bind,
+dump restore) instead of two hand-written `== .effect` comparisons. A `reads`
+op that grows a path static therefore *cannot* slip out of the cycle check
+silently — the failure mode that prompted this. Pinned from both sides by a
+test: the same op shape, declared `reads`, names the very path its program
+subscribes to and parses clean with an empty write list; declared `effect`,
+it fails with `cycle`.
+
+Found while auditing Matryoshka's `Cmd` table, where the engine was deriving
+this class from the *reply shape* of a console verb — five structured-reply
+rows seeded as `pure`. Harmless the day it was found (none of the five
+declares any argument, so none carries a path static, and no cache pass
+exists yet), which is exactly why it was worth fixing before it wasn't.
+
 ## Shape of the code
 
 | file | what |

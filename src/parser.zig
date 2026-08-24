@@ -978,7 +978,7 @@ const Parser = struct {
 
         // Effect ops with a path static are plane writers — remember for the
         // cycle check (program level only; templates ban paths already).
-        if (def.class == .effect and target.template == null) {
+        if (def.class.writes() and target.template == null) {
             for (statics) |sv| switch (sv) {
                 .path => |wp| try self.prog.writes.append(self.a(), .{ .path = wp, .node = node_id }),
                 else => {},

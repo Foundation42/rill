@@ -291,7 +291,7 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
 
     // derived: write targets (for the cycle check on future edits)
     for (prog.nodes.items) |*n| {
-        if (reg.get(n.op).class != .effect) continue;
+        if (!reg.get(n.op).class.writes()) continue;
         for (n.statics) |sv| switch (sv) {
             .path => |wp| try prog.writes.append(a, .{ .path = wp, .node = n.id }),
             else => {},

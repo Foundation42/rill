@@ -1252,3 +1252,37 @@ test "the guard's other half: a required port still blocks until its stream arri
     try fx.rt.tick(.{});
     try testing.expectEqual(@as(f64, 3), slotNum(&fx, out).?);
 }
+
+// ---------------------------------------------------------------------------
+// OpClass.reads — the third state. A host op that reads the world through a
+// path static is not a writer, so it must stay out of the program's write
+// list; the same shape declared `.effect` still trips the cycle check. Both
+// sides, because the write list IS what the cycle check reads and a silent
+// exit from it is the failure mode this codebase doesn't accept.
+// ---------------------------------------------------------------------------
+
+test "OpClass: a reads op with a path static is not a writer; effect is" {
+    const nop = struct {
+        fn f(_: *rill.EvalCtx) registry.EvalError!registry.Emit {
+            return registry.Emit.none;
+        }
+    }.f;
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
+    const path_static = [_]registry.StaticDecl{.{ .name = "path", .kind = .path }};
+    _ = try reg.register(.{ .name = "probeat", .inputs = &in_num, .statics = &path_static, .help = "stub", .class = .reads, .eval = nop });
+    _ = try reg.register(.{ .name = "pokeat", .inputs = &in_num, .statics = &path_static, .help = "stub", .class = .effect, .eval = nop });
+
+    // the reader names the very path the program subscribes to: no write, no cycle
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "plane.x | probeat plane.x", &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 0), prog.writes.items.len);
+
+    // the same shape declared `.effect` is a writer, and the cycle check sees it
+    var diag2 = rill.Diag{};
+    try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "plane.x | pokeat plane.x", &diag2));
+    try testing.expect(std.mem.indexOf(u8, diag2.msg(), "cycle") != null);
+}
