@@ -219,6 +219,25 @@ Two findings worth keeping from the beat:
   is its AIM, and a billboard hides the one property a designer is placing it
   for.
 
+**One S5 bug, found the next day by the tenant built after it** (2026-08-24).
+The Project loader never read a post's `iid` back off its record key, so every
+load handed the sensors the zero identity and the next `saveProject` minted
+them fresh ones. Two cuts of one Project therefore disagreed about which tower
+was which, and an import's duplicate check compared zeros — the first unsaved
+post it met would swallow an incoming one.
+
+It surfaced because the `prim` tenant's arms were copied from these, so the
+same omission was there to be caught, and the prim IMPORT test caught it
+(2 boxes expected, 1 found). Both surfaces now read `iid` and `prov` off the
+key like every other instance, pinned by a test with a plain-language contract:
+**a Project re-cut from a loaded plane is byte-identical.** The bug had been in
+the shipped tenant for a day with 510 tests over it, none of which ever loaded
+a Project twice.
+
+*Nothing found it by reading; a test written for a different tenant found it by
+comparing.* Third time this week that the check which caught something was the
+one nobody wrote for it.
+
 Still open, and deliberately: **a live sensor loop needs a contact source.**
 Nothing in the engine yet enumerates "things a post might see" — R6's `@`
 instance registry is the intended answer, and the resident mesh-instance table
