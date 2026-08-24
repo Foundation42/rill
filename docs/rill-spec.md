@@ -331,6 +331,11 @@ Every stream is either:
   (a trigger pulled twice is two pulls). `where`, `changed`, `dropped_below` etc. emit
   occurrences.
 
+A third kind is **reserved, not built**: `inc` (accumulate) sums its deltas within a tick
+and applies the sum once, silencing a net-zero tick. It exists in the delta taxonomy now so
+that adding it later is not a widening; the three coalescing rules are last-write-wins
+(value), append-all-in-order (occurrence), and sum-then-apply (accumulate).
+
 This bit is not confined to wires inside a program: it crosses the plane boundary too. A plane
 path declared an occurrence **mailbox** delivers every write to its subscribers — never
 coalesced within a tick, never suppressed for identical bytes — while an ordinary value path

@@ -48,7 +48,17 @@ pub const Plane = struct {
 /// wrong. An OCCURRENCE delta does neither. A trigger pulled twice is two
 /// pulls, and identical bytes are the normal case for a trigger — an enemy at
 /// the gate, then an enemy at the gate again.
-pub const DeltaKind = enum(u1) { value, occurrence };
+/// Reserved third kind: `inc` sums its deltas within a tick and applies the
+/// sum once, silencing a net-zero tick. It is here now, unimplemented, because
+/// widening this enum later would be the second refactor this reservation
+/// exists to avoid — and because the taxonomy is the point: three coalescing
+/// rules, one per kind, chosen by the path's policy rather than by the caller.
+///
+/// Why it is not sugar for `x | add 1 | set x`: that reads a path it writes,
+/// and the cycle check rightly refuses it. A blind delta reads nothing, so it
+/// passes legitimately — and being commutative, it is MORE deterministic than
+/// read-modify-write, since arrival order stops mattering.
+pub const DeltaKind = enum(u2) { value, occurrence, accumulate };
 
 pub const Delta = struct {
     path: []const u8,

@@ -291,11 +291,20 @@ pub const Runtime = struct {
         const sub = for (self.prog.subs.items) |*s| {
             if (std.mem.eql(u8, s.path, delta.path)) break s;
         } else return;
-        if (delta.kind == .occurrence) {
-            const oq = try self.pending_occ.getOrPut(self.gpa, sub.path);
-            if (!oq.found_existing) oq.value_ptr.* = .empty;
-            try oq.value_ptr.append(self.gpa, try self.gpa.dupe(u8, delta.value));
-            return;
+        switch (delta.kind) {
+            .value => {},
+            .occurrence => {
+                const oq = try self.pending_occ.getOrPut(self.gpa, sub.path);
+                if (!oq.found_existing) oq.value_ptr.* = .empty;
+                try oq.value_ptr.append(self.gpa, try self.gpa.dupe(u8, delta.value));
+                return;
+            },
+            // Reserved. Nothing produces one yet; when the accumulate beat
+            // lands, its sum-per-tick rule goes HERE, and this arm is what the
+            // compiler points at. Refused rather than silently treated as a
+            // value, because a wrong coalescing rule is the quiet kind of
+            // wrong this taxonomy exists to prevent.
+            .accumulate => return error.UnsupportedDeltaKind,
         }
         const gop = try self.pending.getOrPut(self.gpa, sub.path);
         if (gop.found_existing) self.gpa.free(gop.value_ptr.*);
