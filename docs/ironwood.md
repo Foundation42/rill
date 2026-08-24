@@ -316,3 +316,21 @@ a sensorless stub (horn fed directly) as soon as `also`/`inc` land; I1–I4
 switch on as R1/R2 arrive; I5's tally upgrades from blind `inc` to
 membership when R6 lands. The scenario stays green from its first partial
 mounting onward — it grows teeth, it never waits toothless.
+
+**Landed 2026-08-24, in order:** `also` + `inc` + `notify`'s payload port
+(rill), R6's membership delta-kind reservation (the five-line act — the
+compiler named four arms across both repos, which is the argument for
+reserving early), then the stub itself with I5–I8 green.
+
+Two findings the scenario produced by being *written* rather than reviewed:
+
+- **`rose_above 0` fired when the last raider LEFT.** It shared one `v < t`
+  test with `dropped_below`, so it meant "reached t". The canonical sentinel
+  in §2 could never have worked, and three readers had approved it. Fixed and
+  pinned in both directions. `wall.rill`'s `rose_above 29` is the same shape:
+  before the fix it formed the shield wall on the twenty-ninth man.
+- **`set` has the gap `notify` just closed.** "On a rousing, write a constant"
+  has no spelling: `set` takes its payload from the wire, so `gate.rill` holds
+  the value in a `latch` and samples it on the horn. It works and it is honest,
+  but R2's `set gate/drawbridge.target 1` on alarm is exactly this shape and
+  will meet it again. Worth a ruling before R2, not during it.
