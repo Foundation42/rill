@@ -667,6 +667,12 @@ const CORE = [_]registry.OpDef{
     .{ .name = "merge", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .help = "Merge two records; b's fields win.", .eval = evalMerge },
     // plane / util
     .{ .name = "set", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write the input to a plane path, through the host's write path.", .class = .effect, .eval = evalSet },
+    // `notify` IS `set` — same write, same path, same eval. It exists because
+    // a write to a mailbox path already follows the mailbox's policy (append,
+    // count, deliver every one), so the difference a reader needs is INTENT,
+    // not mechanism: `notify defense/alerts` says "this is a sighting" where
+    // `set` would read as "this is the state". Wearing intent on its sleeve.
+    .{ .name = "notify", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path (`set` for mailbox paths — same write, states the intent).", .class = .effect, .eval = evalSet },
     .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Emit a constant once at mount.", .eval = evalConst },
     .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .eval = evalTap },
 };

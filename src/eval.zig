@@ -135,6 +135,11 @@ pub const Runtime = struct {
 
     // per-tick machinery
     pending: std.StringArrayHashMapUnmanaged([]u8) = .empty,
+    /// Queued OCCURRENCE deltas, per path, in arrival order. Values coalesce
+    /// (one per path per tick, last wins); occurrences never do, because
+    /// collapsing two sightings into one is the difference between "an enemy
+    /// arrived" and "three enemies arrived".
+    pending_occ: std.StringArrayHashMapUnmanaged(std.ArrayListUnmanaged([]u8)) = .empty,
     touched_slots: std.ArrayListUnmanaged(SlotId) = .empty,
     touched_nodes: std.ArrayListUnmanaged(NodeId) = .empty,
     write_queue: std.ArrayListUnmanaged(QueuedWrite) = .empty,
@@ -263,6 +268,11 @@ pub const Runtime = struct {
         self.gpa.free(self.error_count);
         for (self.pending.values()) |v| self.gpa.free(v);
         self.pending.deinit(self.gpa);
+        for (self.pending_occ.values()) |*q| {
+            for (q.items) |v| self.gpa.free(v);
+            q.deinit(self.gpa);
+        }
+        self.pending_occ.deinit(self.gpa);
         self.touched_slots.deinit(self.gpa);
         self.touched_nodes.deinit(self.gpa);
         for (self.write_queue.items) |w| self.gpa.free(w.value);
@@ -281,6 +291,12 @@ pub const Runtime = struct {
         const sub = for (self.prog.subs.items) |*s| {
             if (std.mem.eql(u8, s.path, delta.path)) break s;
         } else return;
+        if (delta.kind == .occurrence) {
+            const oq = try self.pending_occ.getOrPut(self.gpa, sub.path);
+            if (!oq.found_existing) oq.value_ptr.* = .empty;
+            try oq.value_ptr.append(self.gpa, try self.gpa.dupe(u8, delta.value));
+            return;
+        }
         const gop = try self.pending.getOrPut(self.gpa, sub.path);
         if (gop.found_existing) self.gpa.free(gop.value_ptr.*);
         gop.value_ptr.* = try self.gpa.dupe(u8, delta.value);
@@ -360,30 +376,78 @@ pub const Runtime = struct {
         defer arena_impl.deinit();
         const arena = arena_impl.allocator();
 
-        // Mark: apply coalesced deltas to subscribed slots.
-        for (self.pending.keys(), self.pending.values()) |path, val| {
-            const sub = for (self.prog.subs.items) |*s| {
-                if (std.mem.eql(u8, s.path, path)) break s;
-            } else unreachable;
-            for (sub.targets.items) |sid| try self.writeSlot(sid, val);
+        // A tick runs one ROUND per queued occurrence per path: values coalesce
+        // across the whole tick, occurrences never coalesce, and each round is
+        // one sweep. Every round shares the tick's {frame, time_ns} — one tick,
+        // one time, N rousings — because a cooldown that opened because round 3
+        // "happened later" would be a wall clock smuggled in the back door.
+        var rounds: usize = 1;
+        for (self.pending_occ.values()) |q| rounds = @max(rounds, q.items.len);
+
+        var round: usize = 0;
+        while (round < rounds) : (round += 1) {
+            // Mark: coalesced value deltas, once — they are the tick's state,
+            // not one of its rousings. Same for the wheel: a deadline passes
+            // once per tick, however many occurrences arrive beside it.
+            if (round == 0) {
+                for (self.pending.keys(), self.pending.values()) |path, val| {
+                    const sub = for (self.prog.subs.items) |*s| {
+                        if (std.mem.eql(u8, s.path, path)) break s;
+                    } else unreachable;
+                    for (sub.targets.items) |sid| try self.writeSlot(sid, val);
+                }
+                for (self.pending.values()) |v| self.gpa.free(v);
+                self.pending.clearRetainingCapacity();
+
+                // Entries armed *during* this tick's sweep land behind the
+                // expiry scan and fire next tick at soonest.
+                try self.expireWheel(&self.wheel_ns, now.time_ns);
+                try self.expireWheel(&self.wheel_frame, now.frame);
+            }
+
+            // Mark: this round's occurrence for each path that still has one,
+            // forced past suppression. Identical bytes are the NORMAL case for
+            // a trigger — an enemy at the gate, then an enemy at the gate.
+            for (self.pending_occ.keys(), self.pending_occ.values()) |path, q| {
+                if (round >= q.items.len) continue;
+                const sub = for (self.prog.subs.items) |*s| {
+                    if (std.mem.eql(u8, s.path, path)) break s;
+                } else unreachable;
+                for (sub.targets.items) |sid| try self.writeSlotOccurrence(sid, q.items[round]);
+            }
+
+            // Evaluate: ascending node id = topological order. Propagation only
+            // marks forward, so one sweep per round suffices and no node runs
+            // twice within a round.
+            var node_id: usize = 0;
+            while (node_id < self.dirty.len) : (node_id += 1) {
+                if (!self.dirty[node_id]) continue;
+                try self.evalNode(@intCast(node_id), arena);
+            }
+
+            // Publish this round's freshened wires, then sweep the flags — per
+            // ROUND, because the next round's marking needs a clean slate.
+            if (self.publish_fn) |publish| {
+                for (self.touched_slots.items) |sid| {
+                    const s = self.prog.slot(sid);
+                    if (s.path.len > 0) publish(self.publish_ctx, s.path, self.values[sid].items);
+                }
+            }
+            for (self.touched_slots.items) |sid| self.fresh[sid] = false;
+            self.touched_slots.clearRetainingCapacity();
+            for (self.touched_nodes.items) |nid| self.dirty[nid] = false;
+            self.touched_nodes.clearRetainingCapacity();
         }
-        for (self.pending.values()) |v| self.gpa.free(v);
-        self.pending.clearRetainingCapacity();
 
-        // Mark: expired wheel deadlines. Entries armed *during* this tick's
-        // sweep land behind the expiry scan and fire next tick at soonest.
-        try self.expireWheel(&self.wheel_ns, now.time_ns);
-        try self.expireWheel(&self.wheel_frame, now.frame);
-
-        // Evaluate: ascending node id = topological order. Propagation only
-        // marks forward, so one sweep suffices and no node runs twice.
-        var node_id: usize = 0;
-        while (node_id < self.dirty.len) : (node_id += 1) {
-            if (!self.dirty[node_id]) continue;
-            try self.evalNode(@intCast(node_id), arena);
+        for (self.pending_occ.values()) |*q| {
+            for (q.items) |v| self.gpa.free(v);
+            q.deinit(self.gpa);
         }
+        self.pending_occ.clearRetainingCapacity();
 
-        // Flush queued plane writes, in evaluation order.
+        // Flush queued plane writes ONCE, in evaluation order across every
+        // round: a tick's effects reach the world as one batch, whatever it
+        // took to produce them.
         defer {
             for (self.write_queue.items) |w| self.gpa.free(w.value);
             self.write_queue.clearRetainingCapacity();
@@ -391,18 +455,6 @@ pub const Runtime = struct {
         for (self.write_queue.items) |w| {
             try self.plane.write(w.path, w.value);
         }
-
-        // Publish freshened wires to the host, then sweep flags.
-        if (self.publish_fn) |publish| {
-            for (self.touched_slots.items) |sid| {
-                const s = self.prog.slot(sid);
-                if (s.path.len > 0) publish(self.publish_ctx, s.path, self.values[sid].items);
-            }
-        }
-        for (self.touched_slots.items) |sid| self.fresh[sid] = false;
-        self.touched_slots.clearRetainingCapacity();
-        for (self.touched_nodes.items) |nid| self.dirty[nid] = false;
-        self.touched_nodes.clearRetainingCapacity();
 
         self.tick_index += 1;
         if (timer) |*t| self.last_tick_ns = t.read();
@@ -507,6 +559,15 @@ pub const Runtime = struct {
         if (s.kind == .value and self.has[sid] and std.mem.eql(u8, self.values[sid].items, bytes)) {
             return;
         }
+        try self.storeSlot(sid, bytes);
+        try self.markNode(s.node);
+    }
+
+    /// Deliver an occurrence to a slot: store and mark, with no memcmp. The
+    /// suppression in `writeSlot` is a VALUE rule — 20 to 20 is silence — and
+    /// an occurrence is not a value.
+    fn writeSlotOccurrence(self: *Runtime, sid: SlotId, bytes: []const u8) !void {
+        const s = self.prog.slot(sid);
         try self.storeSlot(sid, bytes);
         try self.markNode(s.node);
     }

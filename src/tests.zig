@@ -1422,3 +1422,80 @@ test "error hook: a failing op reports node, op, tick and a stable input digest"
     const bid = nodeIdOf(&prog, "boom1").?;
     try testing.expectEqual(@as(u64, 3), rt.error_count[bid]);
 }
+
+// ---------------------------------------------------------------------------
+// Occurrence rounds (§4.1 as amended). A tick runs one round per queued
+// occurrence per path: values coalesce across the tick, occurrences never do.
+// Three enemies must reach the attacker as three.
+// ---------------------------------------------------------------------------
+
+fn garrisonRun(gpa: std.mem.Allocator, mock: *rill.MockPlane, prog: *rill.Program, out_evals: *u64) ![]u8 {
+    var rt = try rill.Runtime.mount(gpa, prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    // three identical sightings, all inside ONE tick
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const enc = try packOne(gpa, @as(i64, 1));
+        defer gpa.free(enc);
+        try rt.feed(.{ .path = "plane.alerts", .value = enc, .kind = .occurrence });
+    }
+    try rt.tick(.{ .frame = 1, .time_ns = 1000 });
+    const tap_id = nodeIdOf(prog, "tap1").?;
+    out_evals.* = rt.eval_count[tap_id];
+    return rill.dump(&rt, gpa);
+}
+
+test "occurrence rounds: three sightings in one tick rouse the node three times" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "garrison", "plane.alerts | tap attack", &diag);
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var evals_a: u64 = 0;
+    const dump_a = try garrisonRun(testing.allocator, &mock, &prog, &evals_a);
+    defer testing.allocator.free(dump_a);
+
+    // Identical bytes, three times, one tick: three rousings. Under the old
+    // rule the feed coalesced them to one and suppression silenced that one.
+    try testing.expectEqual(@as(u64, 3), evals_a);
+
+    // THE DETERMINISM TWIN: the same script fed twice produces bit-identical
+    // state. Extra rounds must not be a place divergence can hide — round
+    // order and queue order are both arrival order, and this is what says so.
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var evals_b: u64 = 0;
+    const dump_b = try garrisonRun(testing.allocator, &mock2, &prog, &evals_b);
+    defer testing.allocator.free(dump_b);
+    try testing.expectEqual(evals_a, evals_b);
+    try testing.expectEqualSlices(u8, dump_a, dump_b);
+}
+
+test "occurrence rounds: values still coalesce across the whole tick" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "plane.v | tap seen", &diag);
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    // three VALUE deltas in one tick: the tick's state is the last one, and the
+    // node is roused once. The other half of the amended rule.
+    for ([_]i64{ 1, 2, 3 }) |n| {
+        const enc = try packOne(testing.allocator, n);
+        defer testing.allocator.free(enc);
+        try rt.feed(.{ .path = "plane.v", .value = enc });
+    }
+    try rt.tick(.{ .frame = 1 });
+    const tap_id = nodeIdOf(&prog, "tap1").?;
+    try testing.expectEqual(@as(u64, 1), rt.eval_count[tap_id]);
+    try testing.expectEqual(@as(f64, 3), types.asNumber(rt.readSlot("programs.p.tap1.out.out").?).?);
+}

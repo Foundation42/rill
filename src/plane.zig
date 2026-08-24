@@ -42,10 +42,19 @@ pub const Plane = struct {
 /// A delta the host pushes into the evaluator between ticks. `seq` is the
 /// host's ordering stamp; within a tick the last write per path wins, in
 /// feed order.
+/// What kind of change a delta is — the same two-kind taxonomy rill's ports
+/// already draw, now crossing the plane boundary. A VALUE delta coalesces
+/// across a tick and is suppressed when its bytes are unchanged: late, never
+/// wrong. An OCCURRENCE delta does neither. A trigger pulled twice is two
+/// pulls, and identical bytes are the normal case for a trigger — an enemy at
+/// the gate, then an enemy at the gate again.
+pub const DeltaKind = enum(u1) { value, occurrence };
+
 pub const Delta = struct {
     path: []const u8,
     value: []const u8,
     seq: u64 = 0,
+    kind: DeltaKind = .value,
 };
 
 /// In-memory plane for tests and the demo: a path→value struple map, a record

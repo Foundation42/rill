@@ -295,16 +295,31 @@ match plane.player.state { idle: idleAnim, running: runAnim }
 
 1. **Collect** plane deltas since last tick (host decides tick cadence; Matryoshka ties it to
    the frame). The tick call carries the fed time pair `{frame, time_ns}` (§4.6).
-2. **Coalesce** per path: at most one new value per subscribed path per tick. A node sees a
-   consistent snapshot of all its inputs as of the tick.
+2. **Coalesce** VALUE deltas per path: at most one new value per subscribed path per tick. A
+   node sees a consistent snapshot of all its value inputs as of the tick. **Occurrence deltas
+   never coalesce** — they queue, in arrival order (§4.2).
 3. **Mark** dirty bits on the slots subscribed to changed paths — and on nodes whose timer
    wheel deadlines the fed time has passed (§4.6).
 4. **Evaluate** dirty nodes in topological order. An operator that emits marks its downstream
    slots dirty; one that doesn't emit lets the wave die there.
-5. **Flush** `set` writes through the plane's write path.
+5. **Repeat 3–4 as a ROUND** while any path still has a queued occurrence: each round delivers
+   one occurrence per path and sweeps once. Value deltas and wheel expiries are delivered in
+   the first round only — they are the tick's state, not one of its rousings.
+6. **Flush** `set` writes through the plane's write path, **once**, in evaluation order across
+   every round: a tick's effects reach the world as one batch.
 
-No node evaluates twice in a tick. If health and stamina both move in one frame, downstream of
-`playerStats` evaluates once with the new record.
+No node evaluates twice **in a round**. If health and stamina both move in one frame,
+downstream of `playerStats` evaluates once with the new record. But three sightings on one
+occurrence path in one frame rouse their node three times, which is the difference between
+"an enemy arrived" and "three enemies arrived".
+
+**All rounds share the tick's `{frame, time_ns}`.** One tick, one time, N rousings — a
+cooldown that opened because round 3 "happened later" would be a wall clock smuggled in
+through the back door (§4.6).
+
+Rounds are bounded by what producers fed that frame. A plane mailbox bounds itself structurally
+(keep-latest-N), and a runaway producer is the error/bus budget's problem (agents §6.3), not
+the tick's.
 
 ### 4.2 Values vs occurrences (the one type bit that matters)
 
@@ -315,6 +330,12 @@ Every stream is either:
 - **occurrence** — a discrete event. Occurrences **always propagate**, same payload or not
   (a trigger pulled twice is two pulls). `where`, `changed`, `dropped_below` etc. emit
   occurrences.
+
+This bit is not confined to wires inside a program: it crosses the plane boundary too. A plane
+path declared an occurrence **mailbox** delivers every write to its subscribers — never
+coalesced within a tick, never suppressed for identical bytes — while an ordinary value path
+coalesces and suppresses. The plane ends up with the same two kinds as the ports, which is
+the same rule stated at rest rather than a second mechanism.
 
 This is one bit of type information on the stream; users never think about it and both worlds
 behave correctly. Operators declare the kind of each port and output.
