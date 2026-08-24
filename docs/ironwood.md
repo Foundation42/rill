@@ -180,12 +180,28 @@ for design decisions:
   `solver.instanced_leaves_unmapped` so a sensor failing to see a placed raider
   cannot look identical to a sensor working correctly on an empty field.
 
-**Build order (S1–S5), gate-first so I1 lights up before any authoring UI:**
-S1 the atom (Point→Point/Bool + the alpha flag) · S2 the instrument (cone cull,
-scan, dwell) · S3 the publication (values + occurrence mailboxes) · S4 the R1
-gate with its mutation · S5 the authoring (`SensorArchetype` + placed instances
-+ cone gizmo — a mechanical transcription of `SoundArchetype`/`SoundEmitter`,
-the archetype spine's fifth tenant).
+**Build order (S1–S5), gate-first so I1 lights up before any authoring UI.**
+S1–S4 landed 2026-08-24; **S5 is what remains of R1.**
+
+| | | status |
+|---|---|---|
+| S1 | the atom — Point→Point/Bool, alpha-aware | ✅ |
+| S2 | the instrument — cone cull, cadence, dwell | ✅ |
+| S3 | the publication — values + occurrence mailboxes, `.sensor` source | ✅ |
+| S3.5 | the instance transform (scheduled by a finding) | ✅ |
+| S4 | the R1 gate, with its mutation | ✅ |
+| S5 | the authoring — `SensorArchetype` + placed instances + cone gizmo | — |
+
+S5 is a mechanical transcription of the `SoundArchetype`/`SoundEmitter` pair
+(inheritable fields, per-instance `ovr` mask, schema contract, gizmo, rig
+persistence): sensors are the archetype spine's **fifth** tenant, after grade
+chips, lights, sounds and mesh instances. It is last because nothing above it
+needed it — the gate runs on sensors declared in code.
+
+One wiring item rides S5: `Solver.bindInstances` has no live caller yet. The
+solver is each game's private state and nothing currently queries after
+placement, so binding it now would be plumbing for a consumer that does not
+exist. Until then an unbound placed leaf is counted, not silent.
 
 ### R2 — Actions with duration and completion
 
@@ -397,9 +413,35 @@ crossing sensor ranges on a fixed schedule), dusk time-of-day preset, all
 keep rills mounted from `.rill` sources in the test corpus (which thereby
 become `rill examples` material — no second example source). Assertions:
 
-- **I1 horn latency:** the horn occurrence lands within N ticks of the first
-  sighting occurrence (N pinned when R1 lands; the *assertion shape* is
-  pinned now).
+- **I1 horn latency — LIVE (2026-08-24, N = 1).** The tower no longer has
+  sightings fed to it: an engine sensor casts sight-lines through the same BVH
+  the renderer walks, against a tree line the raiders clear and a standing
+  stone one of them rides behind. Three clauses, checked in the order that
+  makes a failure legible rather than the order this doc lists them — a lost
+  cull breaks both the count and the timing, and *"the watch saw 8 men at once;
+  there were only 7 in the pass"* names the defect where *"the first raider
+  showed at beat 0"* names a symptom:
+  1. the two who are never seen fail **different** culls (one range, one cone),
+     so a sensor that lost one check cannot pass a gate that tests the other —
+     and they must be absent from the **count**, not merely from the mailbox,
+     because the count is what a `rose_above 0` sentinel watches;
+  2. the count leaves zero on the crossing tick, horn within one frame;
+  3. one sighting per NEW contact, however long he then stands in the open;
+     plus the retained four being the four most recent crossings **in order**,
+     which a ring that kept the first four would fail while passing every count.
+
+  **The sentry rill did not change by one character** when the real sensor
+  replaced the stub. That was the bet the stub was built on.
+
+  **Its mutation:** delete the dwell and one man walking past one stone becomes
+  a raid — seven crossings become **ten** arrivals, and the reconcile breaks.
+  The count is pinned, not left as "more than seven": *more* would still pass
+  if the storm shrank to a single stray and the scenario had quietly stopped
+  exercising the stone. The weaver exists **because** the first draft had no
+  occlusion for the dwell to absorb — seven raiders in clean lanes gave seven
+  sightings with the dwell and seven without, so the mutation did not bite and
+  I1 was watching nothing. Caught by writing the mutation, which is the entire
+  argument for the practice.
 - **I2 beacons:** lit iff time-of-day is night at horn time — run the raid
   once at dusk, once at noon; beacons differ, all else identical.
 - **I3 gate committed:** portcullis-drop and drawbridge-raise targets are
