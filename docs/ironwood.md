@@ -102,6 +102,91 @@ not engine code.
 one sighting occurrence per new contact (not per frame), and a raider outside
 all ranges is invisible on every sensor path. Deterministic under replay.
 
+#### R1 rulings (2026-08-24, Chris + CC + CC-chat, after the engine audit)
+
+**The engine already had the sensor.** `solver.zig` — the Online Transport
+Solver — names its intended tenants in its own header as "emissive NEE, audio
+propagation, **AI perception**, and tight visibility through a single API",
+`Metric.euclidean` is documented "Used by NEE **+ AI LoS**", and
+`Solver.shadowBlocked(a, b)` was already written, CPU-side and deterministic.
+R1's narrow phase was one dispatch arm, not a subsystem. The fourth unlocked
+door.
+
+**① Sensors report geometry; rills form beliefs.** The engine answers "what is
+geometrically visible from this cone, now" and stops. Memory, suspicion decay
+and threat assessment are the sentry rill's job, built from `sighting`/`lost`
+plus latch/cooldown/window. The line is not philosophical — it is about *what
+can be replayed*: a sensor's output is a pure function of world state at a
+tick, a belief is a function of history, and rills already serialise and replay
+bit-identically. Keeping the engine dumb and the rills smart is what makes
+sensors reusable across every game rather than casting one game's AI into
+silicon.
+
+**② The instrument may have a time constant; the observer has a memory.** The
+one apparent exception to ①. A raider crossing behind a merlon, judged by a
+bare geometric boolean, reads seen/lost/seen/lost at the cadence rate — a
+sighting storm that floods the mailbox in under a second and makes I7's
+saturation gate pass *for the wrong reason*, which is worse than one that
+fails. So each sensor archetype declares `lost_after`: a contact must be
+UNSEEN for that long before `lost` fires. "Not seen for N scans" is still a
+statement about geometry — a debounce on the measurement, deterministic and
+replayable — not a belief about where anything went. Beside FOV and range in
+the archetype, not in the rill.
+
+**③ Cadence is declared, in fed time, and never adapts.** The stronger form of
+"adaptive on the record": the frame-budget controller sheds rendering quality,
+it does not shed perception. Five posts against thirty raiders is ~150 dot
+products surviving into tens of rays, against a shadow pass spending millions
+per frame — perception is free at this scale, so buying back a rounding error
+with a transcript knob and a replay-divergence surface is a bad trade. The
+escape hatch (cadence stretched only through a knob that itself rides the
+transcript) is designed and **deliberately unbuilt** — the Delta-enum
+reservation discipline, third use. This turns I8's bit-identical raid from
+something defended into something true by construction.
+
+**④ Alpha cutout is FILLED, not worked around.** The CPU sight walk gains a
+per-query alpha test, default ON for perception. The −17% that justified
+omitting alpha was measured on the *shadow pass* (millions of rays/frame); a
+sensor scan fires tens. Five orders of magnitude apart — the performance
+argument was the pass's, not the query's. And the sensor must agree with the
+**player's eye**, not with the shadow pass: a raider plainly visible through
+sparse foliage being invisible to the sentry is a fiction violation in the
+opposite direction. The birds-scatter tier survives this intact — dense canopy
+still genuinely hides, and low-confidence indirect evidence is still the right
+channel for it — it simply stops being asked to cover for a hole.
+
+**⑤ Publication uses a `.sensor` source variant**, not `.engine`. The
+`writeDynamic` source enum is exhaustively switched, so a narrow variant makes
+future engine-side producers compiler-guided and keeps provenance sharp in the
+transcript.
+
+**⑥ Broad phase stays a linear scan.** A Morton-keyed entity index would be an
+optimisation without a workload. The key function (`gauge_quantise.mortonKeyOf`)
+exists; the container does not, and does not need to. Reserved, per the same
+discipline as ③.
+
+**Deferred fills (debt, NOT doctrine).** Recorded so nobody later mistakes them
+for design decisions:
+
+- **Physics bodies do not occlude.** Resident mesh instances *do* — a live move
+  re-boxes its world-BVH leaf through `bvh.refitFromLeaf`, so raiders, the
+  portcullis and a rising drawbridge all block sight correctly (which R2 needs).
+  But `dynamic_bvh` objects live in a per-frame tree only the shaders walk.
+  Points at the dynamic-BVH refit, which `game.zig` already calls future work.
+- **Instanced mesh leaves are not ray-transformed by any CPU walk.**
+  `shadow.glsl` inverse-transforms into an instanced leaf's local frame; the
+  CPU walks never have, so they test un-transformed geometry. Pre-existing, and
+  it affects the NEE bake today — not introduced by the sight arm. Counted by
+  `solver.instanced_leaves_unmapped` so a sensor failing to see a placed raider
+  cannot look identical to a sensor working correctly on an empty field.
+
+**Build order (S1–S5), gate-first so I1 lights up before any authoring UI:**
+S1 the atom (Point→Point/Bool + the alpha flag) · S2 the instrument (cone cull,
+scan, dwell) · S3 the publication (values + occurrence mailboxes) · S4 the R1
+gate with its mutation · S5 the authoring (`SensorArchetype` + placed instances
++ cone gizmo — a mechanical transcription of `SoundArchetype`/`SoundEmitter`,
+the archetype spine's fifth tenant).
+
 ### R2 — Actions with duration and completion
 
 The drawbridge groans upward; it does not teleport. Effect verbs gain the
@@ -371,3 +456,20 @@ a sensorless stub (horn fed directly) as soon as `also`/`inc` land; I1–I4
 switch on as R1/R2 arrive; I5's tally upgrades from blind `inc` to
 membership when R6 lands. The scenario stays green from its first partial
 mounting onward — it grows teeth, it never waits toothless.
+
+**R1's internal order, with one beat scheduled by a finding (2026-08-24):**
+S1 the atom · S2 the instrument · S3 the publication · **S3.5 the instance
+transform** · S4 the gate · S5 the authoring.
+
+S3.5 is not optional and it must precede S4. `shadow.glsl` inverse-transforms
+a shadow ray into an instanced mesh leaf's local frame (`leaf_data.w != 0`);
+no CPU walk ever has, so every CPU sight-line tests *un-transformed* geometry
+at the wrong place. Three reasons it lands before the gate rather than after:
+it silently invalidates R1's own resident-occlusion ruling (a placed raider
+would not occlude); it affects the NEE bake **today**, so it is a live bug and
+not merely a sensor concern; and Ironwood's raiders will be placed instances,
+which means S4 would otherwise inherit the bug **as a passing test** — the
+vacuous-gate failure mode this doc's own mutation practice exists to prevent.
+Gated by exactly the scenario that exposed it: a placed occluder blocks a
+sight-line that the same geometry, unplaced, does not. Until it lands the hole
+is counted, not silent (`solver.instanced_leaves_unmapped`).
