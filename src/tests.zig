@@ -1960,3 +1960,101 @@ test "notify: the other two forms are unchanged" {
     try testing.expectEqual(@as(usize, 1), mock2.writes.items.len);
     try testing.expectEqual(types.Tag.record, types.typeOfValue(mock2.writes.items[0].value));
 }
+
+// ---------------------------------------------------------------------------
+// The class audit (Chris's ruling, 2026-08-24). `tap` declared `.pure`, which
+// is a CACHE LICENCE, while its whole purpose is a side effect on the log bus.
+// One word wrong is one word; a table seeded optimistically is a trap, so the
+// classification is pinned here exhaustively — a new core op fails this test
+// until someone classifies it on purpose.
+// ---------------------------------------------------------------------------
+
+test "every core op declares its class deliberately" {
+    const Expect = struct { name: []const u8, class: registry.OpClass };
+    // `.reads` is "not a writer, not skippable". Three shapes reach it:
+    // arrival-dependent (asks in_fresh), stateful, or fed-time — plus `tap`,
+    // whose output nobody caches because its point is the side effect.
+    const table = [_]Expect{
+        .{ .name = "select", .class = .pure },
+        .{ .name = "lerp", .class = .pure },
+        .{ .name = "where", .class = .reads }, // arrival
+        .{ .name = "partition", .class = .reads }, // arrival
+        .{ .name = "changed", .class = .reads }, // arrival
+        .{ .name = "latch", .class = .reads }, // arrival
+        .{ .name = "dropped_below", .class = .reads }, // state
+        .{ .name = "rose_above", .class = .reads }, // state
+        .{ .name = "edge", .class = .reads }, // state
+        .{ .name = "sample", .class = .reads }, // time
+        .{ .name = "debounce", .class = .reads }, // time
+        .{ .name = "throttle", .class = .reads }, // time
+        .{ .name = "cooldown", .class = .reads }, // time
+        .{ .name = "window", .class = .reads }, // time
+        .{ .name = "stats", .class = .pure },
+        .{ .name = "delay", .class = .reads }, // time
+        .{ .name = "arm", .class = .reads }, // state
+        .{ .name = "disarm", .class = .reads }, // state
+        .{ .name = "add", .class = .pure },
+        .{ .name = "sub", .class = .pure },
+        .{ .name = "mul", .class = .pure },
+        .{ .name = "div", .class = .pure },
+        .{ .name = "min", .class = .pure },
+        .{ .name = "max", .class = .pure },
+        .{ .name = "clamp", .class = .pure },
+        .{ .name = "abs", .class = .pure },
+        .{ .name = "floor", .class = .pure },
+        .{ .name = "round", .class = .pure },
+        .{ .name = "=", .class = .pure },
+        .{ .name = "!=", .class = .pure },
+        .{ .name = "<", .class = .pure },
+        .{ .name = "<=", .class = .pure },
+        .{ .name = ">", .class = .pure },
+        .{ .name = ">=", .class = .pure },
+        .{ .name = "record", .class = .pure },
+        .{ .name = "project", .class = .pure },
+        .{ .name = "merge", .class = .pure },
+        .{ .name = "set", .class = .effect },
+        .{ .name = "notify", .class = .effect },
+        .{ .name = "inc", .class = .effect },
+        .{ .name = "const", .class = .pure },
+        .{ .name = "tap", .class = .reads }, // the one that gave the audit away
+    };
+
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    for (table) |e| {
+        const id = reg.find(e.name) orelse {
+            std.debug.print("core op '{s}' is gone — update the class table\n", .{e.name});
+            return error.TestUnexpectedResult;
+        };
+        const got = reg.get(id).class;
+        if (got != e.class) {
+            std.debug.print("'{s}': declared .{s}, audit says .{s}\n", .{ e.name, @tagName(got), @tagName(e.class) });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // Exhaustive both ways: a new op must be classified on purpose, not
+    // inherit `.pure` from the field default and slip past unnoticed.
+    if (reg.ops.items.len != table.len) {
+        std.debug.print("core set has {d} ops, the class table has {d} — classify the new one\n", .{ reg.ops.items.len, table.len });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "an op that emits occurrences is never cacheable" {
+    // The structural half of the audit, which needs no table: emitting an
+    // occurrence means the answer depends on arrival or history, and neither
+    // is visible to a cache key. This catches the biggest family mechanically.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    for (reg.ops.items) |def| {
+        for (def.outputs) |out| {
+            if (out.kind == .occurrence and def.class == .pure) {
+                std.debug.print("'{s}' emits an occurrence but declares .pure\n", .{def.name});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}

@@ -160,6 +160,96 @@ tally machinery intact.
 The raid narrative already contains its pass/fail criteria — acceptance
 gates disguised as a story. §4 pins the harness.
 
+### R6 — Tags: membership as the fourth write kind, with sigil grammar
+
+**The ontology (Chris, 2026-08-24): `@` for archetypes, `#` for semantic
+grouping.** `@soldier` names a *kind* — immutable, singular, a thing is one
+archetype forever. `#garrison` names a *condition* — mutable, plural, gained
+and lost per tick. The sigil is the grammar enforcing the split: `@` answers
+"what is it," `#` answers "what's true of it now," and the reader learns the
+type system from the glyph (the social-media intuition transfers: @ mentions
+an identity, # joins a conversation).
+
+```
+spawn @soldier as tom | tag tom #garrison #off-duty
+#garrison!count | rose_above 29 | notify signals/wall_formed
+sensors/gate/nearest #raiders | dropped_below 50 | notify signals/horn { kind: "imminent" }
+tag tom -#off-duty +#in-courtyard
+```
+
+Same sentence position, different question, no context needed:
+`@raider` in a sensor argument means "things of this kind"; `#raiders` means
+"things currently in this set." Query algebra follows — `#garrison &
+#in-courtyard` is set algebra over conditions; `@soldier & #wounded` is
+kind-filtered-by-state.
+
+**Mechanically, a tag is the fourth write kind**, completing the plane's
+coalescing taxonomy:
+
+| kind | coalesce rule | suppress? | idempotent? |
+|---|---|---|---|
+| set (value) | last-write-wins | same-bytes | n/a |
+| occurrence | append all, in order | never | no — twice is twice |
+| accumulate (`inc`, reserved) | sum per tick | net-zero | no — twice is double |
+| **membership (`tag`)** | **union adds minus removes per tick** | **net-no-change** | **yes — twice is once** |
+
+Idempotence is what distinguishes membership from accumulate: a soldier
+cannot be in the shield wall one-and-a-half times. The Delta enum's
+reservation widens from one variant to two while it is still warm.
+
+**Storage is the happy accident:** hierarchical tags are radix's native
+operation. A tag is a path — membership is key-presence at
+`tags/faction/raiders/<entity>` — so "everything under `#faction`" is a
+prefix enumeration, the thing the store already does. UE built a gameplay-tag
+subsystem; here it is a spelling. Memcmp ordering gives stable member
+iteration free.
+
+The rill surface splits along the existing value/occurrence line, both
+halves shipped machinery: `#raiders!count` and membership snapshots are
+value paths the store maintains; `tags/raiders/joined` / `left` are
+occurrence mailboxes per tag (the garrison machinery verbatim). The R1
+discipline carries over intact: **aggregation over a group is a sensor, not
+a rill loop** — "nearest #raider to the gate" is an engine-published digest
+keyed by tag; tags tell the engine what to aggregate over, rills react to
+the digest, and nobody per-entity-subscribes a thousand members.
+
+**Pins made at birth:**
+
+- **Spawn-tags keep the boundary honest.** An archetype may *grant initial*
+  tags ("my instances start `#hostile`") — a stamped starting condition,
+  thereafter owned by the tag system and removable like any tag. Archetype
+  membership is never itself a tag. The pacified raider is the canonical
+  test: still `@raider` (kind), no longer `#hostile` (state).
+- **The store mirrors the grammar.** `archetypes/<kind>/instances/*` is
+  engine-maintained, read-only to rills — kind is not writable; nothing can
+  be `tag`ged into being a soldier. `tags/**` is the membership write kind,
+  capability-granted by subtree (`write: tags/squad-a/*` — "the commander
+  may reassign squads but not factions" is a grant, extending I4's pattern).
+- **Kind, condition, behaviour are three systems on one entity:**
+  `@soldier` stamps the entity, `def soldier(n)` mounts the behaviour,
+  `#garrison` connects them — the assembly count watches the tag regardless
+  of which rills animate the members. (This resolves R4's entity/program
+  pairing question before it was asked.)
+- **Spatial volumes write tags:** `#in-courtyard` maintained by a trigger
+  volume — the grade-volume machinery with a tag write instead of a grade —
+  is the bridge between space and membership every game wants on day one.
+
+**Gate R6:** tag add twice then remove once leaves non-membership
+(idempotence both ways); a prefix query over `#faction/*` enumerates exactly
+the live members in stable order; `joined`/`left` occurrences deliver once
+per actual transition (not per redundant write); a trigger volume maintains
+`#in-courtyard` such that `#garrison & #in-courtyard` counts match scripted
+entity positions at every tick; `#garrison!count` reconciles exactly with
+members present (membership cannot drift the way a blind counter can); a
+rill granted `tags/squads/*` is refused at mount when it writes
+`tags/faction/*`, violation named. Deterministic under replay throughout.
+
+**Ironwood upgrades that follow:** the assembly tally becomes membership
+(`#in-courtyard & #garrison` — honest by construction, superseding the blind
+`inc` tally in I5); the sally-port force is that same intersection; raiders
+are `@raider` stamped `#hostile` at spawn, and the v2 growth path's
+"pacified" outcome is a tag removal, not a despawn.
+
 ## 4. The Ironwood gate (pre-registered)
 
 Harness: a scripted raider timeline fed as deltas (positions per tick,
@@ -217,8 +307,12 @@ being a game.
 
 R3 is free (a convention paragraph). R1 and R2 are engine work and the real
 schedule items — R1 first (nothing reacts until something perceives). R4
-rides `def`'s existing roadmap with the soldier corps as its workload. The
-Ironwood gate assembles incrementally: I5/I6/I7/I8 can run against a
-sensorless stub (horn fed directly) as soon as `also`/`inc` land; I1–I4
-switch on as R1/R2 arrive. The scenario stays green from its first partial
+rides `def`'s existing roadmap with the soldier corps as its workload. R6's
+delta-kind reservation is a five-line act now (widen the enum to two reserved
+variants); its store row and sigil parsing land as their own beat, before R1
+if convenient — sensors keyed by tag (`nearest #raiders`) want the tag row to
+exist. The Ironwood gate assembles incrementally: I5/I6/I7/I8 can run against
+a sensorless stub (horn fed directly) as soon as `also`/`inc` land; I1–I4
+switch on as R1/R2 arrive; I5's tally upgrades from blind `inc` to
+membership when R6 lands. The scenario stays green from its first partial
 mounting onward — it grows teeth, it never waits toothless.

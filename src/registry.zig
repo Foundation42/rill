@@ -167,10 +167,29 @@ pub const EvalCtx = struct {
 /// the plane". A host op that *reads* the world (a pose, a histogram, a report)
 /// is neither — not cacheable, not a writer — and calling it `pure` licenses a
 /// future cache pass to be wrong. `reads` is that third honest answer.
+///
+/// **The operative definition of `reads` is "not a writer, not skippable."**
+/// `reads` names the motivating case, but the audit of 2026-08-24 found the
+/// class is bigger than host-world-readers, and for one shared reason: an op
+/// is unskippable whenever its output depends on anything besides the input
+/// VALUES in front of it. In the core set that is three shapes —
+///
+///   - **arrival-dependent** (`where`, `partition`, `changed`, `latch`): the
+///     op asks `in_fresh`, so identical bytes mean emit-or-be-silent depending
+///     on which port arrived. A byte-keyed cache would replay an emission that
+///     should have been silence.
+///   - **stateful** (the threshold/edge adapters, the gates): the answer is a
+///     function of history, which no cache key can see.
+///   - **fed time** (`sample`, `debounce`, `throttle`, `cooldown`, `window`,
+///     `delay`): ambient, and by §4.6's ruling never an input.
+///
+/// — plus `tap`, whose whole purpose is the side effect, and which was the
+/// `pure` that gave the audit away. If a rename ever feels right, the contract
+/// above is the thing to preserve; the word is the negotiable part.
 pub const OpClass = enum {
-    pure, // output depends only on inputs; evaluator may cache/skip
-    reads, // reads world state through the host; writes nothing (never cacheable)
-    effect, // writes the world through the plane (set/play/trigger)
+    pure, // output depends only on the input VALUES; evaluator may cache/skip
+    reads, // not a writer, not skippable: host world, own state, or fed time
+    effect, // writes the world through the plane (set/notify/inc)
 
     /// Writers register their `path` statics in the program's write list, which
     /// is what the cycle check reads. The two call sites (parser bind, dump

@@ -666,28 +666,28 @@ const CORE = [_]registry.OpDef{
     // flow
     .{ .name = "select", .inputs = &.{ p.in("cond", Tag.boolean), p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .help = "cond ? a : b — all branches exist; one is chosen per tick.", .eval = evalSelect },
     .{ .name = "lerp", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number), p.in("t", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a + (b - a) * t — the honest blend between select's hard edges.", .eval = evalLerp },
-    .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .eval = evalWhere },
-    .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .help = "Route every arrival of `in` to exactly one side by pred.", .eval = evalPartition },
-    .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit an occurrence whenever the value actually changes.", .eval = evalChanged },
-    .{ .name = "latch", .inputs = &.{ p.in("in", Tag.any), p.occ("trigger", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .help = "Sample-and-hold: emit the current `in` when `trigger` fires.", .eval = evalLatch },
+    .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
+    .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
+    .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
+    .{ .name = "latch", .inputs = &.{ p.in("in", Tag.any), p.occ("trigger", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .help = "Sample-and-hold: emit the current `in` when `trigger` fires.", .class = .reads, .eval = evalLatch },
     // events
-    .{ .name = "dropped_below", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .help = "Fire (with the value) when `in` crosses below threshold. First observation baselines silently.", .eval = evalDroppedBelow },
-    .{ .name = "rose_above", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .help = "Fire (with the value) when `in` crosses above threshold. First observation baselines silently.", .eval = evalRoseAbove },
-    .{ .name = "edge", .inputs = &.{p.in("in", Tag.boolean)}, .outputs = &.{p.occ("out", Tag.boolean)}, .help = "Fire on the false→true transition.", .eval = evalEdge },
+    .{ .name = "dropped_below", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .help = "Fire (with the value) when `in` crosses below threshold. First observation baselines silently.", .class = .reads, .eval = evalDroppedBelow },
+    .{ .name = "rose_above", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .help = "Fire (with the value) when `in` crosses above threshold. First observation baselines silently.", .class = .reads, .eval = evalRoseAbove },
+    .{ .name = "edge", .inputs = &.{p.in("in", Tag.boolean)}, .outputs = &.{p.occ("out", Tag.boolean)}, .help = "Fire on the false→true transition.", .class = .reads, .eval = evalEdge },
     // temporal — durations are 5s / 250ms / 2m / 3f literals; time is fed, never read
-    .{ .name = "sample", .inputs = &.{ p.in("in", Tag.any), p.in("period", Tag.duration) }, .outputs = &.{p.val("out", Tag.any)}, .help = "At most one emission per period, latest value wins — leading edge immediate, trailing edge via the wheel.", .eval = evalSample },
-    .{ .name = "debounce", .inputs = &.{ p.occ("in", Tag.any), p.in("quiet", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass only after a quiet period; storms collapse to their last edge.", .eval = evalDebounce },
-    .{ .name = "throttle", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "First occurrence passes, the rest are eaten for the window.", .eval = evalRateGate },
-    .{ .name = "cooldown", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass one, then deaf for the window — triggered, now get out of the way.", .eval = evalRateGate },
-    .{ .name = "window", .inputs = &.{ p.in("in", Tag.any), p.in("span", Tag.duration) }, .outputs = &.{p.val("out", Tag.array)}, .help = "Rolling buffer over fed time, emitted as an array; entries age out on schedule even when the input is quiet.", .eval = evalWindow },
+    .{ .name = "sample", .inputs = &.{ p.in("in", Tag.any), p.in("period", Tag.duration) }, .outputs = &.{p.val("out", Tag.any)}, .help = "At most one emission per period, latest value wins — leading edge immediate, trailing edge via the wheel.", .class = .reads, .eval = evalSample },
+    .{ .name = "debounce", .inputs = &.{ p.occ("in", Tag.any), p.in("quiet", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass only after a quiet period; storms collapse to their last edge.", .class = .reads, .eval = evalDebounce },
+    .{ .name = "throttle", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "First occurrence passes, the rest are eaten for the window.", .class = .reads, .eval = evalRateGate },
+    .{ .name = "cooldown", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass one, then deaf for the window — triggered, now get out of the way.", .class = .reads, .eval = evalRateGate },
+    .{ .name = "window", .inputs = &.{ p.in("in", Tag.any), p.in("span", Tag.duration) }, .outputs = &.{p.val("out", Tag.array)}, .help = "Rolling buffer over fed time, emitted as an array; entries age out on schedule even when the input is quiet.", .class = .reads, .eval = evalWindow },
     .{ .name = "stats", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.record)}, .help = "{max, mean, min, n, stddev} over a numeric array; empty in ⇒ zeros with n = 0.", .eval = evalStats },
-    .{ .name = "delay", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit each occurrence `by` later; same-tick maturities collapse to the newest.", .eval = evalDelay },
+    .{ .name = "delay", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit each occurrence `by` later; same-tick maturities collapse to the newest.", .class = .reads, .eval = evalDelay },
     // `in` is optional on the gates: controls must latch even before the
     // stream first flows — a required port would silently discard an `off`
     // that fired ahead of the first occurrence (the all-inputs guard skips
     // nodes with a missing required input).
-    .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .eval = gateEval(true) },
-    .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .eval = gateEval(false) },
+    .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .class = .reads, .eval = gateEval(true) },
+    .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .class = .reads, .eval = gateEval(false) },
     // math
     .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a + b.", .eval = binMath(fAdd) },
     .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a - b.", .eval = binMath(fSub) },
@@ -733,7 +733,7 @@ const CORE = [_]registry.OpDef{
     // inexpressible. A blind delta reads nothing and passes legitimately.
     .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },
     .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Emit a constant once at mount.", .eval = evalConst },
-    .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .eval = evalTap },
+    .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .class = .reads, .eval = evalTap },
 };
 
 /// Register the core set. Call once per registry, before parsing anything —

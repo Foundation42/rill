@@ -603,6 +603,17 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | util | `const`, `tap` (debug passthrough → log bus) |
 
+**Operator class (audited 2026-08-24).** Every core op declares `pure` / `reads` / `effect`,
+and the load-bearing meaning of `reads` is **"not a writer, not skippable"** — `pure` is a
+*cache licence*, so it belongs only to ops whose output depends on the input values alone.
+The audit found three unskippable shapes besides host-world-readers: **arrival-dependent**
+(`where`, `partition`, `changed`, `latch` ask `in_fresh`, so identical bytes mean emit-or-be-
+silent), **stateful** (the threshold/edge adapters and the gates), and **fed time** (`sample`,
+`debounce`, `throttle`, `cooldown`, `window`, `delay` — ambient by §4.6, never an input).
+Plus `tap`, whose entire purpose is the side effect and which was the `pure` that gave the
+audit away: a skipped tap is a debug instrument that lies. The classification is pinned by an
+exhaustive gate test, so a new op cannot inherit `pure` from the field default unnoticed.
+
 **Threshold boundaries (corrected 2026-08-24).** `dropped_below t` fires crossing from ≥t to
 <t; `rose_above t` fires crossing from ≤t to >t. Each is strict on the comparison it names,
 so the two mirror and neither fires on merely *arriving* at the threshold. They previously
