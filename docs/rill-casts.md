@@ -29,6 +29,16 @@ per-entity sensors (now ruled in §9). Channel/derive declaration
 syntax remains legitimately unpinned — a build-time item behind the
 spine's completeness gates.
 
+**Round three converged.** The arrow disappeared even where it hid
+(`threshold | set` now flows to a sink); per-entity sensors gone; the
+F7 walkthrough correctly extended the gate into the fiction. Two
+residues persisted across rounds and were promoted accordingly:
+effects-riding-the-stream became unlearn #5, and the thrice-repeated
+"engine as maintainer" misreading earned §10 its
+maintainer-is-authored clarification. A confabulation that survives
+correction is not a reader error — it is the spec under-explaining,
+and its persistence is the promotion criterion.
+
 ---
 
 ## 0. What to unlearn
@@ -53,8 +63,16 @@ early, because readers will not notice they are assuming otherwise:
    `condition -> do_thing`; there is no `->`. Effects are sinks
    (`set`, `notify`, `tag`, `cast`) reached by flow, and side
    branches ride `also { }` — never the main stream.
+5. **Effects don't ride the stream.** A `tag`, `set`, `notify`, or
+   `cast` is a sink — a wave ends there; nothing flows onward
+   through an effect. A pipeline that "does something and
+   continues" (`... | untag #off-duty | tag #active | follow ...`)
+   is imperative sequencing wearing pipes. The branch to an effect
+   rides `also { }`; the main stream carries values only. This
+   survived two rounds of probe correction before earning its
+   number — readers will write effect-pipelines until told in bold.
 
-All four misses point the same direction — toward mutable shared
+All five misses point the same direction — toward mutable shared
 state and imperative control flow. That is the direction the language
 was designed against, and the distance between the intuitive guess and
 the actual design is the design.
@@ -179,6 +197,77 @@ deterministic in fed time. Because the kernel is differentiable, the
 **gradient is as cheap as the value** — which is what makes "the
 garrison charges up the alarm gradient" and "flee down the fear
 slope" real. Coordination without names.
+
+### 4.1 Ownership and the receiver-side sum (ruled)
+
+**The cast volume is owned by the caster** — the rill (or prefab
+group, if that becomes a thing) that casts it. Two rills casting
+`$blight` each own their own space. There is no global accumulator
+per channel.
+
+Why this matters: a global accumulator has a corpse problem —
+contributions merge irreversibly, so a deleted rill's blight lingers
+with no owner to withdraw it. Dead Tom in field form. Ownership
+follows lifetime instead: **unmount the caster and its space goes
+with it.** Restart-not-resume for atmosphere — a remounted blight
+rill does not inherit its corpse's miasma. Principle 8 arrives by
+construction on this path: no certificate is needed for a vanished
+contribution, because the receiver sums live casters, so the field
+itself says the absence by dropping on the next sample.
+
+The model, in engine terms: **a caster is an emitter; absorption is
+shading.** Each light is an owned object; the shading point
+integrates contributions from live emitters at sample time — nobody
+maintains a merged accumulator that lights deposit into. The
+receiver-side sum is the solver's Point→Emitters arm wearing a
+channel instead of radiance, and occlusion-aware propagation
+(`material_attenuation`, §12) slots in per-caster exactly as NEE does
+per-light.
+
+The leaky integrator (§4) relocates rather than dissolves: it lives
+*inside each owned space* — a caster's volume integrates that
+caster's deposits and leaks — and the **canonical value at a point is
+the receiver-side sum over live spaces**. Pulse and sustain still
+unify; F1/F2 still hold (they assert values at sample points, which
+was receiver-side all along).
+
+**Combination is channel physics; sampling is instrument choice.**
+The canonical value at a point is fixed — sum, per §3 — one truth,
+no per-receiver realities. What varies by receiver is the
+*instrument*: point sample, area average, gradient estimate, a march
+along a path for field navigation. Same field, different ways of
+reading it — two sensors with different cadences reading the same
+geometry. This is what keeps "different sampling policies" from
+being misread as "different receivers get different truths."
+
+**The housework (open work, named now so it is scheduled rather than
+discovered):**
+
+- **Notifications compute on the aggregate.** A threshold occurrence
+  ("$alarm rose above 0.5 here") is a fact about the canonical sum,
+  never about any single caster's contribution. A caster-local
+  threshold would fire on a contribution the receiver-side sum
+  contradicts.
+- **Deletion runs the same housework.** Unmounting a caster moves
+  the aggregate, and a moved aggregate can cross thresholds — so the
+  same notification path must run on caster removal as on any other
+  change. A rill delete that silently drops the sum below a
+  threshold without the occurrence firing is the arm-on-first-
+  observation bug's sibling: a transition nobody said.
+
+Three pins:
+
+1. **Deterministic summation order.** Float addition is not
+   associative; the receiver sums in stable caster-id order, or
+   replay's bit-identity dies in the last decimal place.
+2. **Ownership generalises to every caster kind** — rill, prefab
+   group, instance-via-action, volume. Lifetime is mount/spawn
+   lifetime in all cases.
+3. **A scream dies with the screamer.** Tom despawns mid-scream, his
+   contribution vanishes that tick. Acceptable for v1; if a scene
+   wants sound to outlive its source, that is authorable — the death
+   machinery can cast a final pulse from a longer-lived owner.
+   Recorded as a choice, not discovered as a surprise.
 
 ---
 
@@ -308,6 +397,15 @@ instead of a rill; whoever maintains a tag is the party that removes
 it. "Who removes this" becomes a property every tag answers, rather
 than a question only some raise.
 
+**The maintainer is authored, not ambient.** Three probe rounds
+running, a fluent reader made "the engine" the maintainer of derived
+tags. It is not. The derivation rule is a thing in the Project —
+authored, mounted, and unmounted like a rill — and *it* is the
+maintainer. This is what makes derived tags authorable and deletable
+rather than world physics: unmount the rule and its tags go with it,
+by the same lifetime logic as §4.1's caster-owned spaces. An ambient
+engine-maintainer would be a maintainer nothing can unmount.
+
 **Recorded indecision.** The alternative — two distinct tag kinds
 with different lifetimes — was considered and not chosen. If building
 reveals that two maintainers asserting the *same tag name* (a rill
@@ -369,6 +467,12 @@ argument, same class, as sensor scans.
 - **F6 — gradient:** published gradient at a sample point matches the
   analytic derivative of the kernel sum (hand-computed expectation,
   per the S3.5 practice — derived on paper, not read off the code).
+- **F7 — deletion housework:** two casters hold `$alarm` above
+  threshold at a sample point; unmounting one drops the aggregate
+  below it, and the threshold occurrence fires on that tick — from
+  the removal, with no other change in the scene. The mutation:
+  suppress the housework on the delete path and watch a transition
+  happen that nobody said.
 
 Each gate ships with a mutation that trips it, message in the
 fiction's language, per house practice. A mutation that does not bite

@@ -293,6 +293,40 @@ line of A2 existed. What it does NOT do is weaken a clause — "exactly one
 completion" survived, the turning point survived, and the new wording adds
 a payload assertion the old one could not make.
 
+**GATE R2 MET (2026-08-25.)** Four tests in `matryoshka/src/actuation.zig`,
+asserted through the BRIDGE rather than the instrument — the orders arrive
+on the plane the way a rill gives them and the readings are read back the
+way a rill sees them, because a gate that called the instrument directly
+would prove the arithmetic and skip the wiring, which is where R1's real
+bugs lived. Monotonic travel; exactly one `arrived`, dated T+travel and
+carrying the reached target; a counter-order mid-raise producing one
+turning point and one arrival at the NEW target; and two independent planes
+driven on the same fed-time schedule agreeing bit for bit.
+
+The fourth is the one the rewrite bought: **`set target 0.5` settles at
+0.5 and reports arriving there** — the half-raised bridge, which the
+`raised`/`lowered` channel names had nowhere to express, so the original
+gate could not have asserted it at all.
+
+Mutation-checked, messages in the fiction's language: a bridge that
+teleports, a countermanded bridge that snaps back to where it began, and a
+winch that reports a completion every tick. All three trip it — *"the
+winch called 8 completions for one order"*, *"a bridge that snaps is a
+bridge that teleports"*.
+
+**And it runs.** A portcullis authored from the console (`prim place` +
+`actuator bind` + `actuator drive slide y`), ordered up by a mounted rill,
+climbing 0.013 → 0.09 → 0.49 → 0.57 → 1.0 at the rate it was given, with
+the light spilling under it as the gap opened.
+
+**Open, found by the live run:** a console `set` cannot write a dynamic
+path — `enqueue` is `knobs.find(path) orelse return`, so the knob namespace
+is the only thing the console can set. Giving an order therefore requires
+mounting a rill. That is correct for Ironwood (rills give the orders) and
+friction for the tiltyard (a reconfigurable range wants a hand on the
+lever). Recorded rather than worked around; the fix is either a console
+verb that writes dynamic paths or an explicit ruling that it should not.
+
 ### R3 — Signal vocabulary is a record convention, not machinery
 
 Two long blasts vs three short is a `kind` field on the horn occurrence;
