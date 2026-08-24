@@ -190,18 +190,41 @@ S1–S4 landed 2026-08-24; **S5 is what remains of R1.**
 | S3 | the publication — values + occurrence mailboxes, `.sensor` source | ✅ |
 | S3.5 | the instance transform (scheduled by a finding) | ✅ |
 | S4 | the R1 gate, with its mutation | ✅ |
-| S5 | the authoring — `SensorArchetype` + placed instances + cone gizmo | — |
+| S5 | the authoring — `SensorArchetype` + placed instances + cone gizmo | ✅ |
 
-S5 is a mechanical transcription of the `SoundArchetype`/`SoundEmitter` pair
-(inheritable fields, per-instance `ovr` mask, schema contract, gizmo, rig
-persistence): sensors are the archetype spine's **fifth** tenant, after grade
-chips, lights, sounds and mesh instances. It is last because nothing above it
-needed it — the gate runs on sensors declared in code.
+**R1 is complete (2026-08-24).** The tower looks for itself, and a designer
+places the eyes.
 
-One wiring item rides S5: `Solver.bindInstances` has no live caller yet. The
-solver is each game's private state and nothing currently queries after
-placement, so binding it now would be plumbing for a consumer that does not
-exist. Until then an unbound placed leaf is counted, not silent.
+S5 was the transcription of the `SoundArchetype`/`SoundEmitter` pair, and
+sensors are the archetype spine's **fifth** tenant, after grade chips, lights,
+sounds and mesh instances. What is inheritable followed the spine's own rule —
+an archetype describes a KIND of instrument, an instance describes WHERE ONE
+STANDS — so both time constants inherit (that is what makes two towers the same
+kind of post) while position and aim never do.
+
+**The dwell is an authored field beside the FOV**, which is ruling ② arriving
+where a designer meets it: the instrument's time constant is a property of the
+instrument, so it belongs on the instrument's archetype and not in a rill.
+
+Two findings worth keeping from the beat:
+
+- **The spine refuses a half-added tenant.** Adding `sensor` verbs failed the
+  BUILD until the surface was classified, then failed a RUNTIME coverage test
+  ("saveProject emitted NO record for surface .sensor") until Project
+  serialisation existed. Two gates, comptime and runtime, neither satisfiable
+  by intent — exactly the exhaustive check the `Source` enum turned out not to
+  have when `.sensor` was added to it in S3.
+- **The cone gizmo is world-space, not billboarded.** Every other gizmo faces
+  the camera, correctly — a light's range is omnidirectional. A sensor's truth
+  is its AIM, and a billboard hides the one property a designer is placing it
+  for.
+
+Still open, and deliberately: **a live sensor loop needs a contact source.**
+Nothing in the engine yet enumerates "things a post might see" — R6's `@`
+instance registry is the intended answer, and the resident mesh-instance table
+(placed objects with live transforms) is the obvious v1 stand-in. Until a
+consumer exists, `Solver.bindInstances` has no live caller and an unbound
+placed leaf is counted rather than silent.
 
 ### R2 — Actions with duration and completion
 
