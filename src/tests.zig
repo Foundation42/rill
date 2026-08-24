@@ -1356,3 +1356,69 @@ test "hyphen is name-interior, and the lone `-` sentinel survives it" {
     var diag5 = rill.Diag{};
     try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "volume set v1- 1 2 3", &diag5));
 }
+
+// ---------------------------------------------------------------------------
+// §6.2 — an operator failure is REPORTABLE, not just counted. The wave still
+// dies at the node; this is the seam a host publishes an occurrence from.
+// ---------------------------------------------------------------------------
+
+const ErrSink = struct {
+    var hits: usize = 0;
+    var last: rill.eval.ErrorEvent = undefined;
+    fn on(_: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+        hits += 1;
+        last = ev;
+    }
+};
+
+test "error hook: a failing op reports node, op, tick and a stable input digest" {
+    const boom = struct {
+        fn f(_: *rill.EvalCtx) registry.EvalError!registry.Emit {
+            return error.BadValue;
+        }
+    }.f;
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
+    _ = try reg.register(.{ .name = "boom", .inputs = &in_num, .help = "stub", .class = .effect, .eval = boom });
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "plane.v | boom", &diag);
+    defer prog.deinit();
+
+    ErrSink.hits = 0;
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{
+        .error_fn = ErrSink.on,
+        .now = .{ .frame = 7 },
+    });
+    defer rt.deinit();
+
+    // plane.v has never produced, so tick 0 evaluates nothing and nothing failed
+    try testing.expectEqual(@as(usize, 0), ErrSink.hits);
+
+    try feedValue(&rt, testing.allocator, "plane.v", @as(i64, 3));
+    try rt.tick(.{ .frame = 8 });
+    try testing.expectEqual(@as(usize, 1), ErrSink.hits);
+    try testing.expectEqualStrings("boom1", ErrSink.last.node);
+    try testing.expectEqualStrings("boom", ErrSink.last.op);
+    try testing.expectEqualStrings("BadValue", ErrSink.last.err);
+    try testing.expectEqual(@as(u64, 8), ErrSink.last.frame);
+    const digest_of_3 = ErrSink.last.input_digest;
+
+    // the SAME inputs digest the same — "this failed again the same way" is
+    // answerable without keeping the inputs
+    try feedValue(&rt, testing.allocator, "plane.v", @as(i64, 4));
+    try rt.tick(.{ .frame = 9 });
+    try testing.expectEqual(@as(usize, 2), ErrSink.hits);
+    try testing.expect(ErrSink.last.input_digest != digest_of_3);
+    try feedValue(&rt, testing.allocator, "plane.v", @as(i64, 3));
+    try rt.tick(.{ .frame = 10 });
+    try testing.expectEqual(digest_of_3, ErrSink.last.input_digest);
+
+    // and the counter kept counting either way — the hook reports, it does not replace
+    const bid = nodeIdOf(&prog, "boom1").?;
+    try testing.expectEqual(@as(u64, 3), rt.error_count[bid]);
+}

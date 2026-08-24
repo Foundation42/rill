@@ -75,6 +75,28 @@ pub const LogFn = *const fn (ctx: ?*anyopaque, label: []const u8, val: []const u
 /// Bytes are borrowed for the call.
 pub const PublishFn = *const fn (ctx: ?*anyopaque, path: []const u8, value: []const u8) void;
 
+/// One operator failure, for the host to publish as an error occurrence
+/// (agents doc §6.2). The wave dies at the node either way — this is the
+/// reporting seam, not a recovery hook, and a host that ignores it gets the
+/// same evaluation it always did.
+///
+/// The sketch asked for `{node, port, tick, error, input_digest}`. `port` is
+/// not carried: an `EvalError` names no port, so the runtime does not know
+/// which input offended and would have to emit an empty field forever. `op` is
+/// carried instead, which IS known and is what a reader actually wants next.
+/// `input_digest` hashes the node's input bytes, so "the same failure with the
+/// same inputs" is recognisable across ticks without storing the inputs.
+pub const ErrorEvent = struct {
+    node: []const u8,
+    op: []const u8,
+    frame: u64,
+    time_ns: u64,
+    err: []const u8,
+    input_digest: u64,
+};
+
+pub const ErrorFn = *const fn (ctx: ?*anyopaque, ev: ErrorEvent) void;
+
 /// Everything a host can hand the runtime at mount/restore time. The hooks
 /// are also plain Runtime fields a host may set later; `host_ctx` is not —
 /// mount runs tick 0, and a one-shot command program fires its effects right
@@ -84,6 +106,8 @@ pub const MountOpts = struct {
     host_ctx: ?*anyopaque = null,
     log_fn: ?LogFn = null,
     log_ctx: ?*anyopaque = null,
+    error_fn: ?ErrorFn = null,
+    error_ctx: ?*anyopaque = null,
     publish_fn: ?PublishFn = null,
     publish_ctx: ?*anyopaque = null,
     /// The fed time tick 0 runs at. A rill mounted mid-session must baseline
@@ -132,6 +156,8 @@ pub const Runtime = struct {
     last_tick_ns: u64 = 0, // measured, never serialized
     log_fn: ?LogFn = null,
     log_ctx: ?*anyopaque = null,
+    error_fn: ?ErrorFn = null,
+    error_ctx: ?*anyopaque = null,
     publish_fn: ?PublishFn = null,
     publish_ctx: ?*anyopaque = null,
     host_ctx: ?*anyopaque = null,
@@ -205,6 +231,8 @@ pub const Runtime = struct {
             .error_count = try gpa.alloc(u64, n_nodes),
             .log_fn = opts.log_fn,
             .log_ctx = opts.log_ctx,
+            .error_fn = opts.error_fn,
+            .error_ctx = opts.error_ctx,
             .publish_fn = opts.publish_fn,
             .publish_ctx = opts.publish_ctx,
             .host_ctx = opts.host_ctx,
@@ -430,6 +458,24 @@ pub const Runtime = struct {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 self.error_count[node_id] += 1;
+                // Report before returning: the wave still dies here, but a host
+                // that wants to publish the occurrence (agents §6.2) needs the
+                // node, the op and the inputs that produced it while they are
+                // still in hand.
+                if (self.error_fn) |f| {
+                    var h = std.hash.Wyhash.init(0);
+                    for (in) |maybe| {
+                        if (maybe) |bytes| h.update(bytes) else h.update("\x00");
+                    }
+                    f(self.error_ctx, .{
+                        .node = n.name,
+                        .op = def.name,
+                        .frame = self.now.frame,
+                        .time_ns = self.now.time_ns,
+                        .err = @errorName(err),
+                        .input_digest = h.final(),
+                    });
+                }
                 return; // the wave dies here; deterministic and non-fatal
             },
         };
