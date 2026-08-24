@@ -162,26 +162,31 @@ gates disguised as a story. §4 pins the harness.
 
 ### R6 — Tags: membership as the fourth write kind, with sigil grammar
 
-**The ontology (Chris, 2026-08-24): `@` for archetypes, `#` for semantic
-grouping.** `@soldier` names a *kind* — immutable, singular, a thing is one
-archetype forever. `#garrison` names a *condition* — mutable, plural, gained
-and lost per tick. The sigil is the grammar enforcing the split: `@` answers
-"what is it," `#` answers "what's true of it now," and the reader learns the
-type system from the glyph (the social-media intuition transfers: @ mentions
-an identity, # joins a conversation).
+**The ontology (Chris, 2026-08-24, revised same day): three sigils, three
+questions.** `@` names an *instance* — which one (`@tom`, addressable
+individual, the social-media reading @ has always had). `^` names an
+*archetype* — what kind (`^soldier`, immutable, singular; pointing up to the
+type, the instance-of arrow from every object diagram). `#` names a
+*condition* — what's true of it now (`#garrison`, mutable, plural, gained
+and lost per tick). The revision replaced an earlier `@`-for-archetype
+draft: @ everywhere means *this specific account*, so borrowing it for kinds
+fought the very intuition it cited — and two sigils had quietly left
+instances bare, colliding with the local-stream namespace. Three sigils,
+three referents, no bare nouns:
 
 ```
-spawn @soldier as tom | tag tom #garrison #off-duty
-#garrison!count | rose_above 29 | notify signals/wall_formed
-sensors/gate/nearest #raiders | dropped_below 50 | notify signals/horn { kind: "imminent" }
-tag tom -#off-duty +#in-courtyard
+spawn ^soldier as @tom | tag @tom #garrison #off-duty
+@tom.health | dropped_below 20 | notify signals/medic { who: "tom" }
+^soldier & #wounded          # kind filtered by state
+#garrison & #in-courtyard    # pure condition algebra
+count ^soldier               # how many of the kind exist at all
 ```
 
-Same sentence position, different question, no context needed:
-`@raider` in a sensor argument means "things of this kind"; `#raiders` means
-"things currently in this set." Query algebra follows — `#garrison &
-#in-courtyard` is set algebra over conditions; `@soldier & #wounded` is
-kind-filtered-by-state.
+`@tom.health` as a live path is the bonus: instance-scoped subscriptions get
+a natural spelling, visually disjoint from `plane.` paths, `^` kinds, `#`
+sets, and bare locals — the parser needs no context, and `as @tom` makes
+"this spawn is addressable" an explicit authoring choice rather than every
+entity polluting a namespace.
 
 **Mechanically, a tag is the fourth write kind**, completing the plane's
 coalescing taxonomy:
@@ -219,14 +224,38 @@ the digest, and nobody per-entity-subscribes a thousand members.
   tags ("my instances start `#hostile`") — a stamped starting condition,
   thereafter owned by the tag system and removable like any tag. Archetype
   membership is never itself a tag. The pacified raider is the canonical
-  test: still `@raider` (kind), no longer `#hostile` (state).
-- **The store mirrors the grammar.** `archetypes/<kind>/instances/*` is
-  engine-maintained, read-only to rills — kind is not writable; nothing can
-  be `tag`ged into being a soldier. `tags/**` is the membership write kind,
-  capability-granted by subtree (`write: tags/squad-a/*` — "the commander
-  may reassign squads but not factions" is a grant, extending I4's pattern).
+  test: still `^raider` (kind), no longer `#hostile` (state) — and still
+  `@grimjaw` until the moment he isn't.
+- **The store mirrors the grammar, one row per sigil.** The `^` row
+  (`archetypes/<kind>/instances/*`) is engine-maintained, read-only to rills
+  — kind is not writable; nothing can be `tag`ged into being a soldier. The
+  `@` row is an instance registry: spawn-registered, despawn-retired, so
+  "what does `@tom` mean after Tom dies" is askable — the honest answer is
+  the path goes NotFound and subscriptions observe it, which is a *feature*
+  for death-reactive rills, not an edge case. The `#` row (`tags/**`) is the
+  membership write kind, capability-granted by subtree
+  (`write: tags/squad-a/*` — "the commander may reassign squads but not
+  factions" is a grant, extending I4's pattern).
+- **FINDING (CC, 2026-08-24): "subscriptions observe it" is not true today,
+  and absence cannot be made to mean it.** Three verified facts: the plane's
+  `removeDynamicPrefix` emits *no deltas by design* ("there is no delete
+  semantics on the stream; readers simply find nothing"); rill's mount treats
+  `NotFound` as "leave the slot empty and carry on"; and its evaluator skips
+  any node with a missing required input. So when Tom dies, a rill watching
+  `@tom.health` does not go quiet and does not fire — **it keeps Tom's last
+  reading forever.** A `dropped_below 20` sits armed on a corpse's final
+  number, and nothing in the stack can tell that from a man standing very
+  still.
+  Recommended shape, for the R6 beat rather than now: **death is an
+  occurrence, not an absence.** A dataflow evaluator cannot subscribe to a
+  thing that is not there — absence is unobservable by construction — so the
+  `@` registry should publish a despawn occurrence the way tags publish
+  `joined`/`left`. That is shipped machinery (mailboxes, never-suppress,
+  §4.1 rounds), it is ordered and replayable, and it makes "what does `@tom`
+  mean after Tom dies" answerable *on the stream* instead of by a reader
+  noticing nothing arrived.
 - **Kind, condition, behaviour are three systems on one entity:**
-  `@soldier` stamps the entity, `def soldier(n)` mounts the behaviour,
+  `^soldier` stamps the entity, `def soldier(n)` mounts the behaviour,
   `#garrison` connects them — the assembly count watches the tag regardless
   of which rills animate the members. (This resolves R4's entity/program
   pairing question before it was asked.)
@@ -247,7 +276,7 @@ rill granted `tags/squads/*` is refused at mount when it writes
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind
 `inc` tally in I5); the sally-port force is that same intersection; raiders
-are `@raider` stamped `#hostile` at spawn, and the v2 growth path's
+are `^raider` stamped `#hostile` at spawn, and the v2 growth path's
 "pacified" outcome is a tag removal, not a despawn.
 
 ## 4. The Ironwood gate (pre-registered)
@@ -316,21 +345,3 @@ a sensorless stub (horn fed directly) as soon as `also`/`inc` land; I1–I4
 switch on as R1/R2 arrive; I5's tally upgrades from blind `inc` to
 membership when R6 lands. The scenario stays green from its first partial
 mounting onward — it grows teeth, it never waits toothless.
-
-**Landed 2026-08-24, in order:** `also` + `inc` + `notify`'s payload port
-(rill), R6's membership delta-kind reservation (the five-line act — the
-compiler named four arms across both repos, which is the argument for
-reserving early), then the stub itself with I5–I8 green.
-
-Two findings the scenario produced by being *written* rather than reviewed:
-
-- **`rose_above 0` fired when the last raider LEFT.** It shared one `v < t`
-  test with `dropped_below`, so it meant "reached t". The canonical sentinel
-  in §2 could never have worked, and three readers had approved it. Fixed and
-  pinned in both directions. `wall.rill`'s `rose_above 29` is the same shape:
-  before the fix it formed the shield wall on the twenty-ninth man.
-- **`set` has the gap `notify` just closed.** "On a rousing, write a constant"
-  has no spelling: `set` takes its payload from the wire, so `gate.rill` holds
-  the value in a `latch` and samples it on the horn. It works and it is honest,
-  but R2's `set gate/drawbridge.target 1` on alarm is exactly this shape and
-  will meet it again. Worth a ruling before R2, not during it.
