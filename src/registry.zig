@@ -14,6 +14,7 @@
 const std = @import("std");
 const struple = @import("struple");
 const types = @import("types.zig");
+const plane = @import("plane.zig");
 
 pub const TypeId = types.TypeId;
 
@@ -105,7 +106,7 @@ pub const EvalCtx = struct {
     state: *std.ArrayListUnmanaged(u8),
     state_gpa: std.mem.Allocator,
     /// Effect channel: queue a plane write, flushed in order at end of tick.
-    write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8) EvalError!void,
+    write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: plane.DeltaKind) EvalError!void,
     write_ctx: *anyopaque,
     /// Debug/log bus for `tap`; null when the host wired none.
     log_fn: ?*const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void = null,
@@ -129,7 +130,15 @@ pub const EvalCtx = struct {
     wake_ctx: ?*anyopaque = null,
 
     pub fn write(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
-        return self.write_fn(self.write_ctx, path, val);
+        return self.write_fn(self.write_ctx, path, val, .value);
+    }
+
+    /// Add `val` to whatever is at `path` — a blind delta: no read, so no
+    /// subscription, so nothing for the cycle check (§4.4) to refuse. Being
+    /// commutative it is also MORE deterministic than read-modify-write,
+    /// because arrival order stops mattering.
+    pub fn writeDelta(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
+        return self.write_fn(self.write_ctx, path, val, .accumulate);
     }
 
     pub fn log(self: *EvalCtx, label: []const u8, val: []const u8) void {

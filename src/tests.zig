@@ -1675,3 +1675,216 @@ test "registry: a reserved word cannot name an operator" {
     try testing.expectError(error.ReservedName, reg.register(.{ .name = "light as", .help = "", .eval = noop }));
     _ = try reg.register(.{ .name = "alsorun", .help = "", .eval = noop });
 }
+
+// ---------------------------------------------------------------------------
+// `inc` — the third write kind. Counters were inexpressible: `plane.x | add 1
+// | set plane.x` reads a path it writes and §4.4 rightly refuses it.
+// ---------------------------------------------------------------------------
+
+test "inc: each rousing adds `by`, and the amount is never the in-flowing value" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.sighting | inc plane.tally 1");
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    // The rousing carries 99. The tally must rise by 1, not by 99 — port 0 is
+    // the rousing, port 1 is the amount, and that is the whole design.
+    const enc = try packOne(testing.allocator, @as(i64, 99));
+    defer testing.allocator.free(enc);
+    try rt.feed(.{ .path = "plane.sighting", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 1 });
+    try testing.expectEqual(@as(f64, 1), types.asNumber(mock.store.get("plane.tally").?).?);
+    try testing.expectEqual(rill.DeltaKind.accumulate, mock.writes.items[0].kind);
+
+    try rt.feed(.{ .path = "plane.sighting", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 2 });
+    try testing.expectEqual(@as(f64, 2), types.asNumber(mock.store.get("plane.tally").?).?);
+}
+
+test "inc: three occurrences in one tick add three times" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.sighting | inc plane.tally 1");
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const enc = try packOne(testing.allocator, @as(i64, 1));
+        defer testing.allocator.free(enc);
+        try rt.feed(.{ .path = "plane.sighting", .value = enc, .kind = .occurrence });
+    }
+    try rt.tick(.{ .frame = 1 });
+    // Three rounds, three blind deltas, one batch at the end of the tick.
+    try testing.expectEqual(@as(usize, 3), mock.writes.items.len);
+    try testing.expectEqual(@as(f64, 3), types.asNumber(mock.store.get("plane.tally").?).?);
+}
+
+test "inc: a change in the amount alone is not a rousing" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.pulse | inc plane.tally plane.amount");
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.amount", @as(i64, 5));
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    try feedValue(&rt, testing.allocator, "plane.amount", @as(i64, 5));
+    const enc = try packOne(testing.allocator, @as(i64, 1));
+    defer testing.allocator.free(enc);
+    try rt.feed(.{ .path = "plane.pulse", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 1 });
+    try testing.expectEqual(@as(f64, 5), types.asNumber(mock.store.get("plane.tally").?).?);
+
+    // The amount moves; nothing rouses. A counter that ticked whenever its
+    // step size was edited would be a very quiet kind of wrong.
+    try feedValue(&rt, testing.allocator, "plane.amount", @as(i64, 7));
+    try rt.tick(.{ .frame = 2 });
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+    try testing.expectEqual(@as(f64, 5), types.asNumber(mock.store.get("plane.tally").?).?);
+}
+
+test "inc: the amount is required, and numeric" {
+    // Unpiped, `5` would bind the ROUSING port and the amount would silently
+    // default. Requiring `by` is what turns that into a sentence.
+    try expectParseError("inc plane.tally 5", "not bound");
+    try expectParseError("plane.sighting | inc plane.tally hello", "unknown name");
+    try expectParseError("plane.sighting | inc plane.tally \"5\"", "expected number");
+}
+
+test "inc: a blind delta reads nothing, so it passes the cycle ban" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    // Writes plane.tally, subscribes plane.sighting. No read, no cycle.
+    var prog = try parseOk(testing.allocator, &reg, "plane.sighting | inc plane.tally 1");
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.writes.items.len);
+    // But reading the path you increment is still a cycle — reading is what
+    // makes it order-dependent, and that is what §4.4 refuses.
+    try expectParseError("plane.tally | changed | inc plane.tally 1", "cycle");
+}
+
+// ---------------------------------------------------------------------------
+// The garrison — the through-line. Two watchers, one shared tally, one shared
+// mailbox, one frame. Every ruling of 2026-08-24 exercised in eight lines.
+// ---------------------------------------------------------------------------
+
+test "the garrison: two watchers see one attacker, and the tally rises by two" {
+    const gpa = testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    var mock = rill.MockPlane.init(gpa);
+    defer mock.deinit();
+    try mock.putValue("plane.gate.enemy_count", @as(i64, 0));
+    try mock.putValue("plane.tower.enemy_count", @as(i64, 0));
+
+    // One watcher program, mounted once per post. `also` runs the counter
+    // branch; the main wire carries on to the mailbox unchanged.
+    var progs: [2]rill.Program = undefined;
+    var rts: [2]rill.Runtime = undefined;
+    var mounted: usize = 0;
+    defer {
+        var i = mounted;
+        while (i > 0) {
+            i -= 1;
+            rts[i].deinit();
+            progs[i].deinit();
+        }
+    }
+    for ([_][]const u8{ "gate", "tower" }, 0..) |post, i| {
+        const src = try std.fmt.allocPrint(gpa,
+            \\use plane.defense as d
+            \\plane.{s}.enemy_count | rose_above 0
+            \\  | also {{ inc d.sightings 1 }}
+            \\  | notify d.alerts
+        , .{post});
+        defer gpa.free(src);
+        progs[i] = try parseOk(gpa, &reg, src);
+        rts[i] = try rill.Runtime.mount(gpa, &progs[i], mock.asPlane(), .{});
+        mounted = i + 1;
+        try testing.expectEqual(@as(usize, 0), progs[i].warnings.items.len);
+    }
+
+    // ONE attacker arrives. Both posts see it, in the same frame.
+    for (&rts, [_][]const u8{ "plane.gate.enemy_count", "plane.tower.enemy_count" }) |*rt, path| {
+        try feedValue(rt, gpa, path, @as(i64, 1));
+        try rt.tick(.{ .frame = 1, .time_ns = 1000 });
+    }
+
+    // The counter: two posts, two blind deltas, one tally. This is the ruling
+    // that `inc` exists for — read-modify-write could not have got here.
+    try testing.expectEqual(@as(f64, 2), types.asNumber(mock.store.get("plane.defense.sightings").?).?);
+
+    // The mailbox: two sightings, both delivered. Neither watcher's notify
+    // suppressed the other's, and `also` did not eat the value on its way
+    // through — the main wire reached `notify` intact from both posts.
+    var alerts: usize = 0;
+    for (mock.writes.items) |w| {
+        if (std.mem.eql(u8, w.path, "plane.defense.alerts")) alerts += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), alerts);
+}
+
+test "thresholds: each op is strict on its own comparison, and they mirror" {
+    const Case = struct {
+        src: []const u8,
+        seed: i64,
+        steps: []const i64,
+        fires: []const f64, // the values the op emitted, in order
+    };
+    const cases = [_]Case{
+        // The garrison's own line: a count going 0 → 1 IS an enemy arriving.
+        .{ .src = "plane.n | rose_above 0 | tap f", .seed = 0, .steps = &.{ 1, 2, 0, 3 }, .fires = &.{ 1, 3 } },
+        // Arriving at the threshold is not crossing it, on either side.
+        .{ .src = "plane.n | rose_above 20 | tap f", .seed = 0, .steps = &.{ 20, 21 }, .fires = &.{21} },
+        .{ .src = "plane.n | dropped_below 20 | tap f", .seed = 40, .steps = &.{ 20, 19 }, .fires = &.{19} },
+        // First observation baselines silently, whichever side it lands on.
+        .{ .src = "plane.n | rose_above 0 | tap f", .seed = 5, .steps = &.{6}, .fires = &.{} },
+    };
+    for (cases) |c| {
+        var reg = try rill.Registry.init(testing.allocator);
+        defer reg.deinit();
+        try rill.registerCore(&reg);
+        var prog = try parseOk(testing.allocator, &reg, c.src);
+        defer prog.deinit();
+        var mock = rill.MockPlane.init(testing.allocator);
+        defer mock.deinit();
+        try mock.putValue("plane.n", c.seed);
+        var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+        defer rt.deinit();
+
+        var seen = std.ArrayListUnmanaged(f64).empty;
+        defer seen.deinit(testing.allocator);
+        const tap = nodeIdOf(&prog, "tap1").?;
+        for (c.steps, 0..) |n, i| {
+            const before = rt.eval_count[tap];
+            try feedValue(&rt, testing.allocator, "plane.n", n);
+            try rt.tick(.{ .frame = @intCast(i + 1) });
+            if (rt.eval_count[tap] > before) {
+                try seen.append(testing.allocator, types.asNumber(rt.readSlot("programs.p.tap1.out.out").?).?);
+            }
+        }
+        testing.expectEqualSlices(f64, c.fires, seen.items) catch |err| {
+            std.debug.print("case: {s}\n", .{c.src});
+            return err;
+        };
+    }
+}

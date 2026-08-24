@@ -193,6 +193,23 @@ the main-thread drain, so rill writes are ordered with everything else and appea
 command log / undo machinery like any other authored change, subject to the host's
 mutating/affects_output classification).
 
+**`inc <path> <by>`** adds instead of replacing (v0.2, ratified 2026-08-24). It is the one
+sink whose port 0 is a **rousing rather than a payload** — an increment takes nothing from
+the stream, so the in-flowing value says *when*, and `by` says *how much*:
+
+```
+plane.gate.enemy_count | rose_above 0 | inc plane.defense.sightings 1
+```
+
+Counters were otherwise inexpressible: `plane.x | add 1 | set plane.x` reads a path it
+writes and the cycle check (§4.4) rightly refuses it. A blind delta reads nothing, so it
+passes legitimately — and being commutative it is *more* deterministic than
+read-modify-write, because arrival order stops mattering. Numeric slots only; `by` is
+required (unpiped, `inc p 5` would otherwise bind 5 to the rousing port and silently
+default the amount); a change in `by` alone is not a rousing; and the host refuses an
+accumulate write to a mailbox path, because append and accumulate are different kinds and
+a path is one kind.
+
 ### 3.9 `def` — subgraph operators
 
 ```
@@ -385,10 +402,15 @@ Every stream is either:
   (a trigger pulled twice is two pulls). `where`, `changed`, `dropped_below` etc. emit
   occurrences.
 
-A third kind is **reserved, not built**: `inc` (accumulate) sums its deltas within a tick
-and applies the sum once, silencing a net-zero tick. It exists in the delta taxonomy now so
-that adding it later is not a widening; the three coalescing rules are last-write-wins
-(value), append-all-in-order (occurrence), and sum-then-apply (accumulate).
+A third kind is **accumulate** (v0.2, ratified 2026-08-24): `inc` writes a blind delta, and
+the plane sums the deltas for a path within a tick and applies the sum once, silencing a
+net-zero tick. The three coalescing rules are last-write-wins (value), append-all-in-order
+(occurrence), and sum-then-apply (accumulate).
+
+The taxonomy runs **both ways across the boundary**, which is the point: an inbound delta
+carries a kind and so does an outbound write, because what a write *means* is what decides
+how it coalesces. rill tags and does not sum — the write queue's promise is one batch in
+evaluation order, and two `+1`s applied in order are the same `+2`.
 
 This bit is not confined to wires inside a program: it crosses the plane boundary too. A plane
 path declared an occurrence **mailbox** delivers every write to its subscribers — never
@@ -554,12 +576,19 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | group | ops |
 |---|---|
 | flow | `select`, `lerp`, `where`, `partition`, `changed`, `latch` |
-| events | `dropped_below`, `rose_above`, `edge` (value→occurrence adapters) |
+| events | `dropped_below`, `rose_above`, `edge` (value→occurrence adapters; each strict on its own comparison — see below) |
 | temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `arm`, `disarm` (§4.6; durations §3.12) |
 | math | `add sub mul div min max clamp abs floor round`, comparators |
 | record | record construction `{…}`, projection `.field`, `merge` |
-| plane | `set <path>` (sink), path read (implicit source) |
+| plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | util | `const`, `tap` (debug passthrough → log bus) |
+
+**Threshold boundaries (corrected 2026-08-24).** `dropped_below t` fires crossing from ≥t to
+<t; `rose_above t` fires crossing from ≤t to >t. Each is strict on the comparison it names,
+so the two mirror and neither fires on merely *arriving* at the threshold. They previously
+shared one `v < t` test, which made `rose_above t` mean "reached t" — `rose_above 0` on an
+enemy count fired when the count fell back to 0, when the last attacker LEFT, and never once
+when one arrived. The first observation still baselines silently, on either side.
 
 Everything domain-flavoured (`bevel`, `scatter`, `play`, `trigger`, `camera`, …) is host-injected.
 

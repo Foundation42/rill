@@ -45,6 +45,7 @@ const SlotId = graph.SlotId;
 const NodeId = graph.NodeId;
 const Plane = plane_mod.Plane;
 const Delta = plane_mod.Delta;
+const DeltaKind = plane_mod.DeltaKind;
 
 pub const MountError = error{Cycle} || plane_mod.PlaneError || std.mem.Allocator.Error;
 pub const TickError = error{TimeRegression} || plane_mod.PlaneError || std.mem.Allocator.Error;
@@ -65,6 +66,7 @@ const ValueBuf = std.ArrayListUnmanaged(u8);
 const QueuedWrite = struct {
     path: []const u8, // program-arena-owned (a `set` static)
     value: []const u8, // tick-arena-owned
+    kind: DeltaKind, // what the write MEANS, which decides how it coalesces
 };
 
 pub const LogFn = *const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void;
@@ -462,7 +464,7 @@ pub const Runtime = struct {
             self.write_queue.clearRetainingCapacity();
         }
         for (self.write_queue.items) |w| {
-            try self.plane.write(w.path, w.value);
+            try self.plane.write(w.path, w.value, w.kind);
         }
 
         self.tick_index += 1;
@@ -608,14 +610,14 @@ pub const Runtime = struct {
         }
     };
 
-    fn queueWriteThunk(ctx: *anyopaque, path: []const u8, val: []const u8) registry.EvalError!void {
+    fn queueWriteThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) registry.EvalError!void {
         const self: *Runtime = @ptrCast(@alignCast(ctx));
         // Copy the value with the runtime's own allocator: the caller's bytes
         // may live in the tick arena, but the queue outlives nothing — it is
         // flushed and cleared within the same tick, so gpa + explicit free
         // keeps ownership obvious.
         const copy = self.gpa.dupe(u8, val) catch return error.OutOfMemory;
-        self.write_queue.append(self.gpa, .{ .path = path, .value = copy }) catch {
+        self.write_queue.append(self.gpa, .{ .path = path, .value = copy, .kind = kind }) catch {
             self.gpa.free(copy);
             return error.OutOfMemory;
         };

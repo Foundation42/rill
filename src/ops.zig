@@ -124,14 +124,23 @@ fn evalLatch(ctx: *EvalCtx) EvalError!Emit {
 
 const side_unset: u8 = 0;
 
+/// Each threshold op is **strict on its own comparison**, and the two are
+/// mirror images: `dropped_below 20` fires crossing from ≥20 to <20,
+/// `rose_above 20` from ≤20 to >20. Both sides of a crossing therefore agree
+/// about where the boundary is, and neither fires on merely *arriving* at it.
+///
+/// The two used to share one `v < t` test, which made `rose_above t` mean
+/// "reached t": `rose_above 0` on an enemy count fired when the count fell
+/// back to 0 — when the last attacker LEFT — and never once when one arrived.
 fn evalThreshold(ctx: *EvalCtx, comptime fire_when_below: bool) EvalError!Emit {
     const v = try num(ctx, 0);
     const t = try num(ctx, 1);
-    const below: u8 = if (v < t) 2 else 1;
+    const armed: u8 = 1; // the far side: the crossing has not happened
+    const fired: u8 = 2; // past the threshold, strictly
+    const side: u8 = if (if (fire_when_below) v < t else v > t) fired else armed;
     const prev: u8 = if (ctx.state.items.len > 0) ctx.state.items[0] else side_unset;
-    try ctx.setState(&.{below});
-    const fire_side: u8 = if (fire_when_below) 2 else 1;
-    if (prev != side_unset and prev != fire_side and below == fire_side) {
+    try ctx.setState(&.{side});
+    if (prev == armed and side == fired) {
         try splice(ctx, 0, try raw(ctx, 0));
         return Emit.first;
     }
@@ -586,6 +595,21 @@ fn evalSet(ctx: *EvalCtx) EvalError!Emit {
     return Emit.none;
 }
 
+/// `inc` is a SINK WITH NO PAYLOAD: port 0 is the rousing, not the amount.
+/// That is why it does not read like `set`, and it is the honest signature —
+/// an increment takes nothing from the stream, so binding the in-flowing value
+/// as the amount would make `also { inc … }` count enemies-per-sighting
+/// instead of sightings. `by` is required for the same reason `also` refuses a
+/// branch that cannot rouse: `inc p 5` unpiped would otherwise bind 5 to the
+/// rousing port, silently default the amount to 1, and be wrong in a way
+/// nothing could see.
+fn evalInc(ctx: *EvalCtx) EvalError!Emit {
+    if (!ctx.in_fresh[0]) return Emit.none; // a change in `by` alone is not a rousing
+    _ = try num(ctx, 1); // numeric slots only — the gate, stated once
+    try ctx.writeDelta(ctx.statics[0].path, try raw(ctx, 1));
+    return Emit.none;
+}
+
 fn evalConst(ctx: *EvalCtx) EvalError!Emit {
     try splice(ctx, 0, ctx.statics[0].literal);
     return Emit.first;
@@ -673,6 +697,10 @@ const CORE = [_]registry.OpDef{
     // not mechanism: `notify defense/alerts` says "this is a sighting" where
     // `set` would read as "this is the state". Wearing intent on its sleeve.
     .{ .name = "notify", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path (`set` for mailbox paths — same write, states the intent).", .class = .effect, .eval = evalSet },
+    // The third write kind. `plane.x | add 1 | set plane.x` reads a path it
+    // writes, so the cycle check rightly refuses it — which leaves counters
+    // inexpressible. A blind delta reads nothing and passes legitimately.
+    .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },
     .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Emit a constant once at mount.", .eval = evalConst },
     .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .eval = evalTap },
 };

@@ -59,6 +59,7 @@ pub const ParseError = parser.ParseError;
 pub const Plane = plane.Plane;
 pub const MockPlane = plane.MockPlane;
 pub const Delta = plane.Delta;
+pub const DeltaKind = plane.DeltaKind;
 pub const Runtime = eval.Runtime;
 pub const MountOpts = eval.MountOpts;
 pub const Now = eval.Now;
