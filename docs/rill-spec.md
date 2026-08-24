@@ -85,8 +85,10 @@ scripted delta feed.
 ```
 program     := statement*
 statement   := chain | defstmt
-chain       := expr ( "|" opcall )* ( "as" namelist )?
+chain       := expr ( "|" (opcall | alsoblock) )* ( "as" namelist )?
 expr        := opcall | path | literal | record | name
+alsoblock   := "also" "{" branch (NEWLINE branch)* "}"
+branch      := opcall ( "|" (opcall | alsoblock) )*
 opcall      := opname arg*
 arg         := literal | path | name | record | kwarg
 kwarg       := portname ":" ( literal | path | name )
@@ -99,7 +101,9 @@ defstmt     := "def" opname "(" portdecl ("," portdecl)* ")" "=" chain+
 portdecl    := portname (":" typename)?
 ```
 
-- Statements are newline-separated; a chain may wrap after a `|`.
+- Statements are newline-separated; a chain may wrap **after** a `|`, and a line that
+  *begins* with `|` continues the statement above it. No statement can start with a pipe,
+  so a leading `|` has only ever had the one meaning.
 - `name` is a local stream name bound by `as`. `path` is a plane path. `literal` is a struple
   literal (number, string, bool, color, vec…, per the struple type set).
 - Positional args bind to an operator's declared ports in order; `port: value` binds by name.
@@ -286,6 +290,56 @@ Pattern-match sugar compiling to `select` over a table:
 ```
 match plane.player.state { idle: idleAnim, running: runAnim }
 ```
+
+### 3.14 `also` — a side branch, inline (v0.2, ratified 2026-08-24)
+
+```
+plane.gate.enemy_count | rose_above 0
+  | also { inc plane.defense.sightings }
+  | also { notify plane.defense.alerts }
+  | trigger attack
+```
+
+**`also { … }` runs a side branch and passes the value along unchanged.** It is pure
+parse-time desugaring to fan-out off an anonymous branch:
+
+```
+x | also { S } | rest        ⇒        x as ⟨anon⟩
+                                      ⟨anon⟩ | S
+                                      ⟨anon⟩ | rest
+```
+
+No new node kind, no evaluator change, no op-level "passthrough" class. The parser does not
+even need the anonymous name: the in-flowing value is already a `Source`, so the branch and
+the main wire are handed the same one — **identity on the stream holds by construction,
+because the downstream edge *is* the upstream slot.** Occurrence semantics fall out free:
+N rousings run the block N times, because it is ordinary fan-out and §4.1's rounds cannot
+tell a side branch from a main one.
+
+Rules, all parse-time:
+
+- **A branch begins with an operator.** Its implicit source is the in-flowing value, bound
+  to port 0 exactly as a pipe would. A head that names a value instead (a plane path, a
+  `use` alias, a local stream, a literal, a record) is refused: nothing would wire the
+  source into it, so it would parse, sit in the graph, and never once run.
+- **No `as` escapes the block** — anonymous scope, the same enforcement shape as def's
+  close-over-nothing. Bind the stream before the block instead.
+- **The block's writes join the program's write list** at the ordinary bind site, so the
+  cycle check (§4.4) and any future capability union see straight through it.
+- **Multi-branch blocks are more branches off the same slot**, newline-separated.
+- **A branch that ends still holding a value warns** — "also-block discards a value; end
+  with a sink or drop the tail". Not fatal: every sink declares no outputs, so "ends with a
+  sink" and "ends with no outputs" are the same sentence, and an effect that hands a value
+  back has discarded nothing. This is rill's first non-fatal diagnostic (`Program.warnings`).
+- **A tail operator (§3.11) takes the rest of the line, brace included** — so inside a
+  one-line block it eats the block's own `}`, and says so with the fix named. Give it its
+  own line.
+
+`also` won the read-aloud test — "health drops below 20, **also** play the heartbeat,
+trigger the warning" states both halves of the contract in one English word. It is a
+reserved word, and the registry refuses to register an operator named with one, because
+the parser recognises `also` before it ever asks `find`: a host row named `also` would
+otherwise register cleanly and then be permanently unreachable.
 
 ---
 

@@ -29,6 +29,14 @@
 //! - Operator lookup tries the two-word form first (`boolean subtract`), so a
 //!   host registry seeded from (verb, subop) command pairs maps one row to
 //!   one operator.
+//! - `also { … }` is fan-out spelled inline, and it is **pure desugaring**:
+//!   `x | also { S } | rest` is `x as ⟨anon⟩` + `⟨anon⟩ | S` + `⟨anon⟩ | rest`.
+//!   The parser does not even need the anonymous name — the in-flowing value
+//!   is already a `Source`, so the block's branch and the main wire are handed
+//!   the same one and `current` is never reassigned. Identity on the stream
+//!   therefore holds *by construction*, not by an op-level passthrough class,
+//!   and N occurrences run the block N times because it is ordinary fan-out.
+//!   No new node kind, no evaluator change.
 //! - A bare word bound to a *string-typed* port becomes a string literal at
 //!   the bind moment — the console's entity names (`volume set v1 …`) are
 //!   strings, and the port type keeps the coercion narrow: local names and
@@ -103,13 +111,9 @@ const Token = struct {
     off: usize,
 };
 
-fn isReservedWord(s: []const u8) bool {
-    const words = [_][]const u8{ "plane", "use", "def", "as", "true", "false" };
-    for (words) |w| {
-        if (std.mem.eql(u8, s, w)) return true;
-    }
-    return false;
-}
+/// The syntax's own words. Owned by the registry (which gates registration on
+/// them) so there is exactly one list and an op can never be shadowed silently.
+const isReservedWord = registry.isReservedWord;
 
 fn isNameStart(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
@@ -364,9 +368,23 @@ const Parser = struct {
     /// reach the graph, the dump, or the evaluator.
     aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
     op_counters: std.StringArrayHashMapUnmanaged(u32) = .empty,
+    /// How many `also { … }` blocks enclose the cursor. Two rules read it: a
+    /// `}` closes an argument list only inside a block, and a tail port's
+    /// end-of-line capture would otherwise swallow the block's own brace.
+    block_depth: u32 = 0,
 
     fn a(self: *Parser) std.mem.Allocator {
         return self.prog.a();
+    }
+
+    /// Record a non-fatal diagnostic. Never aborts the parse: the text is
+    /// well-formed, it just probably doesn't mean what it says.
+    fn warn(self: *Parser, tok: Token, comptime fmt: []const u8, args: anytype) !void {
+        try self.prog.warnings.append(self.a(), .{
+            .line = tok.line,
+            .col = tok.col,
+            .msg = try std.fmt.allocPrint(self.a(), fmt, args),
+        });
     }
 
     fn peek(self: *Parser) Token {
@@ -389,6 +407,13 @@ const Parser = struct {
 
     fn skipNewlines(self: *Parser) void {
         while (self.peek().kind == .newline) _ = self.next();
+    }
+
+    /// Does the next non-blank line begin with `|`? Lookahead only.
+    fn continuesWithPipe(self: *Parser) bool {
+        var i = self.pos;
+        while (i < self.toks.len and self.toks[i].kind == .newline) : (i += 1) {}
+        return i < self.toks.len and self.toks[i].kind == .pipe;
     }
 
     fn autoName(self: *Parser, op_name: []const u8) ![]const u8 {
@@ -557,23 +582,16 @@ const Parser = struct {
         try self.aliases.put(self.a(), try self.a().dupe(u8, name_tok.text), path.items);
     }
 
-    /// chain := expr ( "|" opcall )* ( "as" namelist )?
+    /// chain := expr ( "|" (opcall | alsoblock) )* ( "as" namelist )?
     fn parseStatement(self: *Parser, target: *Target) ParseError!OpResult {
         var current = try self.parseExpr(target);
-
-        while (self.peek().kind == .pipe) {
-            _ = self.next();
-            self.skipNewlines(); // a chain may wrap after a '|'
-            const op_tok = self.next();
-            if (op_tok.kind != .name and op_tok.kind != .sym) {
-                return self.fail(op_tok, "expected operator after '|'", .{});
-            }
-            if (current.outputs.len == 0) return self.fail(op_tok, "nothing to pipe — upstream operator has no output", .{});
-            current = try self.parseOpcall(target, op_tok, current.outputs[0], false);
-        }
+        try self.parseChain(target, &current);
 
         // as namelist
         if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "as")) {
+            if (self.block_depth > 0) {
+                return self.fail(self.peek(), "no name escapes an 'also' block — bind the stream before the block, or end the branch with a sink", .{});
+            }
             _ = self.next();
             var bound_names = std.ArrayListUnmanaged([]const u8).empty;
             while (true) {
@@ -600,10 +618,119 @@ const Parser = struct {
         }
 
         const end = self.peek();
-        if (end.kind != .newline and end.kind != .eof) {
+        if (end.kind != .newline and end.kind != .eof and
+            !(end.kind == .rbrace and self.block_depth > 0))
+        {
             return self.fail(end, "unexpected '{s}' — expected end of statement", .{end.text});
         }
         return current;
+    }
+
+    /// The `| …` tail shared by top-level statements and `also` branches.
+    /// `current` is advanced in place, which is the whole trick: an `also`
+    /// block simply *doesn't* advance it, so the main wire continues from the
+    /// same slot the block branched off.
+    fn parseChain(self: *Parser, target: *Target, current: *OpResult) ParseError!void {
+        while (true) {
+            // A line that *starts* with `|` continues the statement above it.
+            // There is no ambiguity to weigh: no statement can begin with a
+            // pipe, so a leading `|` has never had a second meaning. It exists
+            // for the shape `also` wants — one branch per line, every pipe in
+            // the left margin where the eye finds it.
+            if (self.peek().kind == .newline and self.continuesWithPipe()) self.skipNewlines();
+            if (self.peek().kind != .pipe) break;
+            _ = self.next();
+            self.skipNewlines(); // a chain may wrap after a '|'
+            const op_tok = self.next();
+            if (op_tok.kind != .name and op_tok.kind != .sym) {
+                return self.fail(op_tok, "expected operator after '|'", .{});
+            }
+            if (current.outputs.len == 0) return self.fail(op_tok, "nothing to pipe — upstream operator has no output", .{});
+            if (op_tok.kind == .name and std.mem.eql(u8, op_tok.text, "also")) {
+                try self.parseAlsoBlock(target, current.outputs[0], op_tok);
+                continue; // `current` untouched — the identity, in one line
+            }
+            current.* = try self.parseOpcall(target, op_tok, current.outputs[0], false);
+        }
+    }
+
+    /// alsoblock := "also" "{" branch ( newline branch )* "}"
+    ///
+    /// Each branch is an ordinary chain fed by `src`, built straight into the
+    /// same target — so the block's nodes are indistinguishable from
+    /// hand-written fan-out by the time anything downstream looks. Its writes
+    /// land in the program's write list through the usual path in
+    /// `parseOpcall`, which is why the cycle check sees through the block for
+    /// free.
+    fn parseAlsoBlock(self: *Parser, target: *Target, src: Source, also_tok: Token) ParseError!void {
+        const open = self.next();
+        if (open.kind != .lbrace) return self.fail(open, "expected '{{' after 'also'", .{});
+
+        self.block_depth += 1;
+        defer self.block_depth -= 1;
+
+        var branches: usize = 0;
+        while (true) {
+            self.skipNewlines();
+            const t = self.peek();
+            if (t.kind == .rbrace) break;
+            if (t.kind == .eof) return self.fail(also_tok, "unclosed 'also' block — expected '}}'", .{});
+            try self.parseBranch(target, src);
+            branches += 1;
+        }
+        _ = self.next(); // }
+        if (branches == 0) {
+            return self.fail(also_tok, "empty 'also' block — it would pass the value along and do nothing", .{});
+        }
+    }
+
+    /// One branch of an `also` block: a chain whose head is always the
+    /// in-flowing value. The head is therefore an *operator*, never an
+    /// expression — a branch that started from something else would not be
+    /// wired to `src`, so it could never rouse, and a side branch that can
+    /// never run is exactly the silent failure this syntax exists to avoid.
+    fn parseBranch(self: *Parser, target: *Target, src: Source) ParseError!void {
+        const head = self.peek();
+        if (head.kind == .name and std.mem.eql(u8, head.text, "also")) {
+            return self.fail(head, "'also' needs a value to pass along — write it after a '|'", .{});
+        }
+        // Every head that names a *value* rather than an operator — a plane
+        // path, a `use` alias, a local stream, a literal, a record — would
+        // build a branch nothing wires `src` into. It would parse, sit in the
+        // graph, and never once run.
+        const is_expr_head = switch (head.kind) {
+            .name => std.mem.eql(u8, head.text, "plane") or
+                std.mem.eql(u8, head.text, "true") or
+                std.mem.eql(u8, head.text, "false") or
+                self.aliases.contains(head.text) or
+                target.names.contains(head.text),
+            .sym => false,
+            else => true,
+        };
+        if (is_expr_head) {
+            return self.fail(head, "an 'also' block's branches begin with an operator — the in-flowing value is the block's source", .{});
+        }
+        _ = self.next();
+        var current = try self.parseOpcall(target, head, src, false);
+        try self.parseChain(target, &current);
+
+        if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "as")) {
+            return self.fail(self.peek(), "no name escapes an 'also' block — bind the stream before the block, or end the branch with a sink", .{});
+        }
+        const end = self.peek();
+        if (end.kind != .newline and end.kind != .eof and end.kind != .rbrace) {
+            return self.fail(end, "unexpected '{s}' — expected end of statement", .{end.text});
+        }
+
+        // A branch whose last node still holds a value has computed something
+        // nobody will ever read: every sink (`set`, `notify`, and every host
+        // effect verb) declares no outputs, so "ends with a sink" and "ends
+        // with no outputs" are the same sentence. Not fatal — `also { tap x }`
+        // is legal and occasionally meant — so it warns and parses on.
+        if (current.outputs.len > 0) {
+            const writes = if (current.node) |n| self.reg.get(target.nodes.items[n].op).class.writes() else false;
+            if (!writes) try self.warn(head, "also-block discards a value; end with a sink or drop the tail", .{});
+        }
     }
 
     /// expr := opcall | path | literal | record | name
@@ -621,6 +748,9 @@ const Parser = struct {
             .name => {
                 if (std.mem.eql(u8, t.text, "use")) {
                     return self.fail(t, "'use' is only allowed at the top level of a program", .{});
+                }
+                if (std.mem.eql(u8, t.text, "also")) {
+                    return self.fail(t, "'also' needs a value to pass along — write it after a '|'", .{});
                 }
                 if (std.mem.eql(u8, t.text, "true") or std.mem.eql(u8, t.text, "false")) {
                     const lit = try self.parseLiteral(target);
@@ -1065,6 +1195,11 @@ const Parser = struct {
             const t = self.peek();
             switch (t.kind) {
                 .newline, .eof, .pipe, .rparen => return,
+                // A `}` ends the argument list only inside an `also` block —
+                // a record argument consumed its own closer long before we get
+                // here, so an unmatched `}` anywhere else is still the loud
+                // error it always was, one frame later at the statement end.
+                .rbrace => if (self.block_depth > 0) return else try args.append(self.a(), try self.parseArgValue(target)),
                 .name => {
                     if (std.mem.eql(u8, t.text, "as")) return;
                     // kwarg? name ':' value
@@ -1118,6 +1253,12 @@ const Parser = struct {
         var final_text = text;
         if (quotedSpan(text)) |inner| {
             final_text = try self.unescape(inner);
+        } else if (self.block_depth > 0 and std.mem.indexOfScalar(u8, text, '}') != null) {
+            // Same shape as the pipe rule, and checked before it: a tail takes
+            // the rest of the LINE, so a one-line `also { … }` hands it the
+            // block's own closer — and then everything after the block too,
+            // which is where the pipe rule would fire with the later cause.
+            return self.fail(start_tok, "tail port consumed the 'also' block's '}}' — put the tail operator on its own line, or quote the text", .{});
         } else if (std.mem.indexOfScalar(u8, text, '|') != null) {
             return self.fail(start_tok, "tail port consumed a pipe — quote the locator or restructure", .{});
         }

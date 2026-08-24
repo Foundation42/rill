@@ -1499,3 +1499,179 @@ test "occurrence rounds: values still coalesce across the whole tick" {
     try testing.expectEqual(@as(u64, 1), rt.eval_count[tap_id]);
     try testing.expectEqual(@as(f64, 3), types.asNumber(rt.readSlot("programs.p.tap1.out.out").?).?);
 }
+
+// ---------------------------------------------------------------------------
+// §3.14 — `also { … }`: fan-out spelled inline. Every gate below is a parse-
+// time property; the evaluator was not told this syntax exists.
+// ---------------------------------------------------------------------------
+
+/// Parse expecting success, printing the diagnostic if it isn't.
+fn parseOk(gpa: std.mem.Allocator, reg: *rill.Registry, source: []const u8) !rill.Program {
+    var diag = rill.Diag{};
+    return rill.parse(gpa, reg, "p", source, &diag) catch |err| {
+        if (err == error.Parse) std.debug.print("parse: {s} (line {d}, col {d})\n", .{ diag.msg(), diag.line, diag.col });
+        return err;
+    };
+}
+
+test "also: the branch leaves from the very slot the main wire continues from" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | rose_above 0 | also { set plane.log } | tap seen");
+    defer prog.deinit();
+
+    const upstream = prog.node(nodeIdOf(&prog, "rose_above1").?).outputs[0];
+    const set_in = prog.slot(prog.node(nodeIdOf(&prog, "set1").?).inputs[0]);
+    const tap_in = prog.slot(prog.node(nodeIdOf(&prog, "tap1").?).inputs[0]);
+
+    // Identity on the stream is not an op that promises to return its input —
+    // it is the same SlotId on both edges. There is nothing to get wrong.
+    try testing.expectEqual(upstream, set_in.source.wire);
+    try testing.expectEqual(upstream, tap_in.source.wire);
+    try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
+
+    // And the block really is downstream: one slot, two readers.
+    try testing.expectEqual(@as(usize, 2), prog.downstream[upstream].len);
+}
+
+test "also: N occurrences run the block N times" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.alerts | also { set plane.log } | tap attack");
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const enc = try packOne(testing.allocator, @as(i64, 1));
+        defer testing.allocator.free(enc);
+        try rt.feed(.{ .path = "plane.alerts", .value = enc, .kind = .occurrence });
+    }
+    try rt.tick(.{ .frame = 1, .time_ns = 1000 });
+
+    // The side branch is roused exactly as often as the main wire, because
+    // the rounds machinery cannot tell them apart — which is the point.
+    try testing.expectEqual(@as(u64, 3), rt.eval_count[nodeIdOf(&prog, "set1").?]);
+    try testing.expectEqual(@as(u64, 3), rt.eval_count[nodeIdOf(&prog, "tap1").?]);
+    try testing.expectEqual(@as(usize, 3), mock.writes.items.len);
+}
+
+test "also: a multi-statement block is more branches off the same slot" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.hp | rose_above 0
+        \\  | also {
+        \\      set plane.a
+        \\      set plane.b
+        \\    }
+        \\  | tap seen
+    );
+    defer prog.deinit();
+
+    const upstream = prog.node(nodeIdOf(&prog, "rose_above1").?).outputs[0];
+    try testing.expectEqual(upstream, prog.slot(prog.node(nodeIdOf(&prog, "set1").?).inputs[0]).source.wire);
+    try testing.expectEqual(upstream, prog.slot(prog.node(nodeIdOf(&prog, "set2").?).inputs[0]).source.wire);
+    try testing.expectEqual(@as(usize, 3), prog.downstream[upstream].len);
+}
+
+test "also: the block's writes join the write list — the cycle check sees through it" {
+    try expectParseError("plane.x | rose_above 0 | also { set plane.x } | tap t", "cycle");
+}
+
+test "also: no name escapes the block" {
+    try expectParseError("plane.hp | also { mul 2 as doubled } | tap t", "no name escapes");
+    // …including where a branch on its own line makes `as` look terminal.
+    try expectParseError(
+        \\plane.hp | also {
+        \\    mul 2 as doubled
+        \\  } | tap t
+    , "no name escapes");
+}
+
+test "also: a branch that ends holding a value warns, and parses on" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | also { mul 2 } | tap seen");
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.warnings.items.len);
+    try testing.expect(std.mem.indexOf(u8, prog.warnings.items[0].msg, "discards a value") != null);
+    try testing.expectEqual(@as(u32, 1), prog.warnings.items[0].line);
+}
+
+test "also: a branch ending in an effect never warns, value or no value" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    // `set` yields nothing; `emitter mode` is an effect that still hands a
+    // value back. Neither discarded anything — both wrote.
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.hp | also { set plane.a } | tap seen
+        \\plane.hp | also { emitter mode ambient } | tap heard
+    );
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
+}
+
+test "also: the shapes that cannot mean anything are refused" {
+    // A block with no branch passes the value along and does nothing.
+    try expectParseError("plane.hp | also { } | tap t", "empty 'also' block");
+    // Nothing to branch off.
+    try expectParseError("also { set plane.a }", "needs a value to pass along");
+    try expectParseError("plane.hp | also { also { set plane.a } }", "needs a value to pass along");
+    // A branch head that isn't an operator was never wired to the source, so
+    // it could never rouse — the silent failure this syntax exists to avoid.
+    try expectParseError("plane.hp | also { plane.other | set plane.a } | tap t", "begin with an operator");
+    try expectParseError("plane.hp | also { 42 | set plane.a } | tap t", "begin with an operator");
+    try expectParseError("plane.hp | also { set plane.a", "unclosed 'also' block");
+    // `also` is the syntax's word, so it cannot also be a stream's.
+    try expectParseError("plane.hp | mul 2 as also", "reserved");
+}
+
+test "also: a tail operator on one line would eat the closing brace" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    const bad = rill.parse(testing.allocator, &reg, "p", "plane.hp | also { emitter drop em1 /tmp/a.wav } | tap t", &diag);
+    try testing.expectError(error.Parse, bad);
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "own line") != null);
+
+    // The named fix: the tail gets its own line, and takes the rest of it.
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.hp | also {
+        \\    emitter drop em1 /tmp/a.wav
+        \\  } | tap t
+    );
+    defer prog.deinit();
+    try testing.expect(nodeIdOf(&prog, "emitter drop1") != null);
+}
+
+test "also: a record argument still closes its own brace" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | also { latch trigger: plane.tick | set plane.a } | tap t");
+    defer prog.deinit();
+    try testing.expect(nodeIdOf(&prog, "latch1") != null);
+}
+
+test "registry: a reserved word cannot name an operator" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    const noop = struct {
+        fn eval(ctx: *rill.EvalCtx) registry.EvalError!registry.Emit {
+            _ = ctx;
+            return registry.Emit.none;
+        }
+    }.eval;
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "also", .help = "", .eval = noop }));
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "as", .help = "", .eval = noop }));
+    // Whole words only: a two-word host row is checked word by word, because
+    // the parser's two-word lookup never sees the halves on their own.
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "light as", .help = "", .eval = noop }));
+    _ = try reg.register(.{ .name = "alsorun", .help = "", .eval = noop });
+}

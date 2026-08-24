@@ -69,6 +69,20 @@ pub const WriteTarget = struct {
     node: NodeId,
 };
 
+/// A non-fatal parse diagnostic. rill errors loudly by default — a warning is
+/// reserved for text that is *well-formed and probably not what was meant*,
+/// where refusing it would be the parser overruling the author. The first one
+/// is the `also`-block discard (§3.14).
+///
+/// Warnings describe the source, not the graph, so they are deliberately not
+/// serialised: a restored Program carries none, and that is correct — the text
+/// they point into is gone. Hosts print them at mount and move on.
+pub const Warning = struct {
+    line: u32,
+    col: u32,
+    msg: []const u8,
+};
+
 /// A parsed program: pure structure, no live values (those belong to the
 /// Runtime that mounts it). Everything inside is owned by one arena; deinit
 /// is a single arena teardown.
@@ -82,6 +96,8 @@ pub const Program = struct {
     names: std.StringArrayHashMapUnmanaged(SlotId) = .empty,
     subs: std.ArrayListUnmanaged(Sub) = .empty,
     writes: std.ArrayListUnmanaged(WriteTarget) = .empty,
+    /// Non-fatal parse diagnostics, in source order. Arena-owned like the rest.
+    warnings: std.ArrayListUnmanaged(Warning) = .empty,
     /// Downstream adjacency, built by `finalize`: for each slot, the input
     /// slots its value propagates to (non-empty only for output slots).
     downstream: []const []const SlotId = &.{},

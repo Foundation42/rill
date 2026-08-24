@@ -187,7 +187,22 @@ pub const OpDef = struct {
 
 pub const OpId = u32;
 
-pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort } || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, ReservedName } || std.mem.Allocator.Error;
+
+/// Words the *syntax* claims, which therefore may not name an operator or an
+/// `as`/`use` binding. The list lives here because the registry owns the
+/// operator namespace, and the only useful thing to say about a reserved word
+/// is that the namespace may not contain it: the parser recognises these
+/// before it ever asks `find`, so a host row named `also` or `as` would
+/// register cleanly and then be permanently unreachable. Registration is the
+/// last moment that can be said out loud.
+pub fn isReservedWord(s: []const u8) bool {
+    const words = [_][]const u8{ "plane", "use", "def", "as", "also", "true", "false" };
+    for (words) |w| {
+        if (std.mem.eql(u8, s, w)) return true;
+    }
+    return false;
+}
 
 /// The operator table. Owns nothing but its own arrays: `OpDef` port/static
 /// slices are borrowed from the registrant (comptime tables for built-ins;
@@ -210,6 +225,12 @@ pub const Registry = struct {
 
     pub fn register(self: *Registry, def: OpDef) RegistryError!OpId {
         if (self.by_name.contains(def.name)) return error.DuplicateOp;
+        // A two-word host op (`boolean subtract`) is reserved only if a whole
+        // word of it is — the parser's two-word lookup never sees the halves.
+        var words = std.mem.splitScalar(u8, def.name, ' ');
+        while (words.next()) |w| {
+            if (isReservedWord(w)) return error.ReservedName;
+        }
         // Tails are a closed grammar (§3.11): last input only, string-typed,
         // never variadic — and every port before the tail is required, because
         // "fixed prefix, then rest of line" has no room for maybe-there args.
