@@ -253,7 +253,7 @@ command/completion shape (precedent: the camera pose queue):
 ```
 set gate/drawbridge.target 1        # starts the winch
 gate/drawbridge.position            # value path, animates 0→1
-gate/drawbridge.raised              # occurrence on completion
+gate/drawbridge.arrived             # occurrence on settle, carrying WHERE
 ```
 
 The narrative's best beat — bridge up *just as* the horsemen arrive — is
@@ -261,10 +261,37 @@ only expressible if actions take time and completion is observable. A
 subsequent contradictory target mid-travel reverses honestly from the
 current position (no snap).
 
-**Gate R2:** target set at tick T; position strictly monotonic over the
-travel time; exactly one `raised` occurrence at T+travel; a mid-travel
-counter-order produces no `raised`, one `lowered`, and a position history
-with a single turning point. Bit-identical under replay.
+**Ruling (Chris, 2026-08-24) — one occurrence, `arrived`, carrying where it
+arrived.** The draft above said `raised`, and a companion `lowered` was the
+obvious next line; both are wrong, and the tell is the half-raised bridge.
+`set drawbridge.target 0.5` is legal, the actuator settles at 0.5, and
+neither endpoint name has anywhere to fire. Raised and lowered are not two
+event kinds — they are ONE event, completion, with two of its possible
+payloads baked into the channel names, which smuggles in an assumption the
+actuator does not have. (Sighting and lost stay two mailboxes for the
+opposite reason: appearing and disappearing are genuinely two transitions,
+with different watchers and different directions.)
+
+So: position publishes continuously as a value; `arrived` fires once on
+settle with the reached target in the record. *"That means the bridge is
+down"* is the reading rill's interpretation — which is R1's doctrine
+transferred whole: **actuators report arrival; rills form beliefs about
+what arrival means.** A retarget mid-travel emits nothing, because the old
+journey never completed; it was superseded, and the new `set` is on the
+transcript, which is the record of that.
+
+**Gate R2** (rewritten with the ruling, BEFORE building — the substance is
+unchanged or stronger, only the vocabulary moved): target set at tick T;
+position strictly monotonic over the travel time; exactly one `arrived`
+occurrence, dated T+travel and carrying the reached target; a mid-travel
+counter-order produces exactly one `arrived` carrying the NEW target, and a
+position history with a single turning point. Bit-identical under replay.
+
+Pre-registration is only worth anything if moving a gate is visible, so:
+this rewrite is recorded, dated, and reasoned, and it happened before a
+line of A2 existed. What it does NOT do is weaken a clause — "exactly one
+completion" survived, the turning point survived, and the new wording adds
+a payload assertion the old one could not make.
 
 ### R3 — Signal vocabulary is a record convention, not machinery
 
