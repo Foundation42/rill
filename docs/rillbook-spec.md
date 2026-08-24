@@ -32,12 +32,22 @@ per cell:
 
 - **Run (query)** — dispatch as today's one-shot: mount → tick 0 → unmount.
   Reply renders in the cell's result pane. Ctrl/Cmd-Enter.
-- **Mount (persistent)** — the cell's toggle. Mounting sends
-  `rill mount <cellname> <source>`; the cell border lights while mounted.
-  Re-running a mounted cell = unmount → remount with the edited source (one
-  logged pair, so undo of the re-run restores the prior program). Unmount from
-  the same toggle. The cell IS the mounted program's source of truth;
-  `rill list` and lit cells must agree (assert in tests, not by convention).
+- **Mount (persistent)** — the cell's toggle. Mounting and re-running both send
+  `rill remount <cellname> <source>` (landed 2026-08-24): the source text rides
+  the line verbatim, newlines included, so a multi-statement cell is sayable in
+  one command; a name that is not yet mounted simply mounts. The cell border
+  lights while mounted. A re-run is **one adjacent pair in the log** — the
+  unmount and the mount happen in one main-thread step at the same tick, with
+  nothing logged between them, which is what makes the re-run recognisable as a
+  single act. Unmount from the same toggle. The cell IS the mounted program's
+  source of truth; `rill list` and lit cells must agree (assert in tests, not by
+  convention).
+
+  **Phase-E dependent (do not build expecting it):** *undo* of a re-run
+  restoring the prior program. rill mount/unmount events are not undoable at
+  all today — the transcript's two views are Phase E work. Adjacency in the log
+  is what phase 2 delivers; undoing the pair as a unit waits for the phase that
+  makes rill events undoable.
 
 Cell names: auto (`cell-1`, …) until the user names them; the name is the mount
 name, namespaced per the agents-doc ruling (`user/<name>` from the browser).
@@ -102,7 +112,8 @@ plane, which is the point — no hidden notebook-local bindings).
 
 - N1: a two-statement program (the `window 2s | stats` demo) is composed,
   mounted, edited, re-mounted from one cell; `rill list` agrees with lit cells
-  at every step.
+  at every step, and each re-run leaves exactly one adjacent unmount+mount pair
+  at one tick in the log (the engine-side half of this is gated already).
 - N2: bare-expression cell echoes its value; the same line via the quick bar
   echoes identically (one dispatcher, proven).
 - N3: a parse error highlights the offending line/column in the cell; the
