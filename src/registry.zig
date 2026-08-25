@@ -70,7 +70,14 @@ pub const Port = struct {
 /// cycle check sees a set-subscription collide while `joined`/`count`
 /// subscriptions stay legitimate siblings (member keys wear `@`, service
 /// leaves are bare words — disjoint by construction).
-pub const StaticKind = enum { path, word, literal, channel, subject, condition };
+/// `shape` is a struple-encoded SHAPE LITERAL (`{id: string, distance: number}`),
+/// built by the parser and stored whole: `{exact: bool, shape: <s>}`, where a
+/// shape is a type-word string (`number`/`boolean`/`string`/`any`), a
+/// one-element array `[<s>]` for an array-of, or a map whose keys are field
+/// names — an optional field's key wears the `?` it was written with. Encoded
+/// at parse so the check never re-parses text, and a struple so the shape is
+/// inspectable through the same protocol as every other value.
+pub const StaticKind = enum { path, word, literal, channel, subject, condition, shape };
 
 pub const StaticDecl = struct {
     name: []const u8,
@@ -92,6 +99,7 @@ pub const StaticVal = union(StaticKind) {
     channel: []const u8, // `$`-sigil field-channel name, sigil included
     subject: []const u8, // `@`-sigil entity name, sigil included
     condition: []const u8, // `#`-sigil tag name, sigil included
+    shape: []const u8, // struple-encoded shape literal (see StaticKind)
 };
 
 /// Which outputs emitted this tick. Bit i = output port i.
@@ -366,6 +374,18 @@ pub const OpDef = struct {
     /// May re-arm itself and evaluate with no input change — see `ticks`
     /// above. Default false; the audit in tests.zig is exhaustive both ways.
     ticks: bool = false,
+    /// A refusal from this operator **during mount's tick 0 fails the mount**
+    /// rather than merely killing its wave. One customer, and it is the whole
+    /// reason the field exists: `expect` promises to assert AT MOUNT and never
+    /// to degrade into a runtime check (`rill-tier2-draft.md` §2.13), and an
+    /// assertion that only logs is not an assertion. Structural rather than
+    /// disciplinary — the registry carries the answer and `evalNode` derives
+    /// the behaviour, so an op cannot acquire mount-fatality by being special-
+    /// cased somewhere in the runtime. Default false; audited exhaustively.
+    ///
+    /// It says *fails the mount*, not *fails the tick*: after mount, this
+    /// operator's refusals are ordinary refusals like everyone else's.
+    fails_mount: bool = false,
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,

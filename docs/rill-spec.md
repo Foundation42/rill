@@ -207,6 +207,43 @@ refused because `{` also opens a fan-out block, while `[` opens nothing else.
 
 `[0, 2, 0]` does not coerce to a position. One thing, one spelling.
 
+### 3.6b Shape literals and contracts (v0.3, tier 2 beat 2b, 2026-08-25)
+
+```
+plane.sensors.gate.nearest | match {id: string, distance: number}
+plane.render.grade | expect {exposure: number, contrast: number} exact
+plane.window.samples | match [number]
+```
+
+```
+shape       := stype ["exact"]
+stype       := typeword | "{" sfield (("," | NEWLINE) sfield)* "}" | "[" stype "]"
+sfield      := fieldname ["?"] ":" stype
+typeword    := "number" | "boolean" | "string" | "any"
+```
+
+A shape is **not** a record literal and is not parsed as one — `{id: string}` as a record
+would bind an unresolvable name `string` to a field. The operator's static declaration
+(`StaticKind.shape`) is what dispatches, the same way a `tail` port does; there is no
+lookahead guess. The parser encodes the shape to a struple value at parse time
+(`{exact: bool, shape: <s>}`, where `<s>` is a type-word string, a one-element array for
+an array-of, or a map whose keys are field names with the `?` they were written with), so
+the check never re-parses text and the shape is inspectable through the same protocol as
+every other value.
+
+`?` is the `raw` token it has always been. A shape is the only place it means anything, so
+it costs no token kind.
+
+**`exact` closes every record in the shape**, not only the outermost: the word closes THE
+SHAPE, and a closed outside with open insides is a promise nobody asked for.
+
+**Two promises, and neither degrades.** `match` checks every value; a mismatch kills that
+wave and counts against the error budget. `expect` checks ONCE, at mount, and a mismatch
+**refuses the mount** — see `OpDef.fails_mount` (§6). After mount `expect` is not looking:
+a later violation passes through, which is exactly what "costs nothing at runtime" buys.
+`expect` on a path with no value at mount refuses and names `match` as the alternative;
+it never defers.
+
 ### 3.7 Plane paths are subscriptions (everywhere)
 
 Any `plane.…` path in any argument position is a live reference. There is no special subscribe
@@ -813,6 +850,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
 | record | record construction `{…}`, projection `.field`, `merge` |
 | array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
+| contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |
 | util | `const`, `tap` (debug passthrough → log bus) |
@@ -838,6 +876,16 @@ computing a wrong value. The flag says **may tick**, never **is ticking**: the h
 ticks-every-frame badge from it and shows the node's live eval counter beside it as the proof.
 A structural gate also refuses `ticks` on a `pure` op — an operator that produces a new answer
 from no new input is exactly what `pure` says it cannot do.
+
+**Mount-fatal refusals (added 2026-08-25, tier 2 beat 2b).** `OpDef.fails_mount` says a
+refusal from this operator *during mount's tick 0* unwinds the mount (`MountError.Refused`)
+instead of merely killing its wave. One declarer, `expect`, and it exists because an
+assertion that only logs is not an assertion — §3.6b's promise is that `expect` asserts at
+mount and never degrades. It is a registry field rather than a special case in the runtime,
+so mount-fatality cannot be acquired by being hard-coded somewhere; `evalNode` derives the
+behaviour and the audit is exhaustive both ways. The words reach `error_fn` *before* the
+mount unwinds — the ack carries the message, the error carries the verdict. After mount,
+a `fails_mount` operator's refusals are ordinary refusals.
 
 **Threshold boundaries (corrected 2026-08-24).** `dropped_below t` fires crossing from ≥t to
 <t; `rose_above t` fires crossing from ≤t to >t. Each is strict on the comparison it names,

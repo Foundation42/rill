@@ -586,8 +586,8 @@ besides.
 | pick an exposure by time-of-day band | ~~`select` chain~~ **1 ✓** | 1 | ~~array literal, `choose`~~ **landed, beat 2a** |
 | nearest hostile from the contact list | invented sensor field | 1 | `sort by`, `first` (beat 3) |
 | top three threats | can't | 1 | `sort by`, `take` (beat 3) |
-| refuse a malformed contact list at the boundary | silent | 1 | `match` (beat 2) |
-| pin the shape a program reads from the plane | silent | 1 | `expect` (beat 2) |
+| refuse a malformed contact list at the boundary | ~~silent~~ **1 ✓** | 1 | ~~`match`~~ **landed, beat 2b** |
+| pin the shape a program reads from the plane | ~~silent~~ **1 ✓** | 1 | ~~`expect`~~ **landed, beat 2b** |
 
 The list is a rillbook page — the idioms book, `docs/idioms.rillbook`,
 gated by `zig build test` — one cell per ask, every cell mounted against
@@ -597,6 +597,12 @@ missing support and the list says where.
 **Beat 1a's score: eight rows cleared, one row added and cleared, one
 row re-scored honestly downward.** The rows that moved from "can't" to
 one line are the register family's whole argument.
+
+**Beat 2b's score: both contract rows cleared.** They were the two rows
+whose "today" column read *silent* — a shape mismatch discovered
+downstream, or not at all. The `expect` row is cleared under the
+mount-time-value reading recorded in §7 item 6, not under the
+declared-schema reading the section was written from.
 
 **Beat 2a's score: one row cleared with its correctness gated, one row
 half-cleared and said so.** The time-of-day row is one line *and* its
@@ -758,12 +764,46 @@ the tags beat.
      already scores ✓ with `sample`, so `rate` is cut for having no row,
      which is rule 1 and needs no `len`. The prose is corrected below.
 
-6. **Beat 2b — the contracts.** `expect`/`match` and the shape literal,
-   reusing beat 1b's type-word vocabulary. Split from 2a for the reason
-   1a/1b split: the array half is a grammar change with no open
-   questions, and `expect`'s mount-time promise has one (§2.13 note).
-   The `take` in this beat's original line was a slip carried from
-   §2.11 — it is a beat-3 word and is scored there.
+6. **Beat 2b — the contracts. ✅ BUILT 2026-08-25.** `expect`/`match` and
+   the shape literal, reusing beat 1b's type-word vocabulary. Split from
+   2a for the reason 1a/1b split: the array half is a grammar change with
+   no open questions, and `expect`'s mount-time promise had one. The
+   `take` in this beat's original line was a slip carried from §2.11 — it
+   is a beat-3 word and is scored there.
+
+   **The hole this beat found by reading, and what was built instead.**
+   §2.13 says `expect` checks at mount because "the upstream shape must
+   be **provable from declared schema**". *rill has no schema surface.*
+   The `Plane` interface is subscribe / read / write / cast / tag — there
+   is nowhere to ask what shape a path declares, and rill's own static
+   type information is port-level (`number` vs `record`), which after a
+   `plane.…` path is `any`. Read literally, `expect` would refuse every
+   mount and say "use `match`", which makes it a word that does nothing.
+
+   What was built: **`expect` checks the value that is there AT MOUNT,
+   once, and never again.** The ledger already guarantees that value
+   exists — "mount runs tick 0; everything a program touches in its first
+   evaluation must exist before mount" — so it is the strongest evidence
+   rill has, and it is available by construction rather than by a new
+   host dependency. Both of §2.13's promises survive exactly: it costs
+   nothing at runtime (one check, at mount), and it never degrades into a
+   runtime check (it stops looking, and a gate asserts that a later
+   violation passes through). `expect` on a path with nothing at mount
+   refuses **and names `match`**, which is the doc's own escape hatch,
+   message preserved.
+
+   **A schema surface on the `Plane` is recorded as a host dependency,
+   not built** (brief §7: if tier 2 needs something from the host, record
+   it and defer). If Matryoshka ever publishes declared shapes, `expect`
+   gains a *stronger* mount-time proof without changing what it promises.
+
+   **`OpDef.fails_mount` is new registry surface, and deliberately so.**
+   "Refuses the mount" is ratified (§2.13, brief §3), and an op's eval
+   error is otherwise swallowed into an `ErrorEvent` — an assertion that
+   only logs is not an assertion. Rather than special-case `expect` in
+   the runtime, the registry carries the answer and `evalNode` derives
+   the behaviour, matching `class`/`ticks`/`routes`. Audited exhaustively
+   both ways; one declarer.
 7. **Beat 3 — over arrays and records.** `map`/`reduce`/`sort`/`take`/
    `keep`, `without`/`transpose`/`shuffle`, `along` with inline knots.
    The names are already settled (§2.11, §2.12) — this beat builds them.

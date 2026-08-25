@@ -465,6 +465,78 @@ so this beat is the *literal* and its indexing, nothing more.
   reverting the bracket tokens (10), and indexing the element stream
   instead of the container body (1).
 
+## Tier 2, beat 2b — contracts: `expect` and `match` (2026-08-25)
+
+Built: one shape literal, two operators, and one new registry field.
+
+- **A shape is not a record literal, and is not parsed as one.**
+  `{id: string}` down `parseArgValue` builds a record node whose `string`
+  field is an unresolvable name. The dispatch is the operator's
+  declaration — a new `StaticKind.shape`, parsed straight from the tokens
+  before the arguments, the same way a `tail` port is dispatched by its
+  port declaration. No lookahead guess, so `braceOpensRecord`'s heuristic
+  never has to grow a second job.
+
+- **The shape is encoded at parse, as a struple.** `{exact: bool, shape:
+  <s>}`, where `<s>` is a type-word string, a one-element array for an
+  array-of, or a map whose keys are field names carrying the `?` they were
+  written with. Three consequences worth having: the check never
+  re-parses text, the shape rides the dump like any other static (kind 6,
+  as BYTES not text — a gate round-trips a nested `exact` shape and
+  re-refuses with it), and the shape is inspectable through the same
+  protocol as every other value.
+
+- **`?` costs no token kind.** It was already a `raw` token, and a shape
+  is the only place it means anything.
+
+- **Type words are beat 1b's vocabulary, not a second one.** `number`,
+  `boolean`, `string`, plus `any`. `describeShape` renders a shape in the
+  same spelling `describe` renders a value, so a refusal's two sides read
+  as one language: `match: '.pos.z' is string, not number`. `any` was
+  added because `?` says "absent is fine" and there was otherwise no way
+  to say "present, kind unconstrained".
+
+- **`exact` is consumed by the shape's own grammar**, not by an optional
+  positional static — optionals are keyword-only and that rule stands. It
+  closes every record in the shape, recursively: the word closes THE
+  SHAPE, and a closed outside with open insides is a promise nobody asked
+  for.
+
+- **The hole: §2.13's `expect` depends on a schema surface rill does not
+  have.** "The upstream shape must be provable from declared schema" —
+  but `Plane` is subscribe/read/write/cast/tag, and rill's own static
+  types are port-level (`any` after any `plane.…` path). Read literally,
+  `expect` refuses every mount and says "use `match`", i.e. does nothing.
+  What was built instead: **`expect` checks the value present AT MOUNT,
+  once, and never again.** The ledger already guarantees that value exists
+  ("mount runs tick 0"), so it is the strongest evidence available and
+  needs no new host dependency. Both promises survive exactly — costs
+  nothing at runtime, never degrades into a runtime check — and a gate
+  asserts the second one by feeding a violating value *after* mount and
+  requiring it through untouched. A schema surface on the `Plane` is
+  recorded as a host dependency, not built.
+
+- **`OpDef.fails_mount` — new registry surface, one declarer.** An op's
+  eval error is otherwise reported to `error_fn` and swallowed; the wave
+  dies and the program lives. `expect`'s ratified promise is that the
+  MOUNT is refused, and an assertion that only logs is not an assertion.
+  Rather than special-case `expect` inside `evalNode`, the registry
+  carries the answer and the runtime derives the behaviour — the same
+  structural rule `class`, `ticks` and `routes` follow. `Runtime.mounting`
+  is set only around mount's tick 0, so the field says *fails the mount*
+  and not *fails the tick*: afterwards `expect` refuses like anyone else.
+  `MountError`/`TickError` gain `Refused`. The ack fires **before** the
+  mount unwinds — ack first, then free, again — so the host has the words
+  and the node while they are still in hand.
+
+- **Gates: 16 new (194 → 210), Debug and ReleaseFast. Mutations: 9/9
+  bitten** — `expect` checking every value, `exact` stopping at the
+  outermost record, `?` ignored, `exact` ignored, `fails_mount` turned
+  off, a missing required field passing, an array shape checking only
+  element 0, the shape dumped as text, and `any` refusing. The
+  fails_mount audit is exhaustive both ways beside the class and ticks
+  audits.
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no

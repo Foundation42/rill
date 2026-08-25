@@ -90,6 +90,13 @@ pub fn dump(rt: *const eval.Runtime, gpa: std.mem.Allocator) ![]u8 {
                         try one.appendInt(5);
                         try one.appendString(v);
                     },
+                    // A shape rides as BYTES, like a literal: it is already a
+                    // struple value, and re-encoding it as a string would put
+                    // an escape layer between the dump and the checker.
+                    .shape => |v| {
+                        try one.appendInt(6);
+                        try one.appendBytes(v);
+                    },
                 }
                 try st.appendArray(one.bytes());
             }
@@ -247,6 +254,7 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
                 3 => .{ .channel = try asStrIn(a, payload) },
                 4 => .{ .subject = try asStrIn(a, payload) },
                 5 => .{ .condition = try asStrIn(a, payload) },
+                6 => .{ .shape = try asBytesIn(a, payload) },
                 else => return error.Malformed,
             });
         }

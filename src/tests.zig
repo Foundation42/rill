@@ -2082,6 +2082,8 @@ test "every core op declares its class deliberately" {
         .{ .name = "<=", .class = .pure },
         .{ .name = ">", .class = .pure },
         .{ .name = ">=", .class = .pure },
+        .{ .name = "expect", .class = .reads }, // op-internal state: checked once, at mount
+        .{ .name = "match", .class = .pure },
         .{ .name = "record", .class = .pure },
         .{ .name = "array", .class = .pure },
         .{ .name = "nth", .class = .pure },
@@ -2742,7 +2744,11 @@ test "the manuals parse: every printed example compiles" {
     // the register line to the agent manual's temporal row.
     // 32 → 33 (beat 1b): the human manual's §6b gained the broadcast trio.
     // 33 → 34 (beat 2a): the human manual gained §6c (arrays).
-    try testing.expectEqual(@as(usize, 34), human);
+    // 34 → 35 (beat 2b): the human manual gained §6d (contracts). The shape
+    // literal block in that section is deliberately NOT tagged ```rill — a
+    // shape is not a program, and tagging it would ask the parser to mount a
+    // type.
+    try testing.expectEqual(@as(usize, 35), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -2818,6 +2824,7 @@ fn staticFiller(kind: registry.StaticKind) []const u8 {
         .channel => "$c",
         .subject => "@e",
         .condition => "#t",
+        .shape => "{a: number}",
     };
 }
 
@@ -2916,6 +2923,23 @@ test "every operator's refusal path runs, and its message formats" {
         try mock.putValue("plane.bad", "not-a-number");
         Refusal.reset();
         var rt = rill.Runtime.mount(gpa, &prog, mock.asPlane(), .{ .error_fn = Refusal.on }) catch |err| {
+            // `Refused` is a `fails_mount` op turning the mount down at tick 0
+            // (`expect`). That IS its refusal path, and the ack fired before
+            // the mount unwound — so the message is still checkable, and it
+            // gets checked exactly like every other one.
+            if (err == error.Refused) {
+                if (Refusal.hits == 0) {
+                    std.debug.print("'{s}': failed the mount without an ack — the words must reach error_fn first\n", .{def.name});
+                    return error.TestUnexpectedResult;
+                }
+                try formatsCleanly(&.{ Refusal.opName(), Refusal.text(), def.name });
+                if (std.mem.indexOf(u8, Refusal.text(), def.name) == null) {
+                    std.debug.print("'{s}': mount refusal \"{s}\" does not name the operator\n", .{ def.name, Refusal.text() });
+                    return error.TestUnexpectedResult;
+                }
+                covered += 1;
+                continue;
+            }
             if (err != error.Cycle) return err;
             covered += 1;
             continue;
@@ -4018,8 +4042,11 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // 25 → 28, 60 → 66 (beat 2a): the time-of-day row's after-cell, the
     // three-points row's PARTIAL cell (the literal lands, `along` does not),
     // `nth` over a window, and the arrays page.
-    try testing.expectEqual(@as(usize, 28), rill_cells);
-    try testing.expectEqual(@as(usize, 66), total);
+    // 28 → 30, 66 → 70 (beat 2b): the two contract rows' after-cells — one
+    // `match`, one `expect`, because the two promises are the point — and the
+    // shapes page.
+    try testing.expectEqual(@as(usize, 30), rill_cells);
+    try testing.expectEqual(@as(usize, 70), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -4628,4 +4655,290 @@ test "beat 2a: the time-of-day row is CORRECT, not merely one line" {
             return error.TestUnexpectedResult;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Beat 2b — contracts: `expect` and `match`, one shape literal, two promises.
+//
+// The pair only earns two words if the two promises stay different, so most
+// of what follows is about the DIFFERENCE: `expect` fails the mount and then
+// costs nothing; `match` costs on every value and never becomes a guarantee.
+// ---------------------------------------------------------------------------
+
+// `OpDef.fails_mount` audit — exhaustive both ways, like `class` and `ticks`.
+// A refusal that unwinds the mount is a much bigger promise than a refusal
+// that kills a wave, and it must never be acquired by inheriting a default.
+test "every op that can fail a mount says so, and no other does" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    const fatal = [_][]const u8{"expect"};
+    for (fatal) |name| {
+        const id = reg.find(name) orelse {
+            std.debug.print("'{s}' is gone — update the fails_mount audit\n", .{name});
+            return error.TestUnexpectedResult;
+        };
+        if (!reg.get(id).fails_mount) {
+            std.debug.print("'{s}': the audit says it fails the mount and it does not declare it\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+    }
+    for (reg.ops.items) |def| {
+        if (!def.fails_mount) continue;
+        const listed = for (fatal) |n| {
+            if (std.mem.eql(u8, n, def.name)) break true;
+        } else false;
+        if (!listed) {
+            std.debug.print("'{s}' declares fails_mount and is not in the audit\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "beat 2b: `match` refuses a malformed contact list, naming the field and both sides" {
+    // §4's "refuse a malformed contact list at the boundary", which was
+    // *silent* — a shape mismatch was discovered downstream, or not at all.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat
+    , .{.{ "plane.sensors.gate.nearest", .{ .id = "raider-3", .distance = "close" } }});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "match", "'.distance'", "string", "not number" });
+    try testing.expect(fx.rt.readSlot("programs.p.match1.out.out") == null);
+}
+
+test "beat 2b: `match` passes what fits, unchanged" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat
+    , .{.{ "plane.sensors.gate.nearest", .{ .id = "raider-3", .distance = @as(f64, 8) } }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    const out = fx.rt.readSlot("programs.p.match1.out.out") orelse return error.TestUnexpectedResult;
+    const fields = try recordFields(testing.allocator, out);
+    defer freeFields(testing.allocator, fields);
+    try testing.expectEqual(@as(usize, 2), fields.len);
+}
+
+test "beat 2b: shapes are OPEN by default and `exact` closes them" {
+    // "A rather than B": the same value against the same shape, differing only
+    // in the word `exact` — so a shape that quietly closed itself, or an
+    // `exact` that did nothing, both fail here.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | match {id: string} | set plane.open_out
+    , .{.{ "plane.c", .{ .id = "x", .extra = @as(f64, 1) } }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try testing.expect(fx.rt.readSlot("programs.p.match1.out.out") != null);
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\plane.c | match {id: string} exact | set plane.exact_out
+    , .{.{ "plane.c", .{ .id = "x", .extra = @as(f64, 1) } }});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "match", "extra", "not in the shape", "exact" });
+    try testing.expect(fx2.rt.readSlot("programs.p.match1.out.out") == null);
+}
+
+test "beat 2b: `exact` closes every record in the shape, not only the outermost" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | match {pos: {x: number, y: number}} exact | set plane.out
+    , .{.{ "plane.c", .{ .pos = .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = @as(f64, 3) } } }});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "match", ".pos.z", "not in the shape" });
+}
+
+test "beat 2b: shapes nest, and the refusal names the path it took" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | match {pos: {x: number, y: number, z: number}, kind: string} | set plane.out
+    , .{.{ "plane.c", .{ .kind = "raider", .pos = .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = "deep" } } }});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "match", "'.pos.z'", "string", "not number" });
+}
+
+test "beat 2b: `[number]` checks every element, and names the index" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[1, 2, 3] | match [number] | set plane.good
+    , .{});
+    defer fx.deinit();
+    try testing.expect(fx.rt.readSlot("programs.p.match1.out.out") != null);
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\[1, "two", 3] | match [number] | set plane.bad
+    , .{});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "match", "'[1]'", "string", "not number" });
+}
+
+test "beat 2b: a missing field is named, and `?` makes it optional" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | match {id: string, distance: number} | set plane.out
+    , .{.{ "plane.c", .{ .id = "x" } }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "match", "'.distance'", "missing" });
+
+    // Same value, same shape, one `?` — and it passes. That is the assertion:
+    // `?` must be the only difference.
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\plane.c | match {id: string, distance?: number} | set plane.out
+    , .{.{ "plane.c", .{ .id = "x" } }});
+    defer fx2.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try testing.expect(fx2.rt.readSlot("programs.p.match1.out.out") != null);
+}
+
+test "beat 2b: `any` requires presence and nothing else" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | match {id: any} | set plane.out
+    , .{.{ "plane.c", .{ .id = @as(f64, 7) } }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\plane.c | match {id: any} | set plane.out
+    , .{.{ "plane.c", .{ .other = @as(f64, 7) } }});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "match", "'.id'", "missing" });
+}
+
+test "beat 2b: `expect` REFUSES THE MOUNT — the mount returns an error, not a log line" {
+    // The whole difference between the two words. A `match` mismatch kills a
+    // wave and the program stays up; an `expect` mismatch means the program
+    // never mounts at all.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.c", .{ .id = @as(f64, 3) });
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.c | expect {id: string} | set plane.out
+    , &diag);
+    defer prog.deinit();
+
+    Refusal.reset();
+    const result = rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .error_fn = Refusal.on });
+    try testing.expectError(error.Refused, result);
+    // …and the words reached the ack BEFORE the mount unwound, so the host
+    // can say which node and why. Ack first, then free.
+    try expectRefusalNames(&.{ "expect", "'.id'", "number", "not string" });
+}
+
+test "beat 2b: `expect` mounts what fits, and passes it through" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | expect {id: string, distance: number} | set plane.out
+    , .{.{ "plane.c", .{ .id = "raider-3", .distance = @as(f64, 8) } }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try testing.expect(fx.rt.readSlot("programs.p.expect1.out.out") != null);
+}
+
+test "beat 2b: `expect` NEVER falls back to a runtime check" {
+    // The promise that makes `expect` free: it asserts once, at mount, and
+    // after that it costs nothing — which means a value that arrives later and
+    // violates the shape passes straight through. That is not a bug, it is the
+    // contract, and it is why `match` exists as a separate word.
+    //
+    // "A rather than B": this gate runs where the two words DISAGREE — the
+    // mount-time value fits and the later one does not — and asserts the
+    // `expect` reading. A fallback-to-runtime implementation cannot pass it.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | expect {id: string} | set plane.out
+    , .{.{ "plane.c", .{ .id = "raider-3" } }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+
+    // A bare number where the shape says record — as loud a violation as
+    // there is, and `expect` lets it through because it is no longer looking.
+    try feedValue(&fx.rt, testing.allocator, "plane.c", @as(f64, 3));
+    try fx.rt.tick(.{});
+
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    const out = fx.rt.readSlot("programs.p.expect1.out.out") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(f64, 3), types.asNumber(out).?);
+}
+
+test "beat 2b: `expect` on a path with nothing at mount refuses, and says to use `match`" {
+    // The case the doc cares about most: what cannot be proven at mount is not
+    // quietly deferred. The refusal names the other word, because a refusal
+    // that only says no is half an error message.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.absent | expect {id: string} | set plane.out
+    , &diag);
+    defer prog.deinit();
+
+    Refusal.reset();
+    const result = rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .error_fn = Refusal.on });
+    try testing.expectError(error.Refused, result);
+    try expectRefusalNames(&.{ "expect", "nothing here at mount", "match" });
+}
+
+test "beat 2b: a `match` refusal after mount does NOT bring the program down" {
+    // The mirror of the gate above, and the reason `fails_mount` is a per-op
+    // declaration rather than a runtime mode.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.c | match {id: string} | set plane.out
+    , .{.{ "plane.c", .{ .id = "ok" } }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.c", @as(f64, 3));
+    try fx.rt.tick(.{}); // does not error: the wave dies, the program lives
+    try expectRefusalNames(&.{ "match", "the value", "number", "not record{id}" });
+}
+
+test "beat 2b: the shape literal refuses what it cannot mean" {
+    try expectParseError("plane.c | match {id: str}", "not a type");
+    try expectParseError("plane.c | match {}", "empty shape");
+    try expectParseError("plane.c | match {id string}", "expected ':'");
+    try expectParseError("plane.c | match id", "expects a shape");
+    try expectParseError("plane.c | match [number", "expected ']'");
+}
+
+test "beat 2b: a shape survives dump and restore" {
+    // The shape is a static, and statics ride the dump. It is stored as BYTES
+    // (kind 6), not as text, so this is where a re-encoding layer would show.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.c | match {id: string, pos: {x: number}} exact | set plane.out
+    , .{.{ "plane.c", .{ .id = "x", .pos = .{ .x = @as(f64, 1) } } }});
+    defer fx.deinit();
+
+    const dumped = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(dumped);
+    var prog2 = try rill.loadProgram(testing.allocator, &fx.reg, dumped);
+    defer prog2.deinit();
+
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    // The reloaded shape must still refuse the extra field: if `exact` or the
+    // nesting had been lost in the round trip, this value would sail through.
+    try mock2.putValue("plane.c", .{ .id = "x", .pos = .{ .x = @as(f64, 1) }, .extra = @as(f64, 2) });
+    Refusal.reset();
+    var rt2 = try rill.Runtime.mount(testing.allocator, &prog2, mock2.asPlane(), .{ .error_fn = Refusal.on });
+    defer rt2.deinit();
+    try expectRefusalNames(&.{ "match", "extra", "not in the shape" });
 }

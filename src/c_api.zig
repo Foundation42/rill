@@ -358,7 +358,8 @@ export fn rill_program_node_name(h: ?*anyopaque, i: usize, out_len: *usize) call
 /// "is this channel declared?" depends on the host's own tables, not rill's —
 /// so the seam hands over the declarations and nothing more.
 ///
-/// Kinds: 0 path · 1 word · 2 literal · 3 channel · 4 subject · 5 condition.
+/// Kinds: 0 path · 1 word · 2 literal · 3 channel · 4 subject · 5 condition ·
+/// 6 shape (struple-encoded, not text).
 export fn rill_program_static_count(h: ?*anyopaque) callconv(.c) usize {
     const box: *ProgramBox = @ptrCast(@alignCast(h orelse return 0));
     var n: usize = 0;
@@ -386,6 +387,7 @@ export fn rill_program_static_at(
                     .channel => |x| x,
                     .subject => |x| x,
                     .condition => |x| x,
+                    .shape => |x| x,
                 };
                 out_kind.* = switch (sv) {
                     .path => 0,
@@ -394,6 +396,7 @@ export fn rill_program_static_at(
                     .channel => 3,
                     .subject => 4,
                     .condition => 5,
+                    .shape => 6,
                 };
                 out_val.* = .{ .ptr = v.ptr, .len = v.len };
                 return true;

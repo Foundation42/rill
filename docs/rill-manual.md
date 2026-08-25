@@ -450,6 +450,56 @@ One thing, one spelling.
 
 ---
 
+## 6d. Contracts — `expect` and `match`
+
+A shape on the wire, and the value either fits it or does not pass. An
+assertion, not a branch. Two words, because there are two different
+promises and you should say which one you are buying.
+
+```rill
+plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat
+plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade
+plane.window.samples | match [number] | stats | set plane.ui.load
+```
+
+| op | when it checks | on failure |
+|---|---|---|
+| `match <shape> [exact]` | **every value** | the wave dies, named: `match: '.distance' is string, not number` |
+| `expect <shape> [exact]` | **once, at mount** | the mount is refused — the program does not come up |
+
+`expect` costs nothing after mount, and the price of that is exact: it
+is **not looking any more**. A value that arrives later and violates the
+shape passes straight through. That is the contract, not a bug, and it
+is why `match` is a separate word rather than a flag. `expect` never
+degrades into a runtime check, and `match` never promotes into a
+guarantee.
+
+If there is nothing at the path when the program mounts, `expect`
+refuses and says to use `match`. It does not defer.
+
+**The shape literal** is the record literal with type words as values:
+
+```
+{id: string, distance: number}
+{pos: {x: number, y: number, z: number}, kind?: string}
+[number]
+```
+
+The words are `number`, `boolean`, `string` and `any` — the same
+vocabulary a mismatch prints, so what the language says back to you and
+what you write are one language. `[T]` is an array of `T`, `?` marks a
+field that may be absent, and `any` marks one that must be present but
+may be anything.
+
+**Shapes are open by default.** Extra fields pass. `exact` closes them —
+and closes *every* record in the shape, not only the outermost.
+
+Between them these are the author's half of the mismatch check: the
+engine catches what you didn't anticipate; `expect` and `match` are
+where you write down what you did.
+
+---
+
 ## 7. Fields and the sigils
 
 Four sigils name four rows of the world:

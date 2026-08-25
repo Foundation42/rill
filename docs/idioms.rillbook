@@ -401,6 +401,27 @@
    "source": "## Refuse a malformed contact list, and pin what a program reads\n\n§4's last two rows: both *silent → 1*, needing `match` (runtime) and `expect`\n(mount). Beat 2. There is no before cell because \"silent\" is the before: a\nshape mismatch today is discovered downstream, or not at all."
   },
   {
+   "name": "contracts-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — the same shape literal, two different promises\n\n```rill\nplane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat\nplane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade\n```\n\n`match` checks **every value** and a mismatch kills that wave, naming the\nfield and both sides:\n\n> `match: '.distance' is string, not number`\n\n`expect` checks **once, at mount**, and a mismatch refuses the mount — the\nprogram does not come up. After that it costs nothing, and it never quietly\nbecomes a runtime check: a violating value that arrives later passes straight\nthrough. That is the contract, and it is the whole reason there are two words\ninstead of one with a flag.\n\nIf there is nothing at the path when the program mounts, `expect` refuses and\ntells you to use `match`. It never degrades on its own."
+  },
+  {
+   "name": "contracts-match",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat"
+  },
+  {
+   "name": "contracts-expect",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade"
+  },
+  {
    "name": "ticking-ask",
    "mode": "query",
    "markdown": true,
@@ -462,6 +483,13 @@
    "markdown": false,
    "collapsed": false,
    "source": "plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample"
+  },
+  {
+   "name": "shapes-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Shapes — what you write down on purpose\n\nThe engine's mismatch check (beat 1b) catches what you *didn't* anticipate.\n`expect` and `match` are where you write down what you did.\n\n```\n{id: string, distance: number}\n{pos: {x: number, y: number, z: number}, kind?: string}\n[number]\n{id: string} exact\n```\n\nThe type words are the same ones a refusal prints — `number`, `boolean`,\n`string`, `any` — so what the language says back to you and what you write\nare one vocabulary. `[T]` is an array of `T`, nesting is `{…}` inside `{…}`,\n`?` marks a field that may be absent, and `any` marks one that must be\npresent but may be anything.\n\n**Shapes are open by default.** Extra fields pass; `exact` closes them, and it\ncloses *every* record in the shape, not only the outermost — the word closes\nthe shape, and a closed outside with open insides is a promise nobody asked\nfor.\n\n**Where each belongs.** `expect` at the boundary with the plane, where the\nvalue is there at mount and you want the mount to fail loudly if the world\nisn't what you think. `match` after anything whose shape is only known on\narrival: a contact list, a record built from `window`, a host verb's result."
   }
  ]
 }

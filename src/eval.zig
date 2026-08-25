@@ -47,8 +47,11 @@ const Plane = plane_mod.Plane;
 const Delta = plane_mod.Delta;
 const DeltaKind = plane_mod.DeltaKind;
 
-pub const MountError = error{Cycle} || plane_mod.PlaneError || std.mem.Allocator.Error;
-pub const TickError = error{TimeRegression} || plane_mod.PlaneError || std.mem.Allocator.Error;
+/// `Refused` is a mount that a `fails_mount` operator (today: `expect`)
+/// turned down at tick 0. The refusal's words went to `error_fn` before this
+/// propagates — the ack carries the message, the error carries the verdict.
+pub const MountError = error{ Cycle, Refused } || plane_mod.PlaneError || std.mem.Allocator.Error;
+pub const TickError = error{ TimeRegression, Refused } || plane_mod.PlaneError || std.mem.Allocator.Error;
 
 /// The fed time pair. Real time and frame count ride together because both
 /// duration lanes are honest units (`5s` needs time_ns, `3f` needs frame) —
@@ -141,6 +144,8 @@ pub const Runtime = struct {
     error_count: []u64,
     /// One buffer per runtime for the current eval's refusal reason.
     detail: registry.Detail = .{},
+    /// True only while `mount` runs tick 0 — see `OpDef.fails_mount`.
+    mounting: bool = false,
 
     // per-tick machinery
     pending: std.StringArrayHashMapUnmanaged([]u8) = .empty,
@@ -209,7 +214,12 @@ pub const Runtime = struct {
 
         // Tick 0: everything evaluates once, in topo order, at the mount
         // moment's fed time — window baselines are real from the first eval.
+        // `mounting` is what makes a `fails_mount` refusal fatal here and
+        // ordinary afterwards; it is the only difference between tick 0 and
+        // every tick after it.
         for (0..prog.nodeCount()) |n| try rt.markNode(@intCast(n));
+        rt.mounting = true;
+        defer rt.mounting = false;
         rt.tick(opts.now) catch |err| switch (err) {
             error.TimeRegression => unreachable, // now starts at zero
             else => |e| return e,
@@ -564,6 +574,10 @@ pub const Runtime = struct {
                         .input_digest = h.final(),
                     });
                 }
+                // …unless the operator's whole promise is that it fails the
+                // MOUNT (`expect`). Reported first, above, so the ack has the
+                // words before the mount unwinds.
+                if (def.fails_mount and self.mounting) return error.Refused;
                 return; // the wave dies here; deterministic and non-fatal
             },
         };

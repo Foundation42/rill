@@ -1452,6 +1452,173 @@ fn indexEval(comptime arr_port: usize, comptime idx_port: usize) fn (*EvalCtx) E
     }.e;
 }
 
+// ---------------------------------------------------------------------------
+// Contracts — `expect` and `match` (tier 2, beat 2b)
+//
+// One shape literal, two promises. `expect` asserts ONCE, at mount, and its
+// refusal fails the mount (`OpDef.fails_mount`); `match` asserts every value
+// and its refusal kills that wave. Neither degrades into the other: `expect`
+// never becomes a runtime check (that would hide cost) and `match` never
+// becomes a guarantee.
+//
+// Both are passthroughs. A contract is documentation ON THE WIRE, so it sits
+// mid-chain and the value continues.
+// ---------------------------------------------------------------------------
+
+const Shape = struct { exact: bool, body: []const u8 };
+
+/// Unwrap the `{exact: bool, shape: <s>}` the parser encoded.
+fn shapeStatic(ctx: *EvalCtx) EvalError!Shape {
+    const enc = ctx.statics[0].shape;
+    const m = struple.MapView.init(try innerOf(ctx, enc));
+    var kp = struple.Packer.init(ctx.arena);
+    try kp.appendString("exact");
+    const ex = (m.get(kp.bytes()) catch null) orelse return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name});
+    var ks = struple.Packer.init(ctx.arena);
+    try ks.appendString("shape");
+    const body = (m.get(ks.bytes()) catch null) orelse return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name});
+    return .{ .exact = types.asBool(ex) orelse false, .body = body };
+}
+
+/// A shape rendered in the SAME vocabulary `describe` prints values in, so a
+/// refusal's two sides are one language: `number`, `[number]`,
+/// `record{id, distance}`. Optional fields keep their `?` — what the author
+/// wrote is what the message shows back.
+fn describeShape(ctx: *EvalCtx, shape: []const u8) []const u8 {
+    const t = types.typeOfValue(shape);
+    if (t == Tag.string) return types.asString(shape) orelse "?";
+    if (t == Tag.array) {
+        const inner = innerOf(ctx, shape) catch return "[?]";
+        var r = struple.reader(inner);
+        const first = (r.nextView() catch return "[?]") orelse return "[]";
+        return std.fmt.allocPrint(ctx.arena, "[{s}]", .{describeShape(ctx, first)}) catch "[?]";
+    }
+    if (t == Tag.record) {
+        var out = std.ArrayListUnmanaged(u8).empty;
+        out.appendSlice(ctx.arena, "record{") catch return "record{?}";
+        var it = struple.MapView.init(innerOf(ctx, shape) catch return "record{?}").iterator();
+        var first = true;
+        while (it.next() catch return "record{?}") |e| {
+            if (!first) out.appendSlice(ctx.arena, ", ") catch return "record{?}";
+            first = false;
+            out.appendSlice(ctx.arena, types.asString(e.key) orelse "?") catch return "record{?}";
+        }
+        out.appendSlice(ctx.arena, "}") catch return "record{?}";
+        return out.items;
+    }
+    return "?";
+}
+
+/// "the value" at the top, "'<path>'" once inside — so a top-level complaint
+/// doesn't read "'' is string".
+fn shapeWhere(ctx: *EvalCtx, path: []const u8) []const u8 {
+    if (path.len == 0) return "the value";
+    return std.fmt.allocPrint(ctx.arena, "'{s}'", .{path}) catch "the value";
+}
+
+fn shapeMismatch(ctx: *EvalCtx, path: []const u8, value: []const u8, shape: []const u8) EvalError {
+    return ctx.refuse("{s}: {s} is {s}, not {s}", .{
+        ctx.op.name, shapeWhere(ctx, path), describeTop(ctx, value), describeShape(ctx, shape),
+    });
+}
+
+/// The whole check, recursive. Refuses on the FIRST mismatch and names the
+/// field: a list of everything wrong reads as a compiler, and the first one is
+/// almost always the cause of the rest.
+fn shapeCheck(ctx: *EvalCtx, exact: bool, shape: []const u8, value: []const u8, path: []const u8) EvalError!void {
+    switch (types.typeOfValue(shape)) {
+        Tag.string => {
+            const word = types.asString(shape) orelse return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name});
+            if (std.mem.eql(u8, word, "any")) return; // present is the whole promise
+            const want: types.TypeId = if (std.mem.eql(u8, word, "number"))
+                Tag.number
+            else if (std.mem.eql(u8, word, "boolean"))
+                Tag.boolean
+            else
+                Tag.string;
+            if (types.typeOfValue(value) != want) return shapeMismatch(ctx, path, value, shape);
+        },
+        Tag.array => {
+            if (types.typeOfValue(value) != Tag.array) return shapeMismatch(ctx, path, value, shape);
+            const elem_shape = blk: {
+                var r = struple.reader(try innerOf(ctx, shape));
+                break :blk (r.nextView() catch null) orelse return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name});
+            };
+            var r = struple.reader(try innerOf(ctx, value));
+            var i: usize = 0;
+            while (r.nextView() catch return ctx.refuse("{s}: {s} is a malformed array", .{ ctx.op.name, shapeWhere(ctx, path) })) |e| : (i += 1) {
+                try shapeCheck(ctx, exact, elem_shape, e, pathIndex(ctx, path, i));
+            }
+        },
+        Tag.record => {
+            if (types.typeOfValue(value) != Tag.record) return shapeMismatch(ctx, path, value, shape);
+            const vm = struple.MapView.init(try innerOf(ctx, value));
+            var it = struple.MapView.init(try innerOf(ctx, shape)).iterator();
+            while (it.next() catch return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name})) |e| {
+                const written = types.asString(e.key) orelse return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name});
+                const optional = written.len > 0 and written[written.len - 1] == '?';
+                const name = if (optional) written[0 .. written.len - 1] else written;
+                var kp = struple.Packer.init(ctx.arena);
+                try kp.appendString(name);
+                const at = std.fmt.allocPrint(ctx.arena, "{s}.{s}", .{ path, name }) catch path;
+                const got = (vm.get(kp.bytes()) catch return ctx.refuse("{s}: {s} is a malformed record", .{ ctx.op.name, shapeWhere(ctx, path) })) orelse {
+                    if (optional) continue;
+                    return ctx.refuse("{s}: '{s}' is missing — the shape requires it", .{ ctx.op.name, at });
+                };
+                try shapeCheck(ctx, exact, e.value, got, at);
+            }
+            if (!exact) return;
+            // `exact` closes every record in the shape, not only the
+            // outermost: the word closes THE SHAPE, and a closed outside with
+            // open insides is a promise nobody asked for.
+            var vit = vm.iterator();
+            while (vit.next() catch return ctx.refuse("{s}: {s} is a malformed record", .{ ctx.op.name, shapeWhere(ctx, path) })) |e| {
+                const key = types.asString(e.key) orelse continue;
+                var sit = struple.MapView.init(try innerOf(ctx, shape)).iterator();
+                const known = while (sit.next() catch null) |se| {
+                    const w = types.asString(se.key) orelse continue;
+                    const n = if (w.len > 0 and w[w.len - 1] == '?') w[0 .. w.len - 1] else w;
+                    if (std.mem.eql(u8, n, key)) break true;
+                } else false;
+                if (!known) {
+                    return ctx.refuse("{s}: '{s}.{s}' is not in the shape, and the shape is exact", .{ ctx.op.name, path, key });
+                }
+            }
+        },
+        else => return ctx.refuse("{s}: the shape is malformed", .{ctx.op.name}),
+    }
+}
+
+/// `match <shape> [exact]` — every value, at runtime. A mismatch kills the
+/// wave and counts against the budget, like any refusal.
+fn evalMatch(ctx: *EvalCtx) EvalError!Emit {
+    const v = try raw(ctx, 0);
+    const sp = try shapeStatic(ctx);
+    try shapeCheck(ctx, sp.exact, sp.body, v, "");
+    try splice(ctx, 0, v);
+    return Emit.first;
+}
+
+/// `expect <shape> [exact]` — once, at mount, and never again. The port is
+/// OPTIONAL so the node still evaluates when there is nothing on the wire:
+/// "the path has no value at mount" is the case `expect` most needs to catch,
+/// and a required port would skip the node and let the mount succeed silently.
+fn evalExpect(ctx: *EvalCtx) EvalError!Emit {
+    const checked = ctx.state.items.len > 0 and ctx.state.items[0] == 1;
+    if (!checked) {
+        try ctx.setState(&.{1});
+        const v = ctx.in[0] orelse return ctx.refuse(
+            "expect: there is nothing here at mount to check — 'expect' asserts once, at mount, and never falls back; use 'match' to check each value as it arrives",
+            .{},
+        );
+        const sp = try shapeStatic(ctx);
+        try shapeCheck(ctx, sp.exact, sp.body, v, "");
+    }
+    const v = ctx.in[0] orelse return Emit.none;
+    try splice(ctx, 0, v);
+    return Emit.first;
+}
+
 fn evalProject(ctx: *EvalCtx) EvalError!Emit {
     const inner = try innerOf(ctx, try raw(ctx, 0));
     var kp = struple.Packer.init(ctx.arena);
@@ -1733,6 +1900,9 @@ const CORE = [_]registry.OpDef{
     .{ .name = "array", .variadic = true, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Array construction [ a, b, c ] — a live tuple with positions instead of names.", .eval = evalArray },
     .{ .name = "nth", .inputs = &.{ p.in("in", Tag.array), p.in("i", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The i-th element, 0-based — `window 5s | nth 0`. Out of range is an error, never a clamp.", .eval = indexEval(0, 1) },
     .{ .name = "choose", .inputs = &.{ p.in("i", Tag.number), p.in("of", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "`nth` with the index piped — `plane.time.band | choose [0.2, 1, 0.6, 0.05]`. Pick one of these.", .eval = indexEval(1, 0) },
+    // tier 2, beat 2b — contracts. One shape literal, two promises.
+    .{ .name = "expect", .inputs = &.{p.opt("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .fails_mount = true, .help = "Assert a shape ONCE, at mount — `expect {id: string, distance: number} [exact]`. A mismatch refuses the mount. Costs nothing afterwards; never falls back to a runtime check.", .eval = evalExpect },
+    .{ .name = "match", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Assert a shape on EVERY value — `match {id: string} [exact]`. A mismatch kills the wave and names the field and both sides.", .eval = evalMatch },
     // records
     .{ .name = "record", .variadic = true, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Record construction { field: stream, … } — a live tuple with named fields.", .eval = evalRecord },
     .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },

@@ -1168,6 +1168,101 @@ const Parser = struct {
         return self.makeNode(target, op_id, sources, statics, tok);
     }
 
+    // -- shape literals -------------------------------------------------------
+
+    /// The type words a shape leaf may be. Deliberately the same vocabulary
+    /// the mismatch messages print (beat 1b), so what a refusal says and what
+    /// an author writes are one language. `any` says "present, kind
+    /// unconstrained" — without it there is no way to require a field without
+    /// also deciding its type, and `?` says the opposite thing (absent is
+    /// fine).
+    const SHAPE_WORDS = [_][]const u8{ "number", "boolean", "string", "any" };
+
+    /// `shape := stype ["exact"]`, stored as `{exact: bool, shape: <s>}`.
+    /// `exact` closes every record in the shape, not only the outermost: the
+    /// word closes THE SHAPE, and a closed outside with open insides is a
+    /// promise nobody asked for.
+    fn parseShapeLiteral(self: *Parser, op_name: []const u8) ParseError!registry.StaticVal {
+        const open = self.peek();
+        if (open.kind != .lbrace and open.kind != .lbracket) {
+            return self.fail(open, "'{s}' expects a shape — '{{field: type, …}}', or '[type]' for an array of", .{op_name});
+        }
+        const inner = try self.parseShapeType(op_name);
+        var exact = false;
+        if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "exact")) {
+            _ = self.next();
+            exact = true;
+        }
+        var kx = struple.Packer.init(self.a());
+        kx.appendString("exact") catch return error.OutOfMemory;
+        var vx = struple.Packer.init(self.a());
+        vx.appendBool(exact) catch return error.OutOfMemory;
+        var ks = struple.Packer.init(self.a());
+        ks.appendString("shape") catch return error.OutOfMemory;
+        var pk = struple.Packer.init(self.a());
+        pk.appendMap(&.{ .{ kx.bytes(), vx.bytes() }, .{ ks.bytes(), inner } }) catch return error.OutOfMemory;
+        return .{ .shape = pk.toOwnedSlice() catch return error.OutOfMemory };
+    }
+
+    /// `stype := typeword | "{" sfield … "}" | "[" stype "]"`.
+    fn parseShapeType(self: *Parser, op_name: []const u8) ParseError![]const u8 {
+        const t = self.peek();
+        switch (t.kind) {
+            .lbrace => return self.parseShapeRecord(op_name),
+            .lbracket => {
+                _ = self.next();
+                const elem = try self.parseShapeType(op_name);
+                const close = self.next();
+                if (close.kind != .rbracket) return self.fail(close, "'{s}': expected ']' to close an array shape", .{op_name});
+                var pk = struple.Packer.init(self.a());
+                pk.appendArray(elem) catch return error.OutOfMemory;
+                return pk.toOwnedSlice() catch return error.OutOfMemory;
+            },
+            .name => {
+                for (SHAPE_WORDS) |w| {
+                    if (!std.mem.eql(u8, w, t.text)) continue;
+                    _ = self.next();
+                    var pk = struple.Packer.init(self.a());
+                    pk.appendString(w) catch return error.OutOfMemory;
+                    return pk.toOwnedSlice() catch return error.OutOfMemory;
+                }
+                return self.fail(t, "'{s}': '{s}' is not a type — expected one of: number, boolean, string, any, a nested '{{…}}', or '[…]'", .{ op_name, t.text });
+            },
+            else => return self.fail(t, "'{s}': expected a type, got '{s}'", .{ op_name, t.text }),
+        }
+    }
+
+    /// `"{" (name ["?"] ":" stype) (("," | NEWLINE) …)* "}"`. The `?` is the
+    /// `raw` token it has always been — a shape is the only place it means
+    /// anything, so it costs no token kind.
+    fn parseShapeRecord(self: *Parser, op_name: []const u8) ParseError![]const u8 {
+        const open = self.next(); // {
+        var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+        self.skipNewlines();
+        while (self.peek().kind != .rbrace) {
+            const ft = self.next();
+            if (ft.kind != .name) return self.fail(ft, "'{s}': expected a field name in the shape", .{op_name});
+            var key = ft.text;
+            if (self.peek().kind == .raw and self.peek().text.len == 1 and self.peek().text[0] == '?') {
+                _ = self.next();
+                key = try std.fmt.allocPrint(self.a(), "{s}?", .{ft.text});
+            }
+            const ct = self.next();
+            if (ct.kind != .colon) return self.fail(ct, "'{s}': expected ':' after '{s}' in the shape", .{ op_name, ft.text });
+            const v = try self.parseShapeType(op_name);
+            var kp = struple.Packer.init(self.a());
+            kp.appendString(key) catch return error.OutOfMemory;
+            try entries.append(self.a(), .{ kp.bytes(), v });
+            if (self.peek().kind == .comma) _ = self.next();
+            self.skipNewlines();
+        }
+        _ = self.next(); // }
+        if (entries.items.len == 0) return self.fail(open, "'{s}': an empty shape promises nothing — name a field, or drop the check", .{op_name});
+        var pk = struple.Packer.init(self.a());
+        pk.appendMap(entries.items) catch return error.OutOfMemory;
+        return pk.toOwnedSlice() catch return error.OutOfMemory;
+    }
+
     // -- opcalls ------------------------------------------------------------
 
     /// Parse `opname arg*` with `primary` (the piped-in stream) bound to the
@@ -1200,6 +1295,14 @@ const Parser = struct {
         const def = self.reg.get(op_id);
         if (def.variadic) return self.fail(op_tok, "'{s}' cannot be called directly", .{op_name});
         const has_tail = def.inputs.len > 0 and def.inputs[def.inputs.len - 1].tail;
+
+        // A shape literal is parsed BEFORE the arguments, from the tokens
+        // directly — it is its own grammar (type words where a record has
+        // values), and `parseArgValue` would build a record node whose
+        // `string` field is an unresolvable name. Same shape as the tail:
+        // the port's declaration is what dispatches, not a lookahead guess.
+        var shape_static: ?registry.StaticVal = null;
+        if (opHasShape(def)) shape_static = try self.parseShapeLiteral(op_name);
 
         var args = std.ArrayListUnmanaged(Arg).empty;
         if (has_tail) {
@@ -1257,6 +1360,10 @@ const Parser = struct {
         @memset(consumed, false);
         var pos_cursor: usize = 0;
         for (def.statics, 0..) |sd, i| {
+            if (sd.kind == .shape) {
+                statics[i] = shape_static.?;
+                continue;
+            }
             var picked: ?Arg = null;
             if (sd.kw) {
                 for (args.items, 0..) |ag, j| {
@@ -1314,6 +1421,11 @@ const Parser = struct {
                     }
                     break :blk .{ .condition = try self.a().dupe(u8, arg.text) };
                 },
+                // Handled above, before the arguments: a shape literal is its
+                // own grammar and cannot survive `parseArgValue` (`{id:
+                // string}` would build a record node whose `string` field is
+                // an unresolvable name).
+                .shape => unreachable,
             };
         }
         var stream_list = std.ArrayListUnmanaged(Arg).empty;
@@ -1498,7 +1610,15 @@ const Parser = struct {
             .channel => .{ .channel = "" },
             .subject => .{ .subject = "" },
             .condition => .{ .condition = "" },
+            .shape => .{ .shape = "" },
         };
+    }
+
+    fn opHasShape(def: *const registry.OpDef) bool {
+        for (def.statics) |sd| {
+            if (sd.kind == .shape) return true;
+        }
+        return false;
     }
 
     fn opHasKeywords(def: *const registry.OpDef) bool {
