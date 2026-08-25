@@ -28,6 +28,39 @@ extern fn rill_tick(h: ?*anyopaque, now_ns: u64, frame: u64) c_int;
 extern fn rill_read_slot(h: ?*anyopaque, path: [*]const u8, path_len: usize, out_len: *usize) ?[*]const u8;
 extern fn rill_read_slot_number(h: ?*anyopaque, path: [*]const u8, path_len: usize, out: *f64) bool;
 
+const CStr = extern struct { ptr: [*]const u8, len: usize };
+const CPort = extern struct {
+    name: [*]const u8,
+    name_len: usize,
+    ty: u16 = 0,
+    kind: u8 = 0,
+    optional: bool = false,
+    kw: bool = false,
+    tail: bool = false,
+    tail_all: bool = false,
+    one_of: ?[*]const CStr = null,
+    one_of_len: usize = 0,
+};
+const COpDef = extern struct {
+    name: [*]const u8,
+    name_len: usize,
+    help: [*]const u8,
+    help_len: usize,
+    class: u8 = 0,
+    routes: u8 = 0,
+    ticks: bool = false,
+    variadic: bool = false,
+    inputs: ?[*]const CPort = null,
+    inputs_len: usize = 0,
+    outputs: ?[*]const CPort = null,
+    outputs_len: usize = 0,
+};
+extern fn rill_register_op(reg: ?*anyopaque, def: *const COpDef, eval: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) i64, user: ?*anyopaque) c_int;
+extern fn rill_mount_with_host(prog: ?*anyopaque, plane: *const CPlane, now_ns: u64, frame: u64, host: ?*anyopaque) ?*anyopaque;
+extern fn rill_ctx_host(ctx: ?*anyopaque) ?*anyopaque;
+extern fn rill_ctx_input(ctx: ?*anyopaque, i: usize, out_len: *usize) ?[*]const u8;
+extern fn rill_ctx_input_count(ctx: ?*anyopaque) usize;
+
 const CPlane = extern struct {
     ctx: ?*anyopaque,
     subscribe: *const fn (?*anyopaque, [*]const u8, usize, u32) callconv(.c) c_int,
@@ -55,6 +88,25 @@ fn write(_: ?*anyopaque, path: [*]const u8, path_len: usize, val: [*]const u8, v
     return 0;
 }
 
+// A host operator, living entirely on THIS side of the seam. rill parses a
+// program that names it, mounts it, and calls back in here — which is the
+// direction Matryoshka needs for its ~141 console verbs.
+const HostWorld = struct { fired: usize = 0, last: f64 = 0 };
+var world = HostWorld{};
+
+fn lampEval(ctx: ?*anyopaque, user: ?*anyopaque) callconv(.c) i64 {
+    _ = user;
+    const w: *HostWorld = @ptrCast(@alignCast(rill_ctx_host(ctx).?));
+    w.fired += 1;
+    var len: usize = 0;
+    if (rill_ctx_input(ctx, 0, &len)) |_| {
+        // The value arrived; a real host would decode it. Counting is enough
+        // to prove the callback ran with the host world in hand.
+        w.last = @floatFromInt(len);
+    }
+    return 0; // Emit.none — a console verb is an effect, it emits nothing
+}
+
 pub fn main() !void {
     std.debug.print("seam abi version : {d}\n", .{rill_abi_version()});
 
@@ -65,7 +117,22 @@ pub fn main() !void {
     // this changes, in a binary that was never rebuilt.
     std.debug.print("core operators   : {d}\n", .{rill_registry_op_count(reg)});
 
-    const src = "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure";
+    // Register a HOST operator across the seam, then use it in a program.
+    var lamp_ports = [_]CPort{.{ .name = "level", .name_len = 5, .ty = 1 }};
+    const lamp = COpDef{
+        .name = "lamp set",
+        .name_len = 8,
+        .help = "demo host verb",
+        .help_len = 14,
+        .class = 2, // effect
+        .routes = 1, // main
+        .inputs = &lamp_ports,
+        .inputs_len = 1,
+    };
+    if (rill_register_op(reg, &lamp, lampEval, null) != 0) return error.RegisterOpFailed;
+    std.debug.print("after host op    : {d} operators\n", .{rill_registry_op_count(reg)});
+
+    const src = "lfo sine 4s | range 0.5 1.5 | also { lamp set } | set plane.render.grade.exposure";
     const prog = rill_parse(reg, "demo", 4, src.ptr, src.len) orelse {
         var n: usize = 0;
         var line: u32 = 0;
@@ -84,7 +151,7 @@ pub fn main() !void {
         .read = read,
         .write = write,
     };
-    const rt = rill_mount(prog, &plane, 0, 0) orelse return error.MountFailed;
+    const rt = rill_mount_with_host(prog, &plane, 0, 0, &world) orelse return error.MountFailed;
     defer rill_runtime_destroy(rt);
 
     // A full breath: four seconds of a 4s sine, a quarter-second at a time.
@@ -103,4 +170,5 @@ pub fn main() !void {
         std.debug.print("exposure at peak : {d:.6}\n", .{exposure});
     }
     std.debug.print("plane writes     : {d}\n", .{writes});
+    std.debug.print("host op fired    : {d} times (called back across the seam)\n", .{world.fired});
 }

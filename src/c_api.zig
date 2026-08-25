@@ -157,6 +157,219 @@ export fn rill_last_error(out_len: *usize, out_line: *u32, out_col: *u32) callco
 }
 
 // ---------------------------------------------------------------------------
+// Registering a HOST operator through the seam — the other direction.
+//
+// A consumer (Matryoshka) registers ~141 console verbs as rill operators, each
+// with a Zig function pointer for `eval`. Across a C ABI that becomes a C
+// callback plus a user pointer, and rill needs a plain fn-pointer to store in
+// the OpDef — so one trampoline stands in for all of them and finds the right
+// callback from `EvalCtx.op`.
+//
+// Keyed by NAME, deliberately: `reg.ops` is an ArrayList that reallocates as
+// operators register, so any map keyed on an `*OpDef` would dangle the moment
+// the table grew. Names are unique (the registry enforces it) and stable.
+// ---------------------------------------------------------------------------
+
+pub const CStr = extern struct { ptr: [*]const u8, len: usize };
+
+pub const CPort = extern struct {
+    name: [*]const u8,
+    name_len: usize,
+    ty: u16 = 0,
+    /// 0 = value, 1 = occurrence
+    kind: u8 = 0,
+    optional: bool = false,
+    kw: bool = false,
+    tail: bool = false,
+    tail_all: bool = false,
+    /// Closed value set for a string port, checked at parse.
+    one_of: ?[*]const CStr = null,
+    one_of_len: usize = 0,
+};
+
+pub const COpDef = extern struct {
+    name: [*]const u8,
+    name_len: usize,
+    help: [*]const u8,
+    help_len: usize,
+    /// 0 = pure, 1 = reads, 2 = effect
+    class: u8 = 0,
+    /// 0 = anywhere, 1 = main
+    routes: u8 = 0,
+    ticks: bool = false,
+    variadic: bool = false,
+    inputs: ?[*]const CPort = null,
+    inputs_len: usize = 0,
+    outputs: ?[*]const CPort = null,
+    outputs_len: usize = 0,
+};
+
+/// Returns the emit mask (bit i = output port i), or a negative value to
+/// refuse — call `rill_ctx_refuse` first so the refusal says why.
+pub const CEval = *const fn (ctx: ?*anyopaque, user: ?*anyopaque) callconv(.c) i64;
+
+const HostOp = struct { eval: CEval, user: ?*anyopaque };
+var host_ops: std.StringHashMapUnmanaged(HostOp) = .empty;
+
+fn hostTrampoline(ctx: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+    const entry = host_ops.get(ctx.op.name) orelse
+        return ctx.refuse("{s}: the seam has no handler registered for this operator", .{ctx.op.name});
+    const r = entry.eval(@ptrCast(ctx), entry.user);
+    if (r < 0) return error.BadValue; // the callback refused; its reason is already recorded
+    return rill.Emit{ .mask = @truncate(@as(u64, @bitCast(r))) };
+}
+
+/// Copy a C port array into seam-owned memory. The registry BORROWS port
+/// slices from the registrant, so they must outlive the caller's buffers.
+fn ownPorts(src: ?[*]const CPort, n: usize) ![]rill.Port {
+    const out = try gpa().alloc(rill.Port, n);
+    errdefer gpa().free(out);
+    if (n == 0) return out;
+    const in = src.?;
+    for (0..n) |i| {
+        const p = in[i];
+        var vals: []const []const u8 = &.{};
+        if (p.one_of_len > 0) {
+            const owned = try gpa().alloc([]const u8, p.one_of_len);
+            for (0..p.one_of_len) |j| {
+                const cs = p.one_of.?[j];
+                owned[j] = try gpa().dupe(u8, cs.ptr[0..cs.len]);
+            }
+            vals = owned;
+        }
+        out[i] = .{
+            .name = try gpa().dupe(u8, p.name[0..p.name_len]),
+            .ty = p.ty,
+            .kind = if (p.kind == 1) .occurrence else .value,
+            .optional = p.optional,
+            .kw = p.kw,
+            .tail = p.tail,
+            .tail_all = p.tail_all,
+            .one_of = vals,
+        };
+    }
+    return out;
+}
+
+export fn rill_register_op(reg_h: ?*anyopaque, def: *const COpDef, eval: CEval, user: ?*anyopaque) callconv(.c) Status {
+    const rbox: *RegistryBox = @ptrCast(@alignCast(reg_h orelse return .bad_handle));
+    const name = gpa().dupe(u8, def.name[0..def.name_len]) catch return .out_of_memory;
+    const help = gpa().dupe(u8, def.help[0..def.help_len]) catch return .out_of_memory;
+    const inputs = ownPorts(def.inputs, def.inputs_len) catch return .out_of_memory;
+    const outputs = ownPorts(def.outputs, def.outputs_len) catch return .out_of_memory;
+
+    host_ops.put(gpa(), name, .{ .eval = eval, .user = user }) catch return .out_of_memory;
+    _ = rbox.reg.register(.{
+        .name = name,
+        .inputs = inputs,
+        .outputs = outputs,
+        .help = help,
+        .class = switch (def.class) {
+            2 => .effect,
+            1 => .reads,
+            else => .pure,
+        },
+        .routes = if (def.routes == 1) .main else .anywhere,
+        .ticks = def.ticks,
+        .variadic = def.variadic,
+        .eval = hostTrampoline,
+    }) catch return .bad_handle;
+    return .ok;
+}
+
+/// Intern a host type name (`mesh`, `points`) and get its id for a port.
+export fn rill_type_intern(reg_h: ?*anyopaque, name: [*]const u8, name_len: usize) callconv(.c) u16 {
+    const rbox: *RegistryBox = @ptrCast(@alignCast(reg_h orelse return 0));
+    return rbox.reg.types.intern(name[0..name_len]) catch 0;
+}
+
+/// -1 when the operator is not registered.
+export fn rill_registry_find(reg_h: ?*anyopaque, name: [*]const u8, name_len: usize) callconv(.c) i64 {
+    const rbox: *RegistryBox = @ptrCast(@alignCast(reg_h orelse return -1));
+    const id = rbox.reg.find(name[0..name_len]) orelse return -1;
+    return @intCast(id);
+}
+
+/// The routing column, so a host can derive "does this program touch main?"
+/// across the seam exactly as it does in-process.
+export fn rill_op_routes(reg_h: ?*anyopaque, id: u32) callconv(.c) u8 {
+    const rbox: *RegistryBox = @ptrCast(@alignCast(reg_h orelse return 0));
+    if (id >= rbox.reg.ops.items.len) return 0;
+    return if (rbox.reg.get(id).routes == .main) 1 else 0;
+}
+
+/// Which operator each node of a program uses — the other half of the same
+/// derivation, without handing the graph across.
+export fn rill_program_node_op(prog_h: ?*anyopaque, node: usize) callconv(.c) i64 {
+    const pbox: *ProgramBox = @ptrCast(@alignCast(prog_h orelse return -1));
+    if (node >= pbox.prog.nodes.items.len) return -1;
+    return @intCast(pbox.prog.nodes.items[node].op);
+}
+
+// ── what a host operator sees when it runs ──────────────────────────────────
+// Matryoshka's thunks use exactly two things — the host pointer and the input
+// values — because each converts to its own context immediately. The rest is
+// here because an operator that cannot say why it refused is the thing the
+// refusals gate exists to forbid.
+
+export fn rill_ctx_host(ctx_h: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return null));
+    return ctx.host;
+}
+
+export fn rill_ctx_input_count(ctx_h: ?*anyopaque) callconv(.c) usize {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return 0));
+    return ctx.in.len;
+}
+
+/// Input `i`'s current value, or null when nothing has arrived on it.
+export fn rill_ctx_input(ctx_h: ?*anyopaque, i: usize, out_len: *usize) callconv(.c) ?[*]const u8 {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return null));
+    if (i >= ctx.in.len) return null;
+    const v = ctx.in[i] orelse return null;
+    out_len.* = v.len;
+    return v.ptr;
+}
+
+export fn rill_ctx_input_fresh(ctx_h: ?*anyopaque, i: usize) callconv(.c) bool {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return false));
+    if (i >= ctx.in_fresh.len) return false;
+    return ctx.in_fresh[i];
+}
+
+export fn rill_ctx_emit(ctx_h: ?*anyopaque, port: usize, bytes: [*]const u8, len: usize) callconv(.c) Status {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return .bad_handle));
+    if (port >= ctx.out.len) return .bad_handle;
+    ctx.out[port].appendRaw(bytes[0..len]) catch return .out_of_memory;
+    return .ok;
+}
+
+export fn rill_ctx_emit_number(ctx_h: ?*anyopaque, port: usize, v: f64) callconv(.c) Status {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return .bad_handle));
+    if (port >= ctx.out.len) return .bad_handle;
+    ctx.out[port].appendF64(v) catch return .out_of_memory;
+    return .ok;
+}
+
+/// Record WHY this operator is refusing. The caller then returns a negative
+/// emit mask. `@errorName` alone says "BadValue", which names the category and
+/// not the fact — and the fact is what a reader needs.
+export fn rill_ctx_refuse(ctx_h: ?*anyopaque, msg: [*]const u8, len: usize) callconv(.c) void {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return));
+    ctx.detail.set("{s}", .{msg[0..len]});
+}
+
+export fn rill_ctx_now_ns(ctx_h: ?*anyopaque) callconv(.c) u64 {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return 0));
+    return ctx.now_ns;
+}
+
+export fn rill_ctx_now_frame(ctx_h: ?*anyopaque) callconv(.c) u64 {
+    const ctx: *rill.EvalCtx = @ptrCast(@alignCast(ctx_h orelse return 0));
+    return ctx.now_frame;
+}
+
+// ---------------------------------------------------------------------------
 // The plane, as C callbacks. The host owns the data; rill borrows it — the
 // same contract as the Zig `Plane`, expressed without Zig types.
 // ---------------------------------------------------------------------------
@@ -211,11 +424,18 @@ const PlaneImpl = struct {
 // ---------------------------------------------------------------------------
 
 export fn rill_mount(prog_h: ?*anyopaque, cplane: *const CPlane, now_ns: u64, frame: u64) callconv(.c) ?*anyopaque {
+    return rill_mount_with_host(prog_h, cplane, now_ns, frame, null);
+}
+
+/// Mount with the opaque host world every registered operator will see as
+/// `rill_ctx_host` — Matryoshka's `CmdHost`, in practice.
+export fn rill_mount_with_host(prog_h: ?*anyopaque, cplane: *const CPlane, now_ns: u64, frame: u64, host: ?*anyopaque) callconv(.c) ?*anyopaque {
     const pbox: *ProgramBox = @ptrCast(@alignCast(prog_h orelse return null));
     const box = gpa().create(RuntimeBox) catch return null;
     box.plane_impl = .{ .c = cplane.* };
     box.rt = rill.Runtime.mount(gpa(), &pbox.prog, box.plane_impl.asPlane(), .{
         .now = .{ .time_ns = now_ns, .frame = frame },
+        .host_ctx = host,
     }) catch {
         gpa().destroy(box);
         return null;

@@ -491,11 +491,39 @@ of any globals in the modules it includes, so shared state must live on one
 side of the seam. And a seam binary does not inline across the boundary, so
 profiling work still wants a monolithic build.
 
-**Not yet done:** the op-registration direction. Matryoshka registers ~141
-console verbs into rill with Zig function pointers and implements rill's Plane
-vtable, so the full boundary is bidirectional. The plane half is built
-(`CPlane`); the `register`-an-op half is the next piece, and it is what
-Matryoshka needs before it can consume rill through the seam.
+**Both directions are built.** The boundary is bidirectional — a host does not
+merely call rill, it registers operators *into* it and rill calls back — so the
+seam carries:
+
+- *into rill*: registry, `parse`, `mount`, `feed`, `tick`, slot reads, type
+  interning, and the routing column (`rill_op_routes` + `rill_program_node_op`,
+  so a host derives "does this program touch main?" across the seam exactly as
+  it does in-process);
+- *out of rill*: the plane's four callbacks (`CPlane`), and **host operators**
+  — `rill_register_op` takes a `COpDef` plus a C callback and a user pointer.
+
+One trampoline stands in for every host operator and finds its callback from
+`EvalCtx.op`, keyed by **name**: `reg.ops` is an ArrayList that reallocates as
+operators register, so a map keyed on an `*OpDef` would dangle the moment the
+table grew. (`EvalCtx.op` exists because beat 1b's refusals gate needed every
+refusal to name itself; it paid for itself twice.)
+
+Port slices are **copied** into seam-owned memory at registration, because the
+registry borrows them from the registrant and a C caller's buffers do not
+outlive the call.
+
+Verified with both directions live: a demo registers a host verb across the
+seam, mounts `lfo sine 4s | range 0.5 1.5 | also { lamp set } | set …`, and the
+host operator is called back 18 times with its own world in hand. Then —
+without rebuilding the consumer — changing `sine` in rill's core and running
+`zig build seam` (1 s) moves the reported peak from 0.646447 to 0.573223 in a
+binary whose md5 is unchanged.
+
+**What Matryoshka still needs**, and it is the consumer's side rather than the
+seam's: its 141 verbs are registered by a comptime `inline for` over the `Cmd`
+table, so seam mode needs that loop to emit `COpDef` values and C callbacks
+instead of Zig `OpDef`s — under the same `-Dseams` switch that picks the link
+shape.
 
 ## Naming rules that are structural (2026-08-25)
 
