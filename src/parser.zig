@@ -682,6 +682,23 @@ const Parser = struct {
             current.out_names = bound_names.items;
         }
 
+        // §3.7: any plane path is a subscription — including a statement that
+        // IS one (`plane.x`, or `plane.x as v` before anything consumes v).
+        // Slots register their own subs; a node-less statement has no slot,
+        // so without this a bare-path line had no subscription at all and
+        // the one-shot echo had nothing to read (rillbook's second drive).
+        // Statement-level on purpose: a `set` target is a STATIC, not a
+        // value, and eager-subscribing at the ref made every write
+        // self-cyclic (the first draft's five minutes of life).
+        if (current.node == null and current.outputs.len == 1) {
+            switch (current.outputs[0]) {
+                .plane => |p_| {
+                    _ = self.prog.subFor(p_) catch return error.OutOfMemory;
+                },
+                else => {},
+            }
+        }
+
         const end = self.peek();
         if (end.kind != .newline and end.kind != .eof and
             !(end.kind == .rbrace and self.block_depth > 0))
