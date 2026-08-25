@@ -1,7 +1,22 @@
 # rillbook — the notebook console
 
 **Status:** Mini-spec v0.1 · 2026-08-24 · replaces the terminal console page in the
-web console. Companion: `rill-spec.md` (language), `rill-agents.md` (temporal/
+web console. **v1 BUILT 2026-08-25** (`web/apps/rillbook/`, engine verbs
+`rillbook save|load`): cells, run/mount with the lit border on the ACK,
+correlated result panes, the live strip, error line/col into the editor,
+save/load/mount-all (explicit, individually logged), sync-mounts against
+`rill list`. Named deviation: the v1 editor is a textarea — Monaco (and §4's
+served completions/hover) is the drop-in upgrade; the machinery this spec is
+about is all present and does not change when it lands. Engine-side notes:
+the five freeze-point asks were already landed by the casts campaign's day
+(echo, line/col on the wire, remount adjacency, schema knobs, version on
+every ack); `rillbook save`'s path is spaceless (its doc rides the tail, and
+a row cannot carry two tails); the `user/` mount namespace exposed and fixed
+a real hole (the self-subscription check compared a slash-form name against
+dot-form paths — a namespaced program could self-rouse; normalised, gated,
+mutation bitten). §7's N5 example is corrected below in place: `div` by zero
+is IEEE ±inf BY DESIGN in rill, so the deliberate error is a string arriving
+at a number port. Companion: `rill-spec.md` (language), `rill-agents.md` (temporal/
 failure/watchability), `rill-adoption.md` (routing, acks, Phase D).
 **Model:** SQL Server, not bash. An editor over a batch boundary, not a prompt.
 Compose in a real buffer, execute a selection or a cell, results land below,
@@ -120,8 +135,10 @@ plane, which is the point — no hidden notebook-local bindings).
   diagnostic text matches the quick bar's for the same line.
 - N4: save → reload → mount-all reproduces the mounted set; the log records
   individual mounts; replay of that session is bit-identical.
-- N5: mounted cell's error strip shows a deliberate `div` by zero as an error
-  occurrence with node/tick named (lands with Phase D; gate written now).
+- N5: mounted cell's error strip shows a deliberate runtime failure — a
+  string arriving at a number port (`div` by zero is IEEE ±inf by design,
+  not an error; the original example was wrong) — as an error occurrence
+  with node/tick named.
 - N6: the quick bar's behaviour is byte-identical before/after the notebook
   ships (it is untouched machinery, proven untouched).
 
