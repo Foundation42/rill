@@ -744,6 +744,23 @@ const Parser = struct {
             if (self.peek().kind != .pipe) break;
             _ = self.next();
             self.skipNewlines(); // a chain may wrap after a '|'
+            // `| .field` is the taught spelling for a field read mid-chain
+            // (ruled 2026-08-25). It is sugar for the `project` operator,
+            // which stays registered as SUBSTRATE — reachable, never taught,
+            // the same standing `wave` has under `lfo`. Before this, a row
+            // ending in a field read cost a second line, because `.field`
+            // read from a name or a path and a chain had neither.
+            //
+            // It reuses `parseProjections`, so `| .pos.x` in a chain means
+            // exactly what `near.pos.x` off a name means — one code path, one
+            // answer. (The deferral is elsewhere: `(.pos.x)` as a SECTION
+            // needs a body to be several nodes, and is still refused by name.)
+            if (self.peek().kind == .dot) {
+                if (current.outputs.len == 0) return self.fail(self.peek(), "nothing to pipe — upstream operator has no output", .{});
+                const projected = try self.parseProjections(target, current.outputs[0]);
+                current.* = .{ .outputs = try self.oneSource(projected) };
+                continue;
+            }
             const op_tok = self.next();
             if (op_tok.kind != .name and op_tok.kind != .sym) {
                 return self.fail(op_tok, "expected operator after '|'", .{});

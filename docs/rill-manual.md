@@ -241,6 +241,7 @@ in steps.
 | "double every reading in the window" | `window 10s \| mul 2` | broadcasting over an array IS map |
 | "pick one of these" | `\| choose [a, b, c]` | a table of choices is a *value*, not a chain of `select`s — read it left to right, edit it in place |
 | "the i-th one" | `\| nth <i>` | `nth` and `choose` are one computation; the difference is which port rouses it |
+| "read a field mid-chain" | `\| .field` | a field read used to need a name to hang off; now the chain is the standpoint |
 | "three points typed into a cell" | `[{x: 0, …}, {x: 2, …}, …]` | an array literal is live, immutable, and not a buffer — `[0, 2, 0]` is not a position |
 | "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
 | "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
@@ -502,7 +503,7 @@ have to guess between two independent questions.
 **Order and shape.**
 
 ```rill
-plane.sensors.gate.contacts | sort by (.distance) | first as near
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
 plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats
 plane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals
 plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos

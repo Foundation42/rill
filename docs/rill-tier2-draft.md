@@ -591,7 +591,7 @@ besides.
 | any of these contacts armed? | can't | 1 | ~~`map`, `reduce`~~ **landed, beat 3a** — `map (.armed) \| reduce (or)` |
 | the loudest reading in the last 5s | `stats \| .max` (only because `stats` happens to carry it) | 1 | ~~`reduce`~~ **landed, beat 3a** — `window 5s \| reduce (max)` |
 | just the contacts that are armed | can't | 1 | ~~`keep`~~ **landed, beat 3a** — `keep (.armed)` |
-| nearest hostile from the contact list | ~~invented sensor field~~ **2 ✓** | 1 | ~~`sort by`, `first`~~ **landed, beat 3b** — the second line is a *field read*, see the note below |
+| nearest hostile from the contact list | ~~invented sensor field~~ **1 ✓** | 1 | ~~`sort by`, `first`~~ **landed, beat 3b**; one line since the `\| .field` ruling |
 | top three threats | ~~can't~~ **1 ✓** | 1 | ~~`sort by`, `take`~~ **landed, beat 3b** |
 | refuse a malformed contact list at the boundary | ~~silent~~ **1 ✓** | 1 | ~~`match`~~ **landed, beat 2b** |
 | pin the shape a program reads from the plane | ~~silent~~ **1 ✓** | 1 | ~~`expect`~~ **landed, beat 2b** |
@@ -605,19 +605,15 @@ missing support and the list says where.
 row re-scored honestly downward.** The rows that moved from "can't" to
 one line are the register family's whole argument.
 
-**Beat 3b's score: three rows cleared, one cleared at TWO lines, and one
-finished that beat 2a half-cleared.** The two-line row is worth reading:
+**Beat 3b's score: four rows cleared, and one finished that beat 2a
+half-cleared.** "Nearest hostile" first landed at *two* lines — the sort
+and the pick were one, and the field read cost another, because `.field`
+read from a name or a path and a chain had neither. That was raised as a
+fork and **ruled the same day**: `| .field` is the taught spelling, sugar
+for `project`, and `project` stays registered as substrate — reachable,
+never taught. The row is one line:
 
-> `[…] | sort by (.distance) | first as near`
-> `near.distance | set plane.ui.nearest`
-
-The sort and the pick are one line. The second line exists because **a
-field read is not a pipe stage**: `.field` reads from a *name* (`near.id`)
-or from a path, and there is no `| .id`. The `project` operator is
-registered and `| project id` parses, but it is not what the manuals
-teach and not what a reader writes. Two ways to spell one thing, one of
-them undocumented, is the shape of an accident rather than a design —
-**stated as a fork below, not decided here.**
+> `plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest`
 
 **Beat 3a's score: three rows ADDED and cleared, and the addition is the
 point.** §7 said of `map` and `reduce`: *"both have excellent customers
@@ -953,16 +949,13 @@ host, or the manual rather than the operator table:
   for free; everyone else gets a second explanation.
 - **Tempo on the plane.** `beat` needs the host to publish tempo as
   data. That's the music stack's job and it's small.
-- **FORK — is `.field` a pipe stage?** (raised 2026-08-25, beat 3b).
-  Today a field read names a standpoint: `near.id` off an `as` name, or
-  `plane.a.b`. After a pipe there is no `| .id`, so every row that ends in
-  a field read costs a second line — which is what kept "nearest hostile"
-  at two. The `project` operator *is* registered and `| project id`
-  parses, so there are already two spellings and only one is taught.
-  Options: teach `project`, add `| .field` as sugar for it, or leave it.
-  CC's lean is `| .field`, because `map (.distance)` already made the
-  bare-dot section a spelling readers meet, and one spelling taught twice
-  beats two spellings taught once. **Not decided.**
+- **`| .field` — RULED 2026-08-25** (raised and settled the same day).
+  `| .field` is the taught spelling for a field read mid-chain, sugar for
+  `project`; **`project` is substrate — registered, never taught**, the
+  standing `wave` has under `lfo`. It reuses `parseProjections`, so
+  `| .pos.x` in a chain means exactly what `near.pos.x` means off a name.
+  Chained `.pos.x` as a *section body* stays deferred by name — that needs
+  a body to be several nodes, which is a different question.
 - **A schema query on the `Plane`** (recorded 2026-08-25, beat 2b). rill
   has no way to ask what shape a path declares — `Plane` is subscribe /
   read / write / cast / tag — which is why `expect` asserts against the

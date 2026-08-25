@@ -5238,18 +5238,38 @@ test "beat 3a: an unbound OPTIONAL port is absent, not open" {
 // `along`.
 // ---------------------------------------------------------------------------
 
-test "beat 3b: nearest hostile from the contact list" {
-    // §4's row, which was an invented sensor field. Two lines rather than one
-    // because a field read names its standpoint and `| .id` is not a pipe
-    // stage — the row's target was 1 and this is 2, so it is scored honestly.
+test "beat 3b: nearest hostile from the contact list, one line" {
+    // §4's row, which was an invented sensor field. One line since the
+    // `| .field` ruling (2026-08-25) — before it, a row ending in a field read
+    // cost a second line because `.field` read from a name or a path.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{id: 7, distance: 8}, {id: 4, distance: 3}, {id: 9, distance: 5}] | sort by (.distance) | first as near
-        \\near.distance | set plane.ui.nearest
+        \\[{id: 7, distance: 8}, {id: 4, distance: 3}, {id: 9, distance: 5}] | sort by (.distance) | first | .distance | set plane.ui.nearest
     , .{});
     defer fx.deinit();
 
     try testing.expectEqual(@as(f64, 3), slotNum(&fx, "programs.p.project2.out.out").?);
+}
+
+test "the taught spelling: `| .field` mid-chain is `project`, and chains" {
+    // Sugar for the `project` operator, which stays registered as substrate.
+    // `| .a.b` means exactly what `name.a.b` means, because it IS the same
+    // code path — so there is one answer to "what does a dotted read do",
+    // not two.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.rig | .pos.x | set plane.out
+        \\plane.rig as r
+        \\r.pos.x | set plane.same
+    , .{.{ "plane.rig", .{ .pos = .{ .x = @as(f64, 4), .y = @as(f64, 9) } } }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 4), slotNum(&fx, "programs.p.project2.out.out").?);
+    try testing.expectEqual(@as(f64, 4), slotNum(&fx, "programs.p.project4.out.out").?);
+}
+
+test "the taught spelling: a bare `| .` still says what is missing" {
+    try expectParseError("plane.a | . | set plane.out", "field name after");
 }
 
 test "beat 3b: `sort` orders by the key body, and `desc` reverses it" {

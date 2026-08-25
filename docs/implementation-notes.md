@@ -675,12 +675,16 @@ Built: `sort`, `first`, `take`, `transpose`, `shuffle`, `along`.
   permutation every tick, which is what determinism in fed time requires
   of an operator that re-runs on every change.
 
-- **A finding the row-scoring surfaced: `.field` is not a pipe stage.**
-  "Nearest hostile" lands at two lines, not one, because a field read
-  names a standpoint (`near.id`) and there is no `| .id`. The `project`
-  operator is registered and `| project id` parses, so there are already
-  two spellings and only one is taught. Recorded as a fork in the tier-2
-  doc §8 rather than decided; the row is scored at 2 and says why.
+- **A finding the row-scoring surfaced, now RULED: `| .field` is the
+  taught spelling.** "Nearest hostile" landed at two lines because a field
+  read named a standpoint (`near.id`) and a chain had neither a name nor a
+  path. Ruled 2026-08-25: `| .field` is sugar for `project`, and `project`
+  stays registered as **substrate** — reachable, never taught, the
+  standing `wave` has under `lfo`. It reuses `parseProjections`, so
+  `| .pos.x` in a chain means exactly what `near.pos.x` means off a name;
+  one code path, one answer. The row is one line and re-scored. The
+  deferral that remains is a different thing: `(.pos.x)` as a SECTION
+  needs a body to be several nodes, and is still refused by name.
 
 - **Gates: 18 new (227 → 245), Debug and ReleaseFast. Mutations: 12/12
   bitten** after the stability gate was rewritten (11/12 before, the
@@ -720,15 +724,18 @@ must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
 
-**Addendum, 2026-08-25 (beat 3b): a gate that passes because of the
-library underneath is watching nothing.** `sort`'s stability gate used
+**Addendum, 2026-08-25 (beat 3b), ratified: gate past the library's
+fallbacks, or the library is the thing under test.** `sort`'s stability gate used
 four elements; the mutation removing the stability tie-break survived it,
 because `std.sort.pdq` falls back to insertion sort on small inputs and
 insertion sort is stable by accident. The gate was measuring the standard
 library, not the code under it. Rewritten at forty elements, past the
 fallback. Same family as "prose approves plausible semantics, execution
 approves actual semantics" — one layer further down, and the tell is the
-same: the check passed without the code having to do anything.
+same: the check passed without the code having to do anything. It
+generalises past sorting — any stdlib with a small-input fast path
+(hash maps, allocators, formatters) will happily satisfy a gate that
+never leaves it.
 
 From beat 1a's surviving mutation, and it generalises:
 

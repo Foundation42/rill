@@ -314,14 +314,14 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## After — two lines, and the second one is a finding\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first as near\nnear.id | set plane.ui.nearest\n```\n\nThe sort and the pick are one line. The second exists because **a field\nread is not a pipe stage**: `.field` reads from a name or a path, and\nthere is no `| .id`. §4's target for this row was one line, so it is\nscored at two and the reason is written down rather than rounded away.\nThe fork is in §8 of the tier-2 doc."
+   "source": "## After — one line\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\n```\n\nThis first landed at *two* lines: the sort and the pick were one, and the\nfield read cost another, because `.field` read from a name or a path and a\nchain had neither. That was raised as a fork and ruled the same day —\n`| .field` is the taught spelling, sugar for `project`, and `project` stays\nregistered as substrate: reachable, never taught."
   },
   {
    "name": "nearest-hostile-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | sort by (.distance) | first as near\nnear.id | set plane.ui.nearest"
+   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest"
   },
   {
    "name": "top-three-after",

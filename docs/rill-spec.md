@@ -253,6 +253,22 @@ evidence available. A `Plane` schema query is recorded as a host dependency; whe
 `expect` prefers the declaration and keeps the mount-value check for undeclared paths — a
 strengthening, not a change of promise.
 
+### 3.6c Field reads mid-chain (v0.3, ruled 2026-08-25)
+
+```
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
+```
+
+`| .field` is the taught spelling for a field read inside a chain, and it chains
+(`| .pos.x`). It is **sugar for the `project` operator**, which stays registered as
+substrate — reachable, never taught — the standing `wave` has under `lfo`. There is exactly
+one code path: `parseProjections`, the same one `near.pos.x` takes off a name, so a dotted
+read has one meaning wherever it is written.
+
+Before this, `.field` read only from a name or a path, so any chain ending in a field read
+cost a second line. Two spellings existed (`| project id` parses) and only one was taught,
+which is the shape of an accident rather than a design.
+
 ### 3.7 Plane paths are subscriptions (everywhere)
 
 Any `plane.…` path in any argument position is a live reference. There is no special subscribe
