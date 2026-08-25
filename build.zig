@@ -33,6 +33,51 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // ── the seam ────────────────────────────────────────────────────────────
+    // rill behind a C ABI as a SHARED library, so a consumer can rebuild this
+    // alone and keep running its existing binary. Measured on Matryoshka: a
+    // one-line edit costs 406 s in ReleaseFast because a Zig source module is
+    // recompiled into every consumer; only a shared library is a real
+    // compilation boundary (a separate `addImport` module is not, and a static
+    // library still forces the consumer to re-optimise in full).
+    //
+    // `zig build seam` rebuilds ONLY this. Retail builds keep importing rill
+    // as a Zig module for full inlining — one source tree, two link shapes.
+    const seam_mod = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    seam_mod.addImport("struple", struple_mod);
+    const seam = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = "rill_seam",
+        .version = .{ .major = 0, .minor = 1, .patch = 0 },
+        .root_module = seam_mod,
+    });
+    const seam_install = b.addInstallArtifact(seam, .{});
+    b.step("seam", "Rebuild ONLY the C-ABI shared seam").dependOn(&seam_install.step);
+
+    // A consumer that links the seam and never imports rill as a Zig module —
+    // the proof that the boundary is real. `zig build seam-demo` builds it;
+    // after that, `zig build seam` alone is enough to change its behaviour.
+    const demo_mod = b.createModule(.{
+        .root_source_file = b.path("tools/seam_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const demo = b.addExecutable(.{ .name = "seam-demo", .root_module = demo_mod });
+    demo.linkLibrary(seam);
+    demo.linkLibC();
+    const demo_install = b.addInstallArtifact(demo, .{});
+    const demo_step = b.step("seam-demo", "Build the seam consumer");
+    demo_step.dependOn(&demo_install.step);
+    // The consumer runs against the INSTALLED library, so installing the exe
+    // must install the seam beside it — otherwise the demo links a fresh
+    // library and loads a stale one, which is a confusing way to learn how
+    // dynamic linking works.
+    demo_step.dependOn(&seam_install.step);
+
     // Demo executable: parses a small program, mounts it on the mock plane,
     // feeds a scripted delta sequence, and prints the slot table each tick.
     const exe_mod = b.createModule(.{

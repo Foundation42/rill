@@ -442,6 +442,61 @@ Applied in beat 1b to the `range`-vs-`lerp` gate (assert `ranged !=
 lerped` before either value) and to the `=`-does-not-broadcast gate
 (assert the output is not a record before asserting it is a boolean).
 
+## The seam — rill behind a C ABI (2026-08-25)
+
+**The problem, measured.** Zig compiles a whole *module* as one unit and has
+no incremental path through LLVM, so a source-module dependency is recompiled
+into every consumer on every edit. On Matryoshka a **one-line change cost
+406 s** in ReleaseFast against 413 s cold — essentially nothing is reused —
+and every edit to rill invalidated all of it.
+
+**Three link shapes were measured before anything was written**, because the
+answer decides the design and two of the three are dead ends:
+
+| what changed | `build-lib` | `build-exe` |
+|---|---|---|
+| nothing | cached 2 ms | cached 2 ms |
+| a separate `addImport` **module** | — | **full rebuild** |
+| a **static** library | 16 ms | **full rebuild (8 m)** |
+| the exe, static library | **cached 2 ms** | full rebuild |
+| a **shared** library, `zig build seam` | **50 ms** | **never ran** |
+
+So: `addImport` is namespacing, not a compilation boundary — splitting a tree
+into more modules buys exactly zero. A static library is a real boundary in
+one direction only: the library is safe from consumer edits, but any library
+change re-optimises the consumer in full, so it pays only if the consumer is
+thin. **Only a shared library is a boundary in both directions**, and it needs
+a C ABI: Zig's own ABI is not guaranteed across separate compilations.
+
+**What is built** (`src/c_api.zig`, `zig build seam`): fifteen `callconv(.c)`
+entry points over opaque handles — registry, parse, mount, feed, tick, read —
+plus a `CPlane` of four callbacks for the host's data plane. `tools/seam_demo.zig`
+is a consumer that links the shared library and never imports rill as a Zig
+module; `zig build seam-demo` builds it.
+
+**The demonstration, end to end.** With the demo built and its binary hashed:
+change `range` in rill's *core*, run `zig build seam` — **1 second** — and run
+the *same, unmodified* binary (md5 identical). It reports the new arithmetic.
+The consumer was neither recompiled nor relinked.
+
+**This is the iteration shape, not the retail shape.** Consumers keep importing
+rill as a Zig module for release builds — full inlining, no handles, no ABI
+surface. The seam exists so a one-line edit costs a second instead of seven
+minutes while working. One source tree, two link shapes, chosen by the build.
+
+**What the seam costs, stated.** Only extern-compatible types cross, so Zig
+types go over as opaque handles and anything richer needs an accessor
+(`rill_read_slot_number` is the first). Each shared object links its own copy
+of any globals in the modules it includes, so shared state must live on one
+side of the seam. And a seam binary does not inline across the boundary, so
+profiling work still wants a monolithic build.
+
+**Not yet done:** the op-registration direction. Matryoshka registers ~141
+console verbs into rill with Zig function pointers and implements rill's Plane
+vtable, so the full boundary is bidirectional. The plane half is built
+(`CPlane`); the `register`-an-op half is the next piece, and it is what
+Matryoshka needs before it can consume rill through the seam.
+
 ## Naming rules that are structural (2026-08-25)
 
 The ledger already holds one meta-rule — *when a predicate over a
