@@ -83,8 +83,27 @@ pub const TypeTable = struct {
 
 /// The wire-time compatibility rule: `any` is a wildcard on either side;
 /// everything else must match exactly. `mesh → number` fails here.
+///
+/// **One exception, and it is broadcast's** (beat 1b, 2026-08-25): a `number`
+/// or `boolean` port also accepts a **record or an array**, because arithmetic
+/// and comparison are elementwise over containers — `@player.pos | add {x: 0,
+/// y: 2, z: 0}` is the whole point, and a wire rule that refused it would make
+/// the feature unsayable. What the container *contains* is not knowable at
+/// wire time, so the eval-time mismatch check is the authority there; it names
+/// both sides and the offending field, which is louder than anything this
+/// function could say.
+///
+/// The cost, stated: a container literal now reaches every `number` port,
+/// including ones with no elementwise meaning (`inc`'s `by`, `integrate`'s
+/// `max`, a threshold). Those refuse at eval instead of at parse — later, but
+/// not quieter. `expect`/`match` (beat 2) are the author's way back to a
+/// mount-time answer.
 pub fn accepts(port_ty: TypeId, value_ty: TypeId) bool {
-    return port_ty == Tag.any or value_ty == Tag.any or port_ty == value_ty;
+    if (port_ty == Tag.any or value_ty == Tag.any or port_ty == value_ty) return true;
+    if (port_ty == Tag.number or port_ty == Tag.boolean) {
+        return value_ty == Tag.record or value_ty == Tag.array;
+    }
+    return false;
 }
 
 /// Classify a struple-encoded literal into a built-in TypeId.

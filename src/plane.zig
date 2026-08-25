@@ -211,11 +211,68 @@ pub const MockPlane = struct {
     }
 
     /// Convenience: seed a single scalar via struple's comptime dispatch.
+    /// Seed a path from a Zig value. Structs become records and arrays/slices
+    /// become arrays (struple's `append` covers scalars only), so a test can
+    /// seed `.{ .x = 1, .y = 2 }` and `[_]f64{ 1, 2, 3 }` directly — which is
+    /// what broadcast's gates need and what every container gate after them
+    /// will need too.
     pub fn putValue(self: *MockPlane, path: []const u8, value: anytype) !void {
         var p = struple.Packer.init(self.gpa);
         defer p.deinit();
-        try p.append(value);
+        try packAny(self.gpa, &p, value);
         try self.put(path, p.bytes());
+    }
+
+    fn packAny(gpa: std.mem.Allocator, p: *struple.Packer, value: anytype) !void {
+        const T = @TypeOf(value);
+        const info = @typeInfo(T);
+        switch (info) {
+            .@"struct" => |st| {
+                if (st.is_tuple) return error.Unsupported;
+                var entries: [st.fields.len][2][]const u8 = undefined;
+                var keys: [st.fields.len]struple.Packer = undefined;
+                var vals: [st.fields.len]struple.Packer = undefined;
+                inline for (st.fields, 0..) |f, i| {
+                    // A map key is an ENCODED string element, not raw bytes —
+                    // `appendMap` splices what it is given. Handing it
+                    // `f.name` builds a record nothing can iterate.
+                    keys[i] = struple.Packer.init(gpa);
+                    try keys[i].appendString(f.name);
+                    vals[i] = struple.Packer.init(gpa);
+                    try packAny(gpa, &vals[i], @field(value, f.name));
+                    entries[i] = .{ keys[i].bytes(), vals[i].bytes() };
+                }
+                defer for (&keys) |*b| b.deinit();
+                defer for (&vals) |*b| b.deinit();
+                try p.appendMap(&entries);
+            },
+            // A string is a pointer too, and iterating it would encode a
+            // sequence of byte-ints instead of a string — a trap that costs
+            // nothing to close now and would be baffling later.
+            .array, .pointer => {
+                if (comptime isStringy(T)) return p.append(value);
+                var inner = struple.Packer.init(gpa);
+                defer inner.deinit();
+                for (value) |v| try packAny(gpa, &inner, v);
+                try p.appendArray(inner.bytes());
+            },
+            else => try p.append(value),
+        }
+    }
+
+    fn isStringy(comptime T: type) bool {
+        return switch (@typeInfo(T)) {
+            .pointer => |ptr| switch (ptr.size) {
+                .one => switch (@typeInfo(ptr.child)) {
+                    .array => |arr| arr.child == u8,
+                    else => false,
+                },
+                .slice, .many => ptr.child == u8,
+                else => false,
+            },
+            .array => |arr| arr.child == u8,
+            else => false,
+        };
     }
 
     pub fn asPlane(self: *MockPlane) Plane {

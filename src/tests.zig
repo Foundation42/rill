@@ -538,7 +538,44 @@ test "G2: frozen reference — the canonical dump hashes to a committed value" {
     // The fixture holds exactly one `set` and no `notify`, so that is the
     // whole of the difference — and the test below pins the CAUSE, so a
     // future move of this hash cannot be waved through with the same excuse.
-    try testing.expectEqualStrings("6fdc7346e5597174845ba80c74d119241d20cce0dcbebc1ca62f2f5dfe3d8041", &hex);
+    // Re-frozen 2026-08-25 (tier 2, beat 1b), deliberate: broadcast makes an
+    // elementwise operator's output KIND follow its input, so every one of
+    // them now declares `out` as `any` instead of a `number`/`boolean` it
+    // cannot promise. The dump carries each slot's type NAME
+    // (serialize.zig), so the fixture's `div 100` and `mul 0.5` output slots
+    // moved from "number" to "any". No mounted-program SEMANTICS changed —
+    // the values and the propagation are identical, which the test below
+    // pins directly rather than asserting here.
+    try testing.expectEqualStrings("939db860a972a4f14e600ade2ca922a3f43549cd02391548e94a1f246477ced6", &hex);
+}
+
+test "G2's hash moved because the slot TYPE moved, not because a value did" {
+    // The receipt for the re-freeze above. Two independent claims: the
+    // elementwise operators declare `any` (the cause), and the fixture's
+    // computed values are exactly what they always were (the non-cause).
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    for ([_][]const u8{ "div", "mul", "add", ">", "and" }) |name| {
+        const def = reg.get(reg.find(name).?);
+        if (def.outputs[0].ty != types.Tag.any) {
+            std.debug.print("'{s}' declares a static output type again — broadcast makes it input-dependent\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, g2_source, .{
+        .{ "plane.player.health", @as(i64, 80) },
+        .{ "plane.player.stamina", @as(i64, 50) },
+        .{ "plane.player.underwater", false },
+    });
+    defer fx.deinit();
+    // 80 clamped to 0..100, divided by 100 — the same 0.8 as before the beat.
+    try testing.expectEqual(@as(f64, 0.8), slotNum(&fx, "programs.p.div1.out.out").?);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.mul1.out.out").?);
+    try testing.expectEqual(@as(usize, 1), fx.mock.writes.items.len);
+    try testing.expectEqual(@as(f64, 0.8), types.asNumber(fx.mock.writes.items[0].value).?);
 }
 
 // ---------------------------------------------------------------------------
@@ -2024,6 +2061,21 @@ test "every core op declares its class deliberately" {
         .{ .name = "abs", .class = .pure },
         .{ .name = "floor", .class = .pure },
         .{ .name = "round", .class = .pure },
+        // beat 1b — the math completions, all pure, all broadcasting
+        .{ .name = "sin", .class = .pure },
+        .{ .name = "cos", .class = .pure },
+        .{ .name = "tan", .class = .pure },
+        .{ .name = "sqrt", .class = .pure },
+        .{ .name = "exp", .class = .pure },
+        .{ .name = "log", .class = .pure },
+        .{ .name = "ceil", .class = .pure },
+        .{ .name = "sign", .class = .pure },
+        .{ .name = "fract", .class = .pure },
+        .{ .name = "pow", .class = .pure },
+        .{ .name = "mod", .class = .pure },
+        .{ .name = "atan2", .class = .pure },
+        .{ .name = "pi", .class = .pure },
+        .{ .name = "tau", .class = .pure },
         .{ .name = "=", .class = .pure },
         .{ .name = "!=", .class = .pure },
         .{ .name = "<", .class = .pure },
@@ -2685,8 +2737,679 @@ test "the manuals parse: every printed example compiles" {
     // 30 → 32, 3 → 4 (2026-08-25): tier-2 beat 1a added §6b (movement) to
     // the human manual — the waveform trio and the register examples — and
     // the register line to the agent manual's temporal row.
-    try testing.expectEqual(@as(usize, 32), human);
+    // 32 → 33 (beat 1b): the human manual's §6b gained the broadcast trio.
+    try testing.expectEqual(@as(usize, 33), human);
     try testing.expectEqual(@as(usize, 4), agent);
+}
+
+
+// ---------------------------------------------------------------------------
+// The refusals gate (ruled 2026-08-25, after beat 1a segfaulted Matryoshka).
+//
+// The bug was a use-after-free in a refusal MESSAGE — code that had never been
+// executed by a test, because every gate in both repos drove the accepting
+// path. The wire gate covers accepts. This covers the other half.
+//
+// Structural, not a list: it WALKS THE REGISTRY and builds a driver for each
+// op from its own port and static declarations, so a new operator is covered
+// the moment it registers. An op that cannot be driven into a refusal has to
+// say so on the `accepts_anything` list below, on purpose — exhaustive both
+// ways, like the class and ticks audits.
+//
+// What it asserts, for every op: the refusal ARRIVES, and its message FORMATS
+// — node, op and detail printed into a buffer under the testing allocator, so
+// a slice into freed memory is caught here rather than in a host a quarter
+// later. Ack first, then free, everywhere.
+// ---------------------------------------------------------------------------
+
+/// Ops that accept a string on port 0 and are right to. Each is a fact worth
+/// pinning rather than an exemption: a sink writes whatever flows, `tap`
+/// passes anything through by definition, and a source has no input to
+/// poison.
+const accepts_anything = [_][]const u8{
+    // sources — no input port to feed
+    "clock", "frame",  "pi",    "tau",    "const", // sinks and passthroughs — any value is a legal payload
+    "set",   "notify", "tap",   "record",
+    // value-agnostic flow: these move bytes without reading them
+    "latch", "changed", "where", "partition", "sample",
+    "debounce", "throttle", "cooldown", "delay", "window", "arm", "disarm",
+    "=", "!=",
+    "tag",
+    "untag",
+};
+
+/// Ops whose generated driver needs a hand — a `tail` port swallows the rest
+/// of the line, membership sinks need a host, and `project` needs a record.
+const driver_overrides = [_]struct { name: []const u8, source: []const u8 }{
+    .{ .name = "tag", .source = "plane.bad | tag @e #t" },
+    .{ .name = "untag", .source = "plane.bad | untag @e #t" },
+    .{ .name = "inc", .source = "plane.bad | inc plane.out plane.bad" },
+    .{ .name = "project", .source = "plane.bad | project f | set plane.out" },
+    .{ .name = "stats", .source = "plane.bad | stats | set plane.out" },
+};
+
+/// A syntactically valid filler for a port, from its declared type — so the
+/// driver exercises the port under test and nothing else.
+fn fillerFor(port: registry.Port) []const u8 {
+    if (port.one_of.len > 0) return port.one_of[0];
+    return switch (port.ty) {
+        types.Tag.number => "1",
+        types.Tag.boolean => "true",
+        types.Tag.string => "\"x\"",
+        types.Tag.duration => "1s",
+        types.Tag.record => "{a: 1}",
+        else => "1",
+    };
+}
+
+fn staticFiller(kind: registry.StaticKind) []const u8 {
+    return switch (kind) {
+        .path => "plane.out",
+        .word => "w",
+        .literal => "1",
+        .channel => "$c",
+        .subject => "@e",
+        .condition => "#t",
+    };
+}
+
+/// Build `plane.bad | <op> <fillers…> | set plane.out` from the definition.
+/// Returns null when the shape can't be driven generically (a tail port takes
+/// the rest of the line; a variadic op has no declared ports).
+fn driverFor(gpa: std.mem.Allocator, def: registry.OpDef) !?[]u8 {
+    if (def.variadic) return null;
+    for (def.inputs) |p| if (p.tail) return null;
+
+    var src = std.ArrayListUnmanaged(u8).empty;
+    errdefer src.deinit(gpa);
+    try src.appendSlice(gpa, "plane.bad | ");
+    try src.appendSlice(gpa, def.name);
+    // Statics come first in source order for the ops that have them.
+    for (def.statics) |st| {
+        try src.append(gpa, ' ');
+        if (st.kw) {
+            try src.appendSlice(gpa, st.name);
+            try src.append(gpa, ' ');
+        }
+        try src.appendSlice(gpa, staticFiller(st.kind));
+    }
+    // Port 0 is the piped one under test; the rest get fillers.
+    for (def.inputs, 0..) |p, i| {
+        if (i == 0 or p.optional) continue;
+        try src.append(gpa, ' ');
+        if (p.kw) {
+            try src.appendSlice(gpa, p.name);
+            try src.append(gpa, ' ');
+        }
+        try src.appendSlice(gpa, fillerFor(p));
+    }
+    if (def.outputs.len > 0 and !def.class.writes()) {
+        try src.appendSlice(gpa, " | set plane.out");
+    }
+    return try src.toOwnedSlice(gpa);
+}
+
+test "every operator's refusal path runs, and its message formats" {
+    const gpa = testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    var covered: usize = 0;
+    var accepted: usize = 0;
+
+    for (reg.ops.items) |def| {
+        const on_list = for (accepts_anything) |n| {
+            if (std.mem.eql(u8, n, def.name)) break true;
+        } else false;
+
+        var owned: ?[]u8 = null;
+        defer if (owned) |o| gpa.free(o);
+        var source: []const u8 = undefined;
+        const override = for (driver_overrides) |o| {
+            if (std.mem.eql(u8, o.name, def.name)) break o.source;
+        } else null;
+        if (override) |o| {
+            source = o;
+        } else {
+            owned = try driverFor(gpa, def);
+            if (owned == null) {
+                // Variadic or tail-shaped: no generic driver exists. It has to
+                // be on the list on purpose, and it still counts toward
+                // coverage so the totals stay honest.
+                if (!on_list) {
+                    std.debug.print("'{s}': cannot be driven generically and is not on a list — add a driver override or say it accepts anything\n", .{def.name});
+                    return error.TestUnexpectedResult;
+                }
+                accepted += 1;
+                continue;
+            }
+            source = owned.?;
+        }
+
+        // A parse-time refusal is a refusal, and its message must format too.
+        var diag = rill.Diag{};
+        var prog = rill.parse(gpa, &reg, "p", source, &diag) catch |err| {
+            if (err != error.Parse) return err;
+            if (diag.msg().len == 0) {
+                std.debug.print("'{s}': refused at parse with an empty message\n", .{def.name});
+                return error.TestUnexpectedResult;
+            }
+            try formatsCleanly(&.{ diag.msg(), def.name });
+            covered += 1;
+            continue;
+        };
+        defer prog.deinit();
+
+        var mock = rill.MockPlane.init(gpa);
+        defer mock.deinit();
+        // A string where the op wants a number or a boolean — the one poison
+        // that every typed port shares.
+        try mock.putValue("plane.bad", "not-a-number");
+        Refusal.reset();
+        var rt = rill.Runtime.mount(gpa, &prog, mock.asPlane(), .{ .error_fn = Refusal.on }) catch |err| {
+            if (err != error.Cycle) return err;
+            covered += 1;
+            continue;
+        };
+        defer rt.deinit();
+
+        if (Refusal.hits == 0) {
+            if (!on_list) {
+                std.debug.print("'{s}': took a string without complaint and is not on the accepts-anything list\n  driver: {s}\n", .{ def.name, source });
+                return error.TestUnexpectedResult;
+            }
+            accepted += 1;
+            continue;
+        }
+        if (on_list) {
+            std.debug.print("'{s}': is on the accepts-anything list but refused — take it off\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+        // The message formats. This is the assertion the segfault would have
+        // failed: printing a refusal must not read memory the refusal freed.
+        // The message FORMATS — this is the assertion the segfault would have
+        // failed: printing a refusal must not read memory the refusal freed.
+        try formatsCleanly(&.{ Refusal.opName(), Refusal.text(), def.name });
+        // …and it SAYS SOMETHING. `@errorName` gives "BadValue", which names
+        // the category and not the fact, and the fact is what a reader needs.
+        // This gate found 21 of 54 refusal paths silent; fixing the four
+        // shared accessors fixed all but five of them, which is the argument
+        // for the accessors being where refusals belong.
+        if (Refusal.text().len == 0) {
+            std.debug.print("'{s}': refused without saying why — `ctx.refuse` instead of a bare BadValue\n  driver: {s}\n", .{ def.name, source });
+            return error.TestUnexpectedResult;
+        }
+        // A refusal names the op that refused, so an ack can land on the node
+        // by name without the host guessing.
+        if (std.mem.indexOf(u8, Refusal.text(), def.name) == null) {
+            std.debug.print("'{s}': refusal \"{s}\" does not name the operator\n", .{ def.name, Refusal.text() });
+            return error.TestUnexpectedResult;
+        }
+        covered += 1;
+    }
+
+    // Both ways. The counts move when the operator set does, on purpose.
+    if (covered + accepted != reg.ops.items.len) {
+        std.debug.print("{d} ops, {d} refused, {d} accepted — someone is uncovered\n", .{ reg.ops.items.len, covered, accepted });
+        return error.TestUnexpectedResult;
+    }
+    try testing.expect(covered > 0);
+}
+
+/// Print the pieces into a buffer. Under the testing allocator a slice into
+/// freed memory faults or reads poison here, at the gate, instead of in a
+/// host's console log a quarter later.
+fn formatsCleanly(pieces: []const []const u8) !void {
+    var buf: [1024]u8 = undefined;
+    var n: usize = 0;
+    for (pieces) |p| {
+        const w = std.fmt.bufPrint(buf[n..], "[{s}]", .{p}) catch break;
+        n += w.len;
+    }
+    if (n == 0) return error.TestUnexpectedResult;
+}
+
+// -- container readers, for the broadcast gates ------------------------------
+
+/// The inner element stream of a container, caller-owned.
+fn innerOf(gpa: std.mem.Allocator, encoded: []const u8) ![]u8 {
+    return (try struple.view(encoded).containedItems(gpa)) orelse error.TestUnexpectedResult;
+}
+
+/// A field name is OWNED, not borrowed: the name lives in the un-escaped
+/// inner buffer, which this helper frees before returning. (Borrowing it read
+/// as garbage — the same shape as the Matryoshka use-after-free this campaign
+/// already fixed once, which is a fair argument for "ack first, then free"
+/// being a rule rather than a habit. The first fix copied into a fixed
+/// `[24]u8` initialised `undefined`, which passed in Debug and produced
+/// garbage in ReleaseFast — so there is no undefined memory here at all now.)
+const Field = struct { k: []u8, v: f64 };
+
+fn freeFields(gpa: std.mem.Allocator, fields: []Field) void {
+    for (fields) |f| gpa.free(f.k);
+    gpa.free(fields);
+}
+
+fn fieldName(f: Field) []const u8 {
+    return f.k;
+}
+
+/// A record's fields as {name, number}, in canonical (sorted) key order.
+fn recordFields(gpa: std.mem.Allocator, encoded: []const u8) ![]Field {
+    const inner = try innerOf(gpa, encoded);
+    defer gpa.free(inner);
+    var out = std.ArrayListUnmanaged(Field).empty;
+    errdefer {
+        for (out.items) |f| gpa.free(f.k);
+        out.deinit(gpa);
+    }
+    var it = struple.MapView.init(inner).iterator();
+    while (try it.next()) |e| {
+        // MapView yields the ENCODED key element; decode it, then own it.
+        const name = types.asString(e.key) orelse "?";
+        try out.append(gpa, .{
+            .k = try gpa.dupe(u8, name),
+            .v = types.asNumber(e.value) orelse std.math.nan(f64),
+        });
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+/// One field of a record, copied out (the value borrows the un-escaped inner
+/// buffer, which this frees). Keys are looked up by their ENCODED element,
+/// which is what `MapView.get` wants.
+fn fieldValue(gpa: std.mem.Allocator, encoded: []const u8, name: []const u8) ![]u8 {
+    const inner = try innerOf(gpa, encoded);
+    defer gpa.free(inner);
+    var kp = struple.Packer.init(gpa);
+    defer kp.deinit();
+    try kp.appendString(name);
+    const v = (try struple.MapView.init(inner).get(kp.bytes())) orelse return error.TestUnexpectedResult;
+    return gpa.dupe(u8, v);
+}
+
+fn arrayNums(gpa: std.mem.Allocator, encoded: []const u8) ![]f64 {
+    const inner = try innerOf(gpa, encoded);
+    defer gpa.free(inner);
+    var out = std.ArrayListUnmanaged(f64).empty;
+    errdefer out.deinit(gpa);
+    var r = struple.reader(inner);
+    while (try r.nextView()) |e| try out.append(gpa, types.asNumber(e) orelse std.math.nan(f64));
+    return out.toOwnedSlice(gpa);
+}
+
+fn arrayBools(gpa: std.mem.Allocator, encoded: []const u8) ![]bool {
+    const inner = try innerOf(gpa, encoded);
+    defer gpa.free(inner);
+    var out = std.ArrayListUnmanaged(bool).empty;
+    errdefer out.deinit(gpa);
+    var r = struple.reader(inner);
+    while (try r.nextView()) |e| try out.append(gpa, types.asBool(e) orelse false);
+    return out.toOwnedSlice(gpa);
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2, beat 1b — broadcast, and the mismatch check that pays for it.
+//
+// They land together (ratified). The gates come in pairs to match: for every
+// shape that broadcasts, one that refuses — and each refusal is asserted on
+// its MESSAGE, not just on the fact of failing. A gate that only asserts "it
+// errored" is the ICE failure re-shipped: ICE had broadcast and reported
+// mismatches without naming the contexts, and that error was the one every
+// user learned to dread.
+// ---------------------------------------------------------------------------
+
+/// Mount `source`, feed nothing, and return the refusal detail for the first
+/// node that failed. The message is the thing under test, so this returns it
+/// rather than a bool.
+const Refusal = struct {
+    var hits: usize = 0;
+    var buf: [512]u8 = undefined;
+    var len: usize = 0;
+    var op: [64]u8 = undefined;
+    var op_len: usize = 0;
+
+    fn on(_: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+        hits += 1;
+        len = @min(ev.detail.len, buf.len);
+        @memcpy(buf[0..len], ev.detail[0..len]);
+        op_len = @min(ev.op.len, op.len);
+        @memcpy(op[0..op_len], ev.op[0..op_len]);
+    }
+
+    fn text() []const u8 {
+        return buf[0..len];
+    }
+
+    fn opName() []const u8 {
+        return op[0..op_len];
+    }
+
+    fn reset() void {
+        hits = 0;
+        len = 0;
+        op_len = 0;
+    }
+};
+
+/// Mount `source` over a seeded plane with the refusal sink attached, tick
+/// once, and hand back the fixture. Callers assert on `Refusal`.
+fn mountWatched(gpa: std.mem.Allocator, fx: *Fixture, source: []const u8, seed: anytype) !void {
+    Refusal.reset();
+    fx.reg = try hostRegistry(gpa);
+    errdefer fx.reg.deinit();
+    fx.mock = rill.MockPlane.init(gpa);
+    errdefer fx.mock.deinit();
+    inline for (seed) |kv| try fx.mock.putValue(kv[0], kv[1]);
+    var diag = rill.Diag{};
+    fx.prog = rill.parse(gpa, &fx.reg, "p", source, &diag) catch |err| {
+        if (err == error.Parse) std.debug.print("parse: {s} (line {d}, col {d})\n", .{ diag.msg(), diag.line, diag.col });
+        return err;
+    };
+    errdefer fx.prog.deinit();
+    fx.rt = try rill.Runtime.mount(gpa, &fx.prog, fx.mock.asPlane(), .{ .error_fn = Refusal.on });
+}
+
+/// Assert the refusal names every one of `needles`. "Both sides and the
+/// offending field" is a checkable claim, so it gets checked.
+fn expectRefusalNames(needles: []const []const u8) !void {
+    if (Refusal.hits == 0) {
+        std.debug.print("expected a refusal, none arrived\n", .{});
+        return error.TestUnexpectedResult;
+    }
+    for (needles) |n| {
+        if (std.mem.indexOf(u8, Refusal.text(), n) == null) {
+            std.debug.print("refusal \"{s}\" does not mention \"{s}\"\n", .{ Refusal.text(), n });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "beat 1b: a scalar broadcasts over a record — the follow row, one line" {
+    // §4's "keep a light 2m above the player", which was ~3 lines and a
+    // rebuilt record. Now it is the sentence.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos",
+        .{.{ "plane.entities.player.pos", .{ .x = @as(f64, 1), .y = @as(f64, 5), .z = @as(f64, -3) } }});
+    defer fx.deinit();
+
+    const r = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.add1.out.out").?);
+    defer freeFields(testing.allocator, r);
+    // Canonical key order, and only the field that was asked for has moved.
+    try testing.expectEqual(@as(usize, 3), r.len);
+    try testing.expectEqualStrings("x", fieldName(r[0]));
+    try testing.expectEqual(@as(f64, 1), r[0].v);
+    try testing.expectEqualStrings("y", fieldName(r[1]));
+    try testing.expectEqual(@as(f64, 7), r[1].v);
+    try testing.expectEqualStrings("z", fieldName(r[2]));
+    try testing.expectEqual(@as(f64, -3), r[2].v);
+
+    // And it reached the plane as a record, not as three writes.
+    try testing.expectEqual(@as(usize, 1), fx.mock.writes.items.len);
+    try testing.expectEqual(types.Tag.record, types.typeOfValue(fx.mock.writes.items[0].value));
+}
+
+test "beat 1b: scalar over record, record over scalar, and both orders agree" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.p | mul 2 | set plane.a
+        \\plane.p | sub 1 | set plane.b
+    , .{.{ "plane.p", .{ .x = @as(f64, 3), .y = @as(f64, 4) } }});
+    defer fx.deinit();
+    const a = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?);
+    defer freeFields(testing.allocator, a);
+    try testing.expectEqual(@as(f64, 6), a[0].v); // x
+    try testing.expectEqual(@as(f64, 8), a[1].v); // y
+    const b = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.sub1.out.out").?);
+    defer freeFields(testing.allocator, b);
+    try testing.expectEqual(@as(f64, 2), b[0].v);
+    try testing.expectEqual(@as(f64, 3), b[1].v);
+}
+
+test "beat 1b: record ⊗ record is elementwise on the same field set" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.a | add plane.b | set plane.o", .{
+        .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
+        .{ "plane.b", .{ .x = @as(f64, 10), .y = @as(f64, 20) } },
+    });
+    defer fx.deinit();
+    const r = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.add1.out.out").?);
+    defer freeFields(testing.allocator, r);
+    try testing.expectEqual(@as(f64, 11), r[0].v);
+    try testing.expectEqual(@as(f64, 22), r[1].v);
+}
+
+test "beat 1b: record ⊗ record with a different field set REFUSES, naming the field" {
+    // No implicit intersection. An intersection quietly computes over the
+    // fields that happen to agree, which is a wrong answer wearing a right
+    // one's clothes — and it is exactly what ICE users learned to dread.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        "plane.a | add plane.b | set plane.o", .{
+        .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = @as(f64, 3) } },
+        .{ "plane.b", .{ .x = @as(f64, 10), .y = @as(f64, 20) } },
+    });
+    defer fx.deinit();
+    // Both sides named, the offending field named, and which side lacks it.
+    try expectRefusalNames(&.{ "add", "record{x, y, z}", "record{x, y}", "'z'", "right" });
+    // …and the wave died: nothing was written from a mismatch.
+    try testing.expectEqual(@as(usize, 0), fx.mock.writes.items.len);
+}
+
+test "beat 1b: the missing field is named on whichever side lacks it" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        "plane.a | add plane.b | set plane.o", .{
+        .{ "plane.a", .{ .x = @as(f64, 1) } },
+        .{ "plane.b", .{ .x = @as(f64, 1), .w = @as(f64, 2) } },
+    });
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "'w'", "left" });
+}
+
+test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with both" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | window 10s | mul 2 | set plane.o", .{.{ "plane.v", @as(f64, 3) }});
+    defer fx.deinit();
+    // `window 10s | mul 2` IS map — the draft's own claim, executed.
+    const arr = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?);
+    defer testing.allocator.free(arr);
+    try testing.expectEqual(@as(usize, 1), arr.len);
+    try testing.expectEqual(@as(f64, 6), arr[0]);
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        "plane.a | add plane.b | set plane.o", .{
+        .{ "plane.a", [_]f64{ 1, 2, 3 } },
+        .{ "plane.b", [_]f64{ 10, 20 } },
+    });
+    defer fx2.deinit();
+    // Both LENGTHS named. Grasshopper picks a matching rule implicitly and it
+    // is the most-complained-about behaviour in the tool.
+    try expectRefusalNames(&.{ "add", "of 3", "of 2", "same length" });
+}
+
+test "beat 1b: a record and an array have no elementwise meaning" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        "plane.a | add plane.b | set plane.o", .{
+        .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
+        .{ "plane.b", [_]f64{ 1, 2 } },
+    });
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "record{x, y}", "[number]", "no elementwise meaning" });
+}
+
+test "beat 1b: nesting recurses, and a non-numeric leaf is named where it lives" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.a | mul 2 | set plane.o",
+        .{.{ "plane.a", .{ .inner = .{ .x = @as(f64, 3) } } }});
+    defer fx.deinit();
+    const nested = try fieldValue(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?, "inner");
+    defer testing.allocator.free(nested);
+    const leaf = try recordFields(testing.allocator, nested);
+    defer freeFields(testing.allocator, leaf);
+    try testing.expectEqualStrings("x", fieldName(leaf[0]));
+    try testing.expectEqual(@as(f64, 6), leaf[0].v);
+
+    // A string two levels down is named by its PATH, not merely reported.
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        "plane.a | mul 2 | set plane.o",
+        .{.{ "plane.a", .{ .inner = .{ .name = "tom" } } }});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "mul", "string", "not a number", ".inner.name" });
+}
+
+test "beat 1b: comparators broadcast — beat 3's keep depends on it" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.a | > 0 | set plane.o", .{.{ "plane.a", [_]f64{ 1, -2, 3 } }});
+    defer fx.deinit();
+    const bits = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.gt1.out.out").?);
+    defer testing.allocator.free(bits);
+    try testing.expectEqualSlices(bool, &.{ true, false, true }, bits);
+}
+
+test "beat 1b: and/or/not broadcast over containers too" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.flags | not | set plane.a
+        \\plane.flags | and true | set plane.b
+    , .{.{ "plane.flags", [_]bool{ true, false } }});
+    defer fx.deinit();
+    const n = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.not1.out.out").?);
+    defer testing.allocator.free(n);
+    try testing.expectEqualSlices(bool, &.{ false, true }, n);
+    const a = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.and1.out.out").?);
+    defer testing.allocator.free(a);
+    try testing.expectEqualSlices(bool, &.{ true, false }, a);
+}
+
+test "beat 1b: `=` does NOT broadcast, deliberately" {
+    // The line, and the reason for it: `<` has no meaning on a whole record —
+    // there is no total order on records — so elementwise is the ONLY reading.
+    // `=` has an exact meaning on a whole record, so broadcasting would
+    // REPLACE a good answer with a different one. Whole-value equality stays.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.a | = plane.b | set plane.same
+        \\plane.a | = plane.c | set plane.other
+    , .{
+        .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
+        .{ "plane.b", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
+        .{ "plane.c", .{ .x = @as(f64, 1), .y = @as(f64, 9) } },
+    });
+    defer fx.deinit();
+    // The inequality first: these inputs are two-field records, so a
+    // broadcasting `=` would produce a RECORD of two booleans and a
+    // whole-value `=` produces one boolean. The two answers differ in kind,
+    // which is what makes the assertion below mean anything.
+    const eq_out = fx.rt.readSlot("programs.p.eq1.out.out").?;
+    try testing.expect(types.typeOfValue(eq_out) != types.Tag.record);
+    try testing.expectEqual(types.Tag.boolean, types.typeOfValue(eq_out));
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.eq1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.eq2.out.out").?).?);
+}
+
+test "beat 1b: the tier-1 math words are re-scored against containers" {
+    // Chris's condition on the split: binMath is touched THIS beat and never
+    // again, so every word minted by it is scored here against a record and an
+    // array — not just the two that happened to have a customer.
+    const Case = struct { src: []const u8, node: []const u8, want: [2]f64 };
+    const cases = [_]Case{
+        .{ .src = "plane.v | add 1 | set plane.o", .node = "add1", .want = .{ 4, -1 } },
+        .{ .src = "plane.v | sub 1 | set plane.o", .node = "sub1", .want = .{ 2, -3 } },
+        .{ .src = "plane.v | mul 3 | set plane.o", .node = "mul1", .want = .{ 9, -6 } },
+        .{ .src = "plane.v | div 2 | set plane.o", .node = "div1", .want = .{ 1.5, -1 } },
+        .{ .src = "plane.v | min 0 | set plane.o", .node = "min1", .want = .{ 0, -2 } },
+        .{ .src = "plane.v | max 0 | set plane.o", .node = "max1", .want = .{ 3, 0 } },
+        .{ .src = "plane.v | abs | set plane.o", .node = "abs1", .want = .{ 3, 2 } },
+        .{ .src = "plane.v | floor | set plane.o", .node = "floor1", .want = .{ 3, -2 } },
+        .{ .src = "plane.v | ceil | set plane.o", .node = "ceil1", .want = .{ 3, -2 } },
+        .{ .src = "plane.v | round | set plane.o", .node = "round1", .want = .{ 3, -2 } },
+        .{ .src = "plane.v | sign | set plane.o", .node = "sign1", .want = .{ 1, -1 } },
+        .{ .src = "plane.v | pow 2 | set plane.o", .node = "pow1", .want = .{ 9, 4 } },
+        .{ .src = "plane.v | mod 4 | set plane.o", .node = "mod1", .want = .{ 3, 2 } },
+        .{ .src = "plane.v | sqrt | set plane.o", .node = "sqrt1", .want = .{ 1.7320508075688772, std.math.nan(f64) } },
+    };
+    inline for (cases) |c| {
+        // as a record…
+        var fx: Fixture = undefined;
+        try mountFixture(testing.allocator, &fx, c.src,
+            .{.{ "plane.v", .{ .a = @as(f64, 3), .b = @as(f64, -2) } }});
+        defer fx.deinit();
+        const path = "programs.p." ++ c.node ++ ".out.out";
+        const r = try recordFields(testing.allocator, fx.rt.readSlot(path).?);
+        defer freeFields(testing.allocator, r);
+        try expectSameFloat(c.want[0], r[0].v, c.node);
+        try expectSameFloat(c.want[1], r[1].v, c.node);
+
+        // …and as an array, which must agree element for element.
+        var fx2: Fixture = undefined;
+        try mountFixture(testing.allocator, &fx2, c.src, .{.{ "plane.v", [_]f64{ 3, -2 } }});
+        defer fx2.deinit();
+        const arr = try arrayNums(testing.allocator, fx2.rt.readSlot(path).?);
+        defer testing.allocator.free(arr);
+        try expectSameFloat(c.want[0], arr[0], c.node);
+        try expectSameFloat(c.want[1], arr[1], c.node);
+    }
+}
+
+fn expectSameFloat(want: f64, got: f64, who: []const u8) !void {
+    if (std.math.isNan(want)) {
+        if (std.math.isNan(got)) return;
+    } else if (want == got) return;
+    std.debug.print("{s}: expected {d}, got {d}\n", .{ who, want, got });
+    return error.TestUnexpectedResult;
+}
+
+test "beat 1b: a scalar program is bit-identical to what it was before broadcast" {
+    // The regression that matters most: broadcast must be invisible to every
+    // program that never uses it. Same arithmetic, same encoding, same bytes.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | add 1 | mul 2 | > 5 | set plane.o", .{.{ "plane.v", @as(f64, 3) }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 4), slotNum(&fx, "programs.p.add1.out.out").?);
+    try testing.expectEqual(@as(f64, 8), slotNum(&fx, "programs.p.mul1.out.out").?);
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.gt1.out.out").?).?);
+}
+
+test "beat 1b: the math completions" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\pi as half_turn
+        \\half_turn | set plane.pi
+        \\tau | set plane.tau
+        \\plane.v | mul half_turn | sin | set plane.s
+        \\plane.v | atan2 0 | set plane.at
+        \\plane.v | fract | set plane.fr
+    , .{.{ "plane.v", @as(f64, 1) }});
+    defer fx.deinit();
+    try testing.expectEqual(std.math.pi, slotNum(&fx, "programs.p.pi1.out.out").?);
+    try testing.expectEqual(std.math.tau, slotNum(&fx, "programs.p.tau1.out.out").?);
+    try testing.expectApproxEqAbs(@as(f64, 0), slotNum(&fx, "programs.p.sin1.out.out").?, 1e-15);
+    try testing.expectApproxEqAbs(std.math.pi / 2.0, slotNum(&fx, "programs.p.atan21.out.out").?, 1e-15);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.fract1.out.out").?);
+}
+
+test "beat 1b: `mod` and `fract` follow the divisor, which is what angles need" {
+    // Truncated remainder gets these wrong on exactly the half of the circle
+    // people forget to test.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.a | mod 360 | set plane.m
+        \\plane.a | fract | set plane.f
+    , .{.{ "plane.a", @as(f64, -90.25) }});
+    defer fx.deinit();
+    try testing.expectApproxEqAbs(@as(f64, 269.75), slotNum(&fx, "programs.p.mod1.out.out").?, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), slotNum(&fx, "programs.p.fract1.out.out").?, 1e-12);
 }
 
 // ---------------------------------------------------------------------------
@@ -3122,13 +3845,23 @@ test "beat 1a: `range` clamps where `lerp` extrapolates" {
         \\plane.t | lerp 0.5 1.5 | set plane.lerped
     , .{.{ "plane.t", @as(f64, 2.0) }});
     defer fx.deinit();
-    try testing.expectEqual(@as(f64, 1.5), slotNum(&fx, "programs.p.range1.out.out").?);
-    try testing.expectEqual(@as(f64, 2.5), slotNum(&fx, "programs.p.lerp1.out.out").?);
+    // The inequality FIRST (the ledger rule from beat 1a's retarget survivor:
+    // a gate asserting "A rather than B" must run where A differs from B, and
+    // must assert that difference before anything else — otherwise it passes
+    // for both and asserts nothing).
+    const ranged = slotNum(&fx, "programs.p.range1.out.out").?;
+    const lerped = slotNum(&fx, "programs.p.lerp1.out.out").?;
+    try testing.expect(ranged != lerped);
+    try testing.expectEqual(@as(f64, 1.5), ranged);
+    try testing.expectEqual(@as(f64, 2.5), lerped);
 
     try feedValue(&fx.rt, testing.allocator, "plane.t", @as(f64, -1.0));
     try run(&fx, 16 * ms, 1);
-    try testing.expectEqual(@as(f64, 0.5), slotNum(&fx, "programs.p.range1.out.out").?);
-    try testing.expectEqual(@as(f64, -0.5), slotNum(&fx, "programs.p.lerp1.out.out").?);
+    const r_lo = slotNum(&fx, "programs.p.range1.out.out").?;
+    const l_lo = slotNum(&fx, "programs.p.lerp1.out.out").?;
+    try testing.expect(r_lo != l_lo);
+    try testing.expectEqual(@as(f64, 0.5), r_lo);
+    try testing.expectEqual(@as(f64, -0.5), l_lo);
 }
 
 test "beat 1a: `shape` eases the unit interval" {
@@ -3271,8 +4004,11 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // the VU meter, the eased target, closing-fast, the swing, the two rows
     // beat 1a both added and cleared, the partial fade, and the ticking
     // demonstration — plus the pages that record what the family costs.
-    try testing.expectEqual(@as(usize, 21), rill_cells);
-    try testing.expectEqual(@as(usize, 53), total);
+    // 21 → 25, 53 → 60 (beat 1b): the follow row's after-cell, the two
+    // idioms broadcast replaced (window|mul is map; a comparator over an
+    // array is beat 3's predicate), and the range-or-lerp page.
+    try testing.expectEqual(@as(usize, 25), rill_cells);
+    try testing.expectEqual(@as(usize, 60), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -3619,3 +4355,40 @@ test "^: the archetype sigil lexes one token, guarded — engine-owned, never an
     try expectParseError("def ^d(x) = x | mul 2", "cannot wear");
 }
 
+
+test "MockPlane.putValue: containers encode as containers, strings stay strings" {
+    // The trap this closes: a string is a pointer, so the container branch
+    // would have iterated it into a sequence of byte-ints. Nothing in the
+    // suite seeded a string through putValue when the branch was added, so
+    // nothing would have caught it until something did.
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.s", "hello");
+    try mock.putValue("plane.r", .{ .x = @as(f64, 1), .y = @as(f64, 2) });
+    try mock.putValue("plane.a", [_]f64{ 1, 2, 3 });
+    try mock.putValue("plane.n", @as(f64, 7));
+
+    var buf = struple.Packer.init(testing.allocator);
+    defer buf.deinit();
+    const read = struct {
+        fn go(m: *rill.MockPlane, b: *struple.Packer, path: []const u8) ![]const u8 {
+            b.reset();
+            try m.asPlane().read(path, b);
+            return b.bytes();
+        }
+    }.go;
+    try testing.expectEqualStrings("hello", types.asString(try read(&mock, &buf, "plane.s")).?);
+    const rec = try read(&mock, &buf, "plane.r");
+    try testing.expectEqual(types.Tag.record, types.typeOfValue(rec));
+    // …and it is ITERABLE, which a record whose keys were written as raw
+    // bytes rather than encoded string elements is not. The first draft of
+    // this helper wrote raw keys and every container gate reported a
+    // malformed record; the type tag alone would not have caught it.
+    const fields = try recordFields(testing.allocator, rec);
+    defer freeFields(testing.allocator, fields);
+    try testing.expectEqual(@as(usize, 2), fields.len);
+    try testing.expectEqualStrings("x", fieldName(fields[0]));
+    try testing.expectEqual(@as(f64, 1), fields[0].v);
+    try testing.expectEqual(types.Tag.array, types.typeOfValue(try read(&mock, &buf, "plane.a")));
+    try testing.expectEqual(types.Tag.number, types.typeOfValue(try read(&mock, &buf, "plane.n")));
+}

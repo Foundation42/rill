@@ -174,8 +174,9 @@ if you meant to. Gated both ways.
 
 ### 2.5 Math
 
-`sin cos tan atan2 sqrt pow exp log mod sign fract`, and `pi` / `tau` as
-constants. Nothing to argue about; they are missing.
+**BUILT, beat 1b (2026-08-25).** `sin cos tan atan2 sqrt pow exp log mod
+sign fract`, `ceil` (`floor`'s missing mirror, found while writing them),
+and `pi` / `tau` as sources. Nothing to argue about; they were missing.
 
 Also missing and hit on day one: **`and or not`**. The conjunction idiom
 is `where <bool>`, and the first program with two conditions needs
@@ -186,6 +187,21 @@ One pin rather than a family: **math ops broadcast over records.**
 That makes "keep the light 2m above the player" one line —
 `@player.pos | add {x: 0, y: 2, z: 0} | set …` — without a separate
 vector family, and it's what every graphics person expects anyway.
+
+**BUILT, beat 1b — and it is one site.** Every math word, every
+comparator and `and`/`or`/`not` are minted by four comptime helpers, so
+broadcast is a property of the helpers: the fourteen completions were
+born with it and the tier-1 fourteen were re-scored against a record and
+an array in one table. `binMath` is touched this beat and never again,
+which is the whole reason the beat was split.
+
+Two rules the build settled. **`=` and `!=` do not broadcast**: `<` has
+no meaning on a whole record so elementwise is its only reading, while
+`=` already has an exact whole-value meaning and broadcasting would
+replace a good answer with a different one. **Ternary operators stay
+scalar** (`clamp`, `lerp`, `range`, `select`) — the pin was written in
+binary terms, `map (clamp 0 1)` covers the case in beat 3, and a
+three-way shape agreement rule is a question nobody has asked.
 
 The bill for broadcast, paid up front: **a kind or shape mismatch is
 loud, with both sides named.** ICE had broadcast and reported mismatches
@@ -556,7 +572,7 @@ besides.
 | night falls → lights on | 1 line, **and it chatters at dusk** | 1 | `above` (beat 4) — strict crossings switch on and off across the threshold |
 | cooldown-guarded order | 1 | 1 | ✓ |
 | swing a light back and forth | ~~~8~~ **1 ✓** | 1 | ~~`lfo tri`, `range`~~ **landed, beat 1a** |
-| follow: keep a light 2m above the player | ~3 | 1–2 | record math (beat 1b) |
+| follow: keep a light 2m above the player | ~~~3~~ **1 ✓** | 1–2 | ~~record math~~ **landed, beat 1b** |
 | rate-limit a noisy sensor into a knob | 1 | 1 | ✓ (`sample`) — re-probe at beat-4 close against a noisy input |
 | flicker a torch | can't (no noise) | 1 | `noise`, `range` (beat 4) |
 | shake the camera on impact, 300ms | can't | 2–3 | `noise` ×3 seeds, `hold` (landed), record math |

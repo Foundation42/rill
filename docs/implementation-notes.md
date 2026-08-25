@@ -337,6 +337,111 @@ campaign's rulings are in `docs/rill-tier2-draft.md` §6.
   console-words push; a tier-2 gate asserting the message text is what
   surfaced it.
 
+## Tier 2, beat 1b — broadcast, and the mismatch check (2026-08-25)
+
+Built: elementwise math over records and arrays, the loud mismatch check,
+and the completions (`sin cos tan atan2 sqrt pow exp log mod ceil sign
+fract`, `pi`/`tau`). The beat existed as its own half so that `binMath`
+would be touched **once** — every math word is born broadcasting.
+
+- **One site, as promised.** `binMath` / `unMath` / `cmpOp` / `boolOp`
+  mint every arithmetic word, every comparator and the boolean trio.
+  Broadcast is a property of those four helpers, so the fourteen new
+  words inherited it without a line of per-op work, and the tier-1
+  fourteen are re-scored against a record AND an array in one table.
+
+- **The rules refuse rather than guess.** Scalar ⊗ container is
+  elementwise; record ⊗ record needs the same field set (no implicit
+  intersection — an intersection quietly computes over the fields that
+  happen to agree); array ⊗ array needs equal length, both named;
+  record ⊗ array has no elementwise meaning; nesting recurses; a
+  non-numeric leaf is named by its path.
+
+- **`=` and `!=` do not broadcast, and the line is principled.** `<` has
+  no meaning on a whole record — there is no total order on records — so
+  elementwise is its only reading. `=` already has an exact whole-value
+  meaning, so broadcasting it would REPLACE a good answer with a
+  different one.
+
+- **The type-word vocabulary** (`number`, `boolean`, `string`,
+  `record{x, y}`, `[number]`, `[]`, `[mixed]`) has one renderer,
+  depth-capped at two containers. Beat 2's shape literal reuses it, so a
+  mismatch message and a shape can never describe the same value two
+  different ways.
+
+- **`accepts` gained one exception**: a `number` or `boolean` port also
+  accepts a record or an array, because otherwise `add {x: 0, y: 2, z: 0}`
+  is unsayable. The cost, stated: a container literal now reaches ports
+  with no elementwise meaning (`inc`'s `by`, a threshold), which refuse
+  at eval instead of at parse. `expect`/`match` are the way back.
+
+- **Named deviation — the broadcasting ops declare `out` as `any`.** An
+  elementwise operator's output KIND follows its input, and a static
+  `TypeId` cannot say "same as whatever arrives". Declaring `number`
+  would be false exactly when broadcast is working, and the manual gate
+  proved it: `window 10s | mul 2 | stats` refused at wire time because
+  `mul` claimed to emit a number. `any` means "not statically known".
+  This moved G2's frozen hash (the dump carries slot type names); the
+  re-freeze carries a test pinning the cause and the unchanged values.
+
+- **Named deviation — ternary ops do not broadcast.** `clamp`, `lerp`,
+  `range` and `select` stay scalar. The pin was written in binary terms,
+  `map (clamp 0 1)` covers the case in beat 3, and a three-way shape
+  agreement rule is a design question nobody has asked yet.
+
+- **Refusals gained a message channel.** `EvalCtx.detail` is a fixed
+  buffer (no allocator on an error path) that the runtime clears before
+  every eval and carries into `ErrorEvent.detail`. `ctx.refuse(fmt, …)`
+  records the reason and returns the error in one move, so a refusal
+  cannot record a reason and forget to fail.
+
+## The refusals gate (2026-08-25)
+
+Ruled after beat 1a segfaulted Matryoshka in a refusal message that no
+test had ever executed. **The wire gate covers accepts; this covers the
+other half.**
+
+It WALKS THE REGISTRY and builds a driver for each op out of its own
+port and static declarations — so a new operator is covered the moment
+it registers, and an op that cannot be driven into a refusal must say so
+on a list, on purpose. Exhaustive both ways, like the class and ticks
+audits. For every op it asserts the refusal **arrives**, its message
+**formats** (printed under the testing allocator, so a slice into freed
+memory faults at the gate), it **says why**, and it **names the operator
+that refused**.
+
+What it found on its first run: **21 of 54 refusal paths said nothing at
+all** — `@errorName` gives "BadValue", which names the category and not
+the fact. All 21 ran through the same four accessors (`num`, `boolean`,
+`raw`, `dur`), so the fix belongs there and not in the operators: the
+context now carries the `OpDef`, and one change made every one of them
+name itself and its port. Five stragglers with their own decode paths
+were fixed by hand. A mutation restoring the silent `BadValue` is bitten
+by the gate.
+
+**The ordering rule this comes from, everywhere: ack first, then free.**
+A refusal message is built from the thing being refused, so the message
+must be formatted while that thing is still alive.
+
+## Gate discipline — asserting "A rather than B" (2026-08-25)
+
+From beat 1a's surviving mutation, and it generalises:
+
+> **A gate asserting "A rather than B" must run in a case where A ≠ B,
+> and must assert that inequality FIRST.** Otherwise it passes for both
+> implementations and asserts nothing.
+
+Beat 1a's `ramp` gate claimed "retargets from where it is, not from the
+old target" while retargeting *after* the tween had finished — where
+"where it is" and "the old target" are the same number. The mutation
+swapping one for the other survived, because there was nothing to see.
+The fix was not a better assertion but a better *case*: interrupt
+mid-flight, where the two answers differ by a tenth of a unit.
+
+Applied in beat 1b to the `range`-vs-`lerp` gate (assert `ranged !=
+lerped` before either value) and to the `=`-does-not-broadcast gate
+(assert the output is not a record before asserting it is a boolean).
+
 ## Naming rules that are structural (2026-08-25)
 
 The ledger already holds one meta-rule — *when a predicate over a

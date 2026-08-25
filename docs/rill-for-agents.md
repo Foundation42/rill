@@ -135,8 +135,31 @@ head followed by `{ … }` fans out into the block's branches (the
 `also` desugar, at the head). Predicate sections — `where (> 0)` —
 mirror the consumer's primary input into a comparison.
 
-**No array/vec literals.** A position is read from a path (dot-form is
-live: a moving `at` re-aims without re-rousing).
+**No array/vec literals** yet (beat 2). A position is read from a path
+(dot-form is live: a moving `at` re-aims without re-rousing).
+
+**Math broadcasts.** `add sub mul div min max`, the completions, the
+comparators and `and`/`or`/`not` are **elementwise over records and
+arrays**; a scalar broadcasts to every element. So
+`@player.pos | add {x: 0, y: 2, z: 0}` is one line, `window 10s | mul 2`
+IS map, and `[1, -2, 3] | > 0` is `[true, false, true]`.
+
+The rules, and they REFUSE rather than guess:
+
+- record ⊗ record needs the **same field set** — no implicit
+  intersection;
+- array ⊗ array needs **equal length**, and the refusal names both;
+- a record and an array together have no elementwise meaning;
+- nesting recurses; a non-numeric leaf is named by its path
+  (`mul: the left side is string, not a number at .inner.name`).
+
+`=` and `!=` do **not** broadcast, on purpose: `<` has no meaning on a
+whole record so elementwise is its only reading, while `=` already has
+an exact whole-value meaning and broadcasting would replace a good
+answer with a different one.
+
+Every refusal names the operator, both sides, and where — that is a
+gated property, not a hope.
 
 **Movement ticks, and it stops.** `clock`/`frame`/`lfo` re-evaluate every
 tick for as long as time is fed, so everything downstream of them does
@@ -168,6 +191,7 @@ plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.sig
 | movement | `clock` / `frame` (sources: fed seconds / frames SINCE MOUNT) · `lfo shape period [phase p]` → 0..1 (source) · `wave t shape period` → 0..1 (t piped; same waveform, pure) · shapes `sine tri saw square` |
 | registers | `ease in tau [up t] [down t]` · `ramp in over` · `hold in for` · `diff in` (per second) · `integrate in max m` (clamp REQUIRED, ±m) — all hold state INSIDE the operator, which is legal: the cycle ban is about state through the plane |
 | shaping | `range t lo hi` (0..1 → lo..hi, CLAMPS) · `shape t curve` (0..1 → 0..1; `linear smooth in out inout`) · `lerp t a b` extrapolates where `range` clamps |
+| math | …and the completions: `sin cos tan atan2 sqrt pow exp log mod ceil sign fract` · `pi`/`tau` (sources, once at mount). `mod` and `fract` are FLOORED — the sign follows the divisor, so `-90 \| mod 360` is 270 |
 | math | `add sub mul div min max` · `clamp in lo hi` · `abs floor round` · `= != < <= > >=` |
 | records | `{f: x, …}` · `.field` projection · `merge a b` |
 | sinks | `set <path> [value]` · `notify <path> [value]` · `inc <path> <by>` · `cast <$chan> [value] radius <r> at <pos> [decay <d>] [to <#tag>]` · `tag <@subject> <#tag>` / `untag …` (ONE tag per call; unpiped = once at tick 0; membership is a SET — twice is once, only transitions speak) |
@@ -255,6 +279,7 @@ first, so `sound play` is one operator.
 | `cast $alarm 30` for radius 30 | payload-or-radius is ambiguous | `cast $alarm radius 30 at <ref>` |
 | `sample 5` | durations carry units | `sample 5s` (or `5f` if you mean frames) |
 | `lerp a b t` with all three bound | the PIPED value is `t` (flipped 2026-08-25, before the corpus had a caller) | `s \| lerp 0.5 1.5` — s, lerped between 0.5 and 1.5 |
+| `lerp` on a knob that can overshoot | `lerp` EXTRAPOLATES past its ends — a 0..1 source that strays gives you an exposure outside the interval you named | `range lo hi` — the exit from the unit interval, and it clamps |
 | `x \| mul 2 { set plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { set plane.a }` |
 | `x \| plane.y` | a pipe feeds an OPERATOR; a path on the right is a write | `x \| set plane.y` (the error asks: did you forget `set`?) |
 | `as $x` / `def $f(…)` | sigils name store rows, never streams/ops | pick an unsigiled name |

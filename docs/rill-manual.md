@@ -236,6 +236,9 @@ in steps.
 | "fade to the new value" | `\| ramp <over>` | `ease` never quite arrives (and shouldn't); `ramp` has an end and lands on it |
 | "how fast is it changing?" | `\| diff` | derive it; don't ask the host to publish a velocity field |
 | "count up while this is held" | `\| integrate max <m>` | op-internal state, so no `inc` dance — and the cap is required |
+| "map 0..1 onto a real range" | `\| range lo hi`, not `lerp` | `range` clamps and `lerp` extrapolates; a modulation chain wants the interval it named |
+| "add 2 metres to a position" | `\| add {x: 0, y: 2, z: 0}` | math is elementwise over records and arrays; there is no vector family to learn |
+| "double every reading in the window" | `window 10s \| mul 2` | broadcasting over an array IS map |
 | "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
 | "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
 | "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
@@ -323,6 +326,15 @@ for when the phase comes from somewhere other than a clock. `range lo hi`
 takes 0..1 back out to a real scale, and `shape <curve>` eases it on the
 way (`linear`, `smooth`, `in`, `out`, `inout`).
 
+**`range` is the exit from the unit interval, and that is why it is not
+`lerp`.** The arithmetic is the same — `lo + (hi − lo) · t` — but `range`
+**clamps** its input to 0..1 and `lerp` **extrapolates** past its ends.
+So a modulation chain uses `range`: everything upstream of it (`lfo`,
+`wave`, `shape`) leaves 0..1 by construction, and if something ever
+strays, the exposure stays inside the interval you named instead of
+going dark or blowing out. Reach for `lerp` when you are genuinely
+blending two things and want to be able to overshoot.
+
 ```rill
 lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
 clock | set plane.ui.elapsed
@@ -332,6 +344,23 @@ lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle
 The first line is the whole point of the family: *breathe the exposure
 between 0.5 and 1.5 over four seconds*, one sentence, one line. It used
 to be two programs and seven lines of arithmetic.
+
+**Math is elementwise over records and arrays.** A scalar broadcasts to
+every element, so there is no vector family to learn and no separate
+"map":
+
+```rill
+plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos
+plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load
+plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact
+```
+
+Mismatches **refuse** rather than guess. Two records must have the same
+field set; two arrays must be the same length; a record and an array
+together have no elementwise meaning. Each refusal names both sides, the
+offending field, and which side lacks it. `=` and `!=` stay whole-value
+— a record already compares as a record, and breaking that up would
+replace a good answer with a different one.
 
 **Registers** chase a target *inside* the operator. They can, where a
 program can't: a rill may not write a path it also reads, but an
@@ -519,6 +548,13 @@ presence:
 - **Unknown names.** A bare word is only ever a string literal when it
   binds a string-typed port (that is how console entity names work);
   anywhere else it is a loud error, never a guess.
+- **Shape mismatches under broadcast.** Adding two records with
+  different fields, or two arrays of different lengths, is refused at
+  the node — with both sides named in the type-word vocabulary
+  (`record{x, y, z}` and `record{x, y}`), the offending field named, and
+  which side lacks it. There is no implicit intersection and no
+  zip-to-the-shorter: picking a rule quietly is how a wrong answer
+  learns to look like a right one.
 - **`sample 5`.** Durations need units — the error names the fix.
 - **`inc p 5` unpiped** would bind 5 as the rousing and silently
   default the amount; `by` is required so it can't.

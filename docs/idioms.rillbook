@@ -352,6 +352,20 @@
    "source": "plane.entities.player.pos.y | add 2 as lifted\n{x: plane.entities.player.pos.x, y: lifted, z: plane.entities.player.pos.z}\n  | set plane.lights.follow.pos"
   },
   {
+   "name": "follow-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after \u2014 beat 1b \u2705\n\nMath is elementwise over records, so a position plus an offset is the\nsentence. No vector family, no rebuilt record, no separate `map`.\n\nThe mutation that must bite is making `add` scalar again."
+  },
+  {
+   "name": "follow-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos"
+  },
+  {
    "name": "contracts-ask",
    "mode": "query",
    "markdown": true,
@@ -371,6 +385,41 @@
    "markdown": false,
    "collapsed": false,
    "source": "plane.target | ease 100ms | set plane.smoothed"
+  },
+  {
+   "name": "broadcast-refusals",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## What broadcast refuses, and how it says so\n\nBroadcast and its mismatch check landed together \u2014 ratified up front,\nbecause ICE shipped broadcast without one and that error was the thing\nevery ICE user learned to dread.\n\nEvery refusal names the operator, **both sides**, and where, in a\ntype-word vocabulary defined once (`number`, `record{x, y}`, `[number]`)\nand reused by beat 2's shape literal:\n\n```\nadd: record{x, y, z} and record{x, y} \u2014 field 'z' is missing on the right\nadd: [number] of 3 and [number] of 2 \u2014 arrays must be the same length\nadd: record{x, y} and [number] \u2014 a record and an array have no elementwise meaning\nmul: the left side is string, not a number at .inner.name \u2014 record{inner} and number\n```\n\nThere is no implicit intersection and no zip-to-the-shorter. Picking a\nrule quietly is how a wrong answer learns to look like a right one.\n\nThe cells below are the two that broadcast *replaced*: `window | mul`\nIS map, and a comparator over an array is the predicate beat 3's `keep`\nwill filter on."
+  },
+  {
+   "name": "broadcast-map",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load"
+  },
+  {
+   "name": "broadcast-predicate",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact"
+  },
+  {
+   "name": "range-not-lerp",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## `range` or `lerp`?\n\nThe same arithmetic \u2014 `lo + (hi \u2212 lo) \u00b7 t` \u2014 and one difference that\nearns the second word: **`range` clamps, `lerp` extrapolates.**\n\nEverything upstream of a modulation chain (`lfo`, `wave`, `shape`)\nleaves 0..1 by construction, and `range` is the **exit** from that\ninterval: if a source ever strays, the exposure stays inside the range\nyou named instead of going dark or blowing out. Reach for `lerp` when\nyou are genuinely blending two things and want to be able to overshoot.\n\nRatified as built, 2026-08-25."
+  },
+  {
+   "name": "range-exit",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "lfo sine 4s | shape smooth | range 0.5 1.5 | set plane.render.grade.exposure"
   }
  ]
 }

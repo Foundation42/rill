@@ -94,6 +94,11 @@ pub const ErrorEvent = struct {
     frame: u64,
     time_ns: u64,
     err: []const u8,
+    /// What the operator said about the refusal, in words — empty when it
+    /// said nothing. `err` names the category (`BadValue`); this names the
+    /// fact ("add: record{x, y, z} and record{x, y} — field 'z' is missing
+    /// on the right"). Borrowed for the call, like everything else here.
+    detail: []const u8,
     input_digest: u64,
 };
 
@@ -134,6 +139,8 @@ pub const Runtime = struct {
     dirty: []bool,
     eval_count: []u64,
     error_count: []u64,
+    /// One buffer per runtime for the current eval's refusal reason.
+    detail: registry.Detail = .{},
 
     // per-tick machinery
     pending: std.StringArrayHashMapUnmanaged([]u8) = .empty,
@@ -503,7 +510,11 @@ pub const Runtime = struct {
         const out = try arena.alloc(struple.Packer, n.outputs.len);
         for (out) |*o| o.* = struple.Packer.init(arena);
 
-        var wake_thunk = WakeThunk{ .rt = self, .node = node_id };
+        // Every eval starts with no excuse on record: an op that refuses without
+    // saying why must not inherit the last one's words.
+    self.detail.clear();
+
+    var wake_thunk = WakeThunk{ .rt = self, .node = node_id };
         var ctx = registry.EvalCtx{
             .arena = arena,
             .in = in,
@@ -525,6 +536,8 @@ pub const Runtime = struct {
             .now_frame = self.now.frame,
             .wake_fn = WakeThunk.wake,
             .wake_ctx = &wake_thunk,
+            .detail = &self.detail,
+            .op = def,
         };
 
         self.eval_count[node_id] += 1;
@@ -547,6 +560,7 @@ pub const Runtime = struct {
                         .frame = self.now.frame,
                         .time_ns = self.now.time_ns,
                         .err = @errorName(err),
+                        .detail = self.detail.text(),
                         .input_digest = h.final(),
                     });
                 }

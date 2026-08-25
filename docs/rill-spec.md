@@ -645,6 +645,44 @@ they feed both the budget hook and the debug view).
 
 ---
 
+### 4.9 Broadcast, and the mismatch check (v0.3, tier 2 beat 1b, 2026-08-25)
+
+**Arithmetic, comparison and boolean logic are elementwise over records and
+arrays.** A scalar broadcasts to every element; containers combine positionally
+by field or index; nesting recurses. `@player.pos | add {x: 0, y: 2, z: 0}` is
+one line, `window 10s | mul 2` IS map, and `[1, -2, 3] | > 0` is
+`[true, false, true]`.
+
+Broadcast and its mismatch check land together, and the check **refuses rather
+than guesses**:
+
+- **record ⊗ record requires the same field set.** No implicit intersection: an
+  intersection computes over the fields that happen to agree, which is a wrong
+  answer wearing a right one's clothes.
+- **array ⊗ array requires equal length**, and the refusal names both lengths.
+  Grasshopper picks a matching rule implicitly (longest, shortest,
+  cross-reference) and it is the most-complained-about behaviour in the tool.
+- **A record and an array have no elementwise meaning.** Any pairing rule would
+  be invented, so there isn't one.
+- **A non-numeric leaf under arithmetic refuses, named by its path**
+  (`mul: the left side is string, not a number at .inner.name`).
+
+Every refusal names the operator, **both sides**, and where — in the type-word
+vocabulary `number` · `boolean` · `string` · `record{x, y}` · `[number]`, which
+has one renderer and is the vocabulary §2.13's shape literal reuses.
+
+**`=` and `!=` do not broadcast.** `<` has no meaning on a whole record — there
+is no total order on records — so elementwise is its only reading; `=` already
+has an exact whole-value meaning and broadcasting would replace a good answer
+with a different one. Ternary operators (`clamp`, `lerp`, `range`, `select`)
+stay scalar: recorded, not built, awaiting a customer.
+
+**Two consequences worth stating.** A `number` or `boolean` port accepts a
+record or an array at wire time (§6's type rule), because otherwise the feature
+is unsayable; and an elementwise operator declares its output type as `any`,
+because its output KIND follows its input and no static id can say that. The
+eval-time check is the authority on kinds in both directions.
+
 ### 4.8 Op-internal state and self-arming (v0.3, tier 2 beat 1a, 2026-08-25)
 
 **State inside an operator is legal, and it is the sanctioned mechanism.** §4.4's cycle check
@@ -748,7 +786,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | movement | `clock`, `frame` (fed time as a value, since mount), `lfo`, `wave` (0..1 waveforms) — tier 2 beat 1a, §4.8 |
 | registers | `ease`, `ramp`, `hold`, `diff`, `integrate` (op-internal state chasing a target; §4.8) |
 | shaping | `range` (0..1 → interval, clamping), `shape` (0..1 → 0..1 easing curves) |
-| math | `add sub mul div min max clamp abs floor round`, comparators |
+| math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
 | record | record construction `{…}`, projection `.field`, `merge` |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |

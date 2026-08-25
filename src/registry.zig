@@ -116,6 +116,37 @@ pub const Emit = packed struct {
 
 pub const EvalError = error{ BadValue, PlaneWrite } || std.mem.Allocator.Error;
 
+/// Why an operator refused, in words, for the failure the op is about to
+/// return. `@errorName` says `BadValue`, which names the category and not the
+/// fact — and the fact is the whole point of "mismatches name both sides".
+///
+/// Fixed buffer, no allocator: this is the error path, and an error path that
+/// can itself fail is a second failure mode. A message that would overflow is
+/// truncated rather than lost. The runtime clears it before every eval and
+/// carries whatever the op wrote into the `ErrorEvent`, so an op that says
+/// nothing costs nothing and reads exactly as it did before.
+pub const Detail = struct {
+    buf: [320]u8 = undefined,
+    len: usize = 0,
+
+    pub fn clear(self: *Detail) void {
+        self.len = 0;
+    }
+
+    pub fn text(self: *const Detail) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    pub fn set(self: *Detail, comptime fmt: []const u8, args: anytype) void {
+        const w = std.fmt.bufPrint(&self.buf, fmt, args) catch blk: {
+            // Truncation is the honest failure here: half a message that
+            // names the op beats no message at all.
+            break :blk self.buf[0..self.buf.len];
+        };
+        self.len = w.len;
+    }
+};
+
 /// An absolute point on one of the two fed-time lanes (never a relative
 /// offset — absolute is the honest form: it serializes, and a program
 /// restored mid-window stays exactly as far from its deadline as it was).
@@ -164,6 +195,16 @@ pub const EvalCtx = struct {
     /// failed flush. Null when the host keeps no tag row — same loud path.
     tag_fn: ?*const fn (ctx: *anyopaque, t: plane.TagWrite) EvalError!void = null,
     tag_ctx: ?*anyopaque = null,
+    /// The operator being evaluated. Carried so that a refusal can name
+    /// ITSELF and its ports without every helper threading a string: the
+    /// refusals gate found 21 of 54 refusal paths said nothing at all, and
+    /// they all ran through the same four accessors. Registration completes
+    /// before mount, so this pointer into the registry is stable.
+    op: *const OpDef,
+    /// Where an operator writes WHY it is about to refuse (see `Detail`).
+    /// Cleared by the runtime before every eval, so an op never inherits a
+    /// neighbour's excuse.
+    detail: *Detail,
     /// Debug/log bus for `tap`; null when the host wired none.
     log_fn: ?*const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void = null,
     log_ctx: ?*anyopaque = null,
@@ -209,6 +250,21 @@ pub const EvalCtx = struct {
     pub fn tagWrite(self: *EvalCtx, t: plane.TagWrite) EvalError!void {
         const f = self.tag_fn orelse return error.PlaneWrite;
         return f(self.tag_ctx.?, t);
+    }
+
+    /// Refuse, in words. `return ctx.refuse("…", .{…})` is the whole idiom:
+    /// it records the reason and hands back the error in one move, so a
+    /// refusal cannot record a reason and then forget to fail.
+    /// The declared name of input port `i`, for messages. Falls back to the
+    /// index when a variadic op has no declared ports.
+    pub fn portName(self: *const EvalCtx, i: usize) []const u8 {
+        if (i < self.op.inputs.len) return self.op.inputs[i].name;
+        return "?";
+    }
+
+    pub fn refuse(self: *EvalCtx, comptime fmt: []const u8, args: anytype) EvalError {
+        self.detail.set(fmt, args);
+        return error.BadValue;
     }
 
     pub fn setState(self: *EvalCtx, bytes: []const u8) !void {

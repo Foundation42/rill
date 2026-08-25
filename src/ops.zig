@@ -32,18 +32,23 @@ const Tag = types.Tag;
 // Helpers
 // ---------------------------------------------------------------------------
 
+// The four accessors every operator reaches for. They refuse IN WORDS,
+// naming the op and the port — which is why 21 refusal paths that used to be
+// a bare `BadValue` now say something without any of them being touched.
+// (The refusals gate is what found them; the accessors are where the fix
+// belongs, because a per-op fix would have been 21 chances to forget.)
 fn num(ctx: *EvalCtx, i: usize) EvalError!f64 {
-    const v = ctx.in[i] orelse return error.BadValue;
-    return types.asNumber(v) orelse error.BadValue;
+    const v = ctx.in[i] orelse return ctx.refuse("{s}: port '{s}' has no value yet", .{ ctx.op.name, ctx.portName(i) });
+    return types.asNumber(v) orelse ctx.refuse("{s}: port '{s}' is {s}, not a number", .{ ctx.op.name, ctx.portName(i), describeTop(ctx, v) });
 }
 
 fn boolean(ctx: *EvalCtx, i: usize) EvalError!bool {
-    const v = ctx.in[i] orelse return error.BadValue;
-    return types.asBool(v) orelse error.BadValue;
+    const v = ctx.in[i] orelse return ctx.refuse("{s}: port '{s}' has no value yet", .{ ctx.op.name, ctx.portName(i) });
+    return types.asBool(v) orelse ctx.refuse("{s}: port '{s}' is {s}, not a boolean", .{ ctx.op.name, ctx.portName(i), describeTop(ctx, v) });
 }
 
 fn raw(ctx: *EvalCtx, i: usize) EvalError![]const u8 {
-    return ctx.in[i] orelse error.BadValue;
+    return ctx.in[i] orelse ctx.refuse("{s}: port '{s}' has no value yet", .{ ctx.op.name, ctx.portName(i) });
 }
 
 /// Emit pre-encoded bytes on output port `i`. appendRaw validates structure;
@@ -70,7 +75,8 @@ fn emitBool(ctx: *EvalCtx, v: bool) EvalError!Emit {
 /// element stream (arena-owned).
 fn innerOf(ctx: *EvalCtx, encoded: []const u8) EvalError![]const u8 {
     const v = struple.view(encoded);
-    return (v.containedItems(ctx.arena) catch return error.BadValue) orelse error.BadValue;
+    return (v.containedItems(ctx.arena) catch null) orelse
+        ctx.refuse("{s}: expected a record or an array, got {s}", .{ ctx.op.name, describeTop(ctx, encoded) });
 }
 
 // ---------------------------------------------------------------------------
@@ -93,16 +99,14 @@ fn evalLerp(ctx: *EvalCtx) EvalError!Emit {
     return emitF64(ctx, a + (b - a) * t);
 }
 
-fn evalAnd(ctx: *EvalCtx) EvalError!Emit {
-    return emitBool(ctx, try boolean(ctx, 0) and try boolean(ctx, 1));
+fn fAnd(a: bool, b: bool) bool {
+    return a and b;
 }
-
-fn evalOr(ctx: *EvalCtx) EvalError!Emit {
-    return emitBool(ctx, try boolean(ctx, 0) or try boolean(ctx, 1));
+fn fOr(a: bool, b: bool) bool {
+    return a or b;
 }
-
-fn evalNot(ctx: *EvalCtx) EvalError!Emit {
-    return emitBool(ctx, !(try boolean(ctx, 0)));
+fn fNot(a: bool) bool {
+    return !a;
 }
 
 fn evalWhere(ctx: *EvalCtx) EvalError!Emit {
@@ -190,9 +194,10 @@ fn evalEdge(ctx: *EvalCtx) EvalError!Emit {
 // ---------------------------------------------------------------------------
 
 fn dur(ctx: *EvalCtx, i: usize) EvalError!types.Duration {
-    const v = ctx.in[i] orelse return error.BadValue;
-    return types.asDuration(v) orelse error.BadValue;
+    const v = ctx.in[i] orelse return ctx.refuse("{s}: port '{s}' has no value yet", .{ ctx.op.name, ctx.portName(i) });
+    return types.asDuration(v) orelse ctx.refuse("{s}: port '{s}' is {s}, not a duration — durations carry a unit (5s, 250ms, 3f)", .{ ctx.op.name, ctx.portName(i), describeTop(ctx, v) });
 }
+
 
 fn deadlineAt(d: types.Duration, at: u64) registry.Deadline {
     return if (d.frames) .{ .frame = at } else .{ .ns = at };
@@ -363,8 +368,10 @@ fn evalStats(ctx: *EvalCtx) EvalError!Emit {
     const inner = try innerOf(ctx, try raw(ctx, 0));
     var vals = std.ArrayListUnmanaged(f64).empty;
     var r = struple.reader(inner);
-    while (r.nextView() catch return error.BadValue) |e| {
-        try vals.append(ctx.arena, types.asNumber(e) orelse return error.BadValue);
+    var idx: usize = 0;
+    while (r.nextView() catch return ctx.refuse("stats: the input is a malformed array", .{})) |e| : (idx += 1) {
+        try vals.append(ctx.arena, types.asNumber(e) orelse
+            return ctx.refuse("stats: element [{d}] is {s}, not a number", .{ idx, describeTop(ctx, e) }));
     }
     var sum: f64 = 0;
     var lo: f64 = 0;
@@ -454,7 +461,7 @@ fn evalDelay(ctx: *EvalCtx) EvalError!Emit {
 /// interval is a storm wearing a duration.
 fn evalEvery(ctx: *EvalCtx) EvalError!Emit {
     const d = try dur(ctx, 0);
-    if (d.count == 0) return error.BadValue;
+    if (d.count == 0) return ctx.refuse("every: the period is zero — a metronome with no interval would fire forever", .{});
     const now = ctx.nowOn(d.frames);
     const st = readPendState(ctx); // until = next due; empty state reads 0 = due now
     if (now >= st.until) {
@@ -607,20 +614,22 @@ const WAVE_SHAPES = [_][]const u8{ "sine", "tri", "saw", "square" };
 /// and a gate asserts the two forms are bit-identical over a fed sequence.
 /// Phase in, 0..1 out — every shape leaves the unit interval, which is what
 /// makes `| range lo hi` the universal exit.
-fn waveAt(shape: []const u8, phase_in: f64) EvalError!f64 {
+fn waveAt(ctx: *EvalCtx, shape: []const u8, phase_in: f64) EvalError!f64 {
     const ph = phase_in - @floor(phase_in); // fract: phase is modular
     if (std.mem.eql(u8, shape, "sine")) return 0.5 - 0.5 * @cos(ph * std.math.tau);
     if (std.mem.eql(u8, shape, "tri")) return 1.0 - @abs(2.0 * ph - 1.0);
     if (std.mem.eql(u8, shape, "saw")) return ph;
     if (std.mem.eql(u8, shape, "square")) return if (ph < 0.5) 0.0 else 1.0;
-    return error.BadValue; // parse checks `one_of`; a STREAM can only be caught here
+    // Parse checks `one_of` for a literal; a STREAM bound here can only be
+    // caught now, and it says what it would have accepted.
+    return ctx.refuse("{s}: '{s}' is not a waveform — expected one of: sine, tri, saw, square", .{ ctx.op.name, shape });
 }
 
 /// Seconds (or frames) per cycle, from a duration on either lane. A frame
 /// duration on `wave`'s period means the piped `t` is counted in frames —
 /// `frame | wave saw 120f` is a two-second cycle at 60fps and says so.
 fn periodOf(d: types.Duration) EvalError!f64 {
-    if (d.count == 0) return error.BadValue;
+    if (d.count == 0) return error.BadValue; // caller refuses in words
     const c: f64 = @floatFromInt(d.count);
     return if (d.frames) c else c / 1_000_000_000.0;
 }
@@ -631,9 +640,10 @@ fn periodOf(d: types.Duration) EvalError!f64 {
 /// number can drive it.
 fn evalWave(ctx: *EvalCtx) EvalError!Emit {
     const t = try num(ctx, 0);
-    const shape = types.asString(try raw(ctx, 1)) orelse return error.BadValue;
+    const shape = types.asString(try raw(ctx, 1)) orelse
+        return ctx.refuse("wave: port 'shape' is {s}, not a waveform name", .{describeTop(ctx, try raw(ctx, 1))});
     const period = try periodOf(try dur(ctx, 2));
-    return emitF64(ctx, try waveAt(shape, t / period));
+    return emitF64(ctx, try waveAt(ctx, shape, t / period));
 }
 
 /// `lfo <shape> <period> [phase <p>]` — the source. Sugar over `clock | wave`
@@ -642,7 +652,8 @@ fn evalWave(ctx: *EvalCtx) EvalError!Emit {
 /// people say it, and because a source that owns its epoch is one node
 /// instead of two.
 fn evalLfo(ctx: *EvalCtx) EvalError!Emit {
-    const shape = types.asString(try raw(ctx, 0)) orelse return error.BadValue;
+    const shape = types.asString(try raw(ctx, 0)) orelse
+        return ctx.refuse("lfo: port 'shape' is {s}, not a waveform name", .{describeTop(ctx, try raw(ctx, 0))});
     const d = try dur(ctx, 1);
     const period = try periodOf(d);
     const phase: f64 = if (ctx.in[2] != null) try num(ctx, 2) else 0;
@@ -651,7 +662,7 @@ fn evalLfo(ctx: *EvalCtx) EvalError!Emit {
     if (!st.started) st = .{ .frames = d.frames, .at = now, .started = true };
     try st.write(ctx);
     try armNextTick(ctx, d.frames);
-    return emitF64(ctx, try waveAt(shape, elapsed(d.frames, st.at, now) / period + phase));
+    return emitF64(ctx, try waveAt(ctx, shape, elapsed(d.frames, st.at, now) / period + phase));
 }
 
 // -- registers --------------------------------------------------------------
@@ -834,7 +845,8 @@ const SHAPE_CURVES = [_][]const u8{ "linear", "smooth", "in", "out", "inout" };
 /// to the curves beat; these five are the ones every ask so far wanted.
 fn evalShape(ctx: *EvalCtx) EvalError!Emit {
     const t = std.math.clamp(try num(ctx, 0), 0, 1);
-    const curve = types.asString(try raw(ctx, 1)) orelse return error.BadValue;
+    const curve = types.asString(try raw(ctx, 1)) orelse
+        return ctx.refuse("shape: port 'curve' is {s}, not a curve name", .{describeTop(ctx, try raw(ctx, 1))});
     const v = if (std.mem.eql(u8, curve, "linear"))
         t
     else if (std.mem.eql(u8, curve, "smooth"))
@@ -846,7 +858,7 @@ fn evalShape(ctx: *EvalCtx) EvalError!Emit {
     else if (std.mem.eql(u8, curve, "inout"))
         (if (t < 0.5) 2.0 * t * t else 1.0 - 2.0 * (1.0 - t) * (1.0 - t))
     else
-        return error.BadValue;
+        return ctx.refuse("shape: '{s}' is not a curve — expected one of: linear, smooth, in, out, inout", .{curve});
     return emitF64(ctx, v);
 }
 
@@ -854,10 +866,358 @@ fn evalShape(ctx: *EvalCtx) EvalError!Emit {
 // Math
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tier 2, beat 1b — broadcast, and the mismatch check that pays for it.
+//
+// They land together or not at all (ratified). ICE had broadcast and reported
+// mismatches without naming the contexts, and that error was the one every ICE
+// user learned to dread. So: every refusal names BOTH SIDES and the offending
+// field, in a type-word vocabulary defined once here and reused by beat 2's
+// shape literal.
+//
+// The rules, ratified 2026-08-25:
+//   - scalar ⊗ record/array is elementwise (the scalar broadcasts);
+//   - record ⊗ record requires the SAME FIELD SET — no implicit intersection,
+//     because an intersection silently computes something nobody asked for;
+//   - array ⊗ array requires EQUAL LENGTH, both named on refusal;
+//   - nested containers recurse;
+//   - a non-numeric leaf under arithmetic refuses, naming the field.
+// Refuse, never guess.
+// ---------------------------------------------------------------------------
+
+/// The type-word vocabulary: `number`, `boolean`, `string`, `record{x, y}`,
+/// `[number]`, `[]`. One renderer, so a mismatch message and (beat 2) a shape
+/// literal cannot describe the same value two different ways.
+///
+/// Depth-capped at two containers: a message is for reading, and a fully
+/// expanded description of a deep record is a wall. Below the cap the word is
+/// the bare container (`record{…}`, `[…]`).
+fn describe(ctx: *EvalCtx, encoded: []const u8, depth: u8) []const u8 {
+    const t = types.typeOfValue(encoded);
+    if (t == Tag.record) {
+        if (depth == 0) return "record{…}";
+        const inner = innerOf(ctx, encoded) catch return "record{?}";
+        var out = std.ArrayListUnmanaged(u8).empty;
+        out.appendSlice(ctx.arena, "record{") catch return "record{?}";
+        var it = struple.MapView.init(inner).iterator();
+        var first = true;
+        while (it.next() catch return "record{?}") |e| {
+            if (!first) out.appendSlice(ctx.arena, ", ") catch return "record{?}";
+            first = false;
+            // `MapView.Entry.key` is the ENCODED key element, not the string:
+            // appending it raw would put a type tag and a length into the
+            // message. Decode it.
+            out.appendSlice(ctx.arena, types.asString(e.key) orelse "?") catch return "record{?}";
+        }
+        out.appendSlice(ctx.arena, "}") catch return "record{?}";
+        return out.items;
+    }
+    if (t == Tag.array) {
+        if (depth == 0) return "[…]";
+        const inner = innerOf(ctx, encoded) catch return "[?]";
+        var r = struple.reader(inner);
+        const first = (r.nextView() catch return "[?]") orelse return "[]";
+        const elem = describe(ctx, first, depth - 1);
+        // Heterogeneous arrays say so rather than lying about the first
+        // element — `[mixed]` is a true statement and `[number]` would not be.
+        while (r.nextView() catch return "[?]") |e| {
+            if (!std.mem.eql(u8, describe(ctx, e, depth - 1), elem)) return "[mixed]";
+        }
+        return std.fmt.allocPrint(ctx.arena, "[{s}]", .{elem}) catch "[?]";
+    }
+    return switch (t) {
+        Tag.number => "number",
+        Tag.boolean => "boolean",
+        Tag.string => "string",
+        Tag.bytes => "bytes",
+        else => "value",
+    };
+}
+
+fn describeTop(ctx: *EvalCtx, encoded: []const u8) []const u8 {
+    return describe(ctx, encoded, 2);
+}
+
+/// Where in a nested value the trouble is: `""` at the top, then `.x`, `[2]`,
+/// `.pos.y`. Appended to as the recursion descends, arena-owned.
+/// `key` arrives as an encoded key ELEMENT (that is what `MapView` yields),
+/// so every message path decodes it before printing.
+fn keyName(key: []const u8) []const u8 {
+    return types.asString(key) orelse "?";
+}
+
+fn pathField(ctx: *EvalCtx, path: []const u8, key: []const u8) []const u8 {
+    return std.fmt.allocPrint(ctx.arena, "{s}.{s}", .{ path, keyName(key) }) catch path;
+}
+
+fn pathIndex(ctx: *EvalCtx, path: []const u8, i: usize) []const u8 {
+    return std.fmt.allocPrint(ctx.arena, "{s}[{d}]", .{ path, i }) catch path;
+}
+
+/// "at <where>" or "" at the top — so a top-level refusal doesn't read
+/// "at  " and a nested one says exactly which field.
+fn whereIn(ctx: *EvalCtx, path: []const u8) []const u8 {
+    if (path.len == 0) return "";
+    return std.fmt.allocPrint(ctx.arena, " at {s}", .{path}) catch "";
+}
+
+/// The leaf: what a binary op actually does to two scalars, once the
+/// containers have been peeled. One per family — arithmetic, comparison,
+/// boolean — so the recursion below is written once and never per operator.
+const LeafFn = *const fn (ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8, b: []const u8) EvalError!void;
+
+fn leafNum(comptime f: fn (f64, f64) f64) LeafFn {
+    return struct {
+        fn leaf(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8, b: []const u8) EvalError!void {
+            const x = types.asNumber(a) orelse return notNumber(ctx, op, path, a, b, true);
+            const y = types.asNumber(b) orelse return notNumber(ctx, op, path, a, b, false);
+            try pk.appendF64(f(x, y));
+        }
+    }.leaf;
+}
+
+fn leafCmp(comptime f: fn (f64, f64) bool) LeafFn {
+    return struct {
+        fn leaf(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8, b: []const u8) EvalError!void {
+            const x = types.asNumber(a) orelse return notNumber(ctx, op, path, a, b, true);
+            const y = types.asNumber(b) orelse return notNumber(ctx, op, path, a, b, false);
+            try pk.appendBool(f(x, y));
+        }
+    }.leaf;
+}
+
+fn leafBool(comptime f: fn (bool, bool) bool) LeafFn {
+    return struct {
+        fn leaf(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8, b: []const u8) EvalError!void {
+            const x = types.asBool(a) orelse return notBoolean(ctx, op, path, a, b, true);
+            const y = types.asBool(b) orelse return notBoolean(ctx, op, path, a, b, false);
+            try pk.appendBool(f(x, y));
+        }
+    }.leaf;
+}
+
+fn notNumber(ctx: *EvalCtx, op: []const u8, path: []const u8, a: []const u8, b: []const u8, left: bool) EvalError {
+    const bad = if (left) a else b;
+    return ctx.refuse("{s}: {s} is {s}, not a number{s} — {s} and {s}", .{
+        op,       if (left) "the left side" else "the right side",
+        describeTop(ctx, bad), whereIn(ctx, path),
+        describeTop(ctx, a),   describeTop(ctx, b),
+    });
+}
+
+fn notBoolean(ctx: *EvalCtx, op: []const u8, path: []const u8, a: []const u8, b: []const u8, left: bool) EvalError {
+    const bad = if (left) a else b;
+    return ctx.refuse("{s}: {s} is {s}, not a boolean{s} — {s} and {s}", .{
+        op,       if (left) "the left side" else "the right side",
+        describeTop(ctx, bad), whereIn(ctx, path),
+        describeTop(ctx, a),   describeTop(ctx, b),
+    });
+}
+
+/// `innerOf` that says which op and where when it can't decode. Silent
+/// `BadValue` is exactly what this beat exists to stop.
+fn innerRefusing(ctx: *EvalCtx, op: []const u8, path: []const u8, encoded: []const u8) EvalError![]const u8 {
+    const v = struple.view(encoded);
+    const got = (v.containedItems(ctx.arena) catch null) orelse
+        return ctx.refuse("{s}: cannot read {s} as a container{s}", .{ op, describeTop(ctx, encoded), whereIn(ctx, path) });
+    return got;
+}
+
+/// The recursion. Peels one container level per call; the leaf handles what is
+/// left. Every refusal below names both sides and where.
+fn broadcast2(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8, b: []const u8, leaf: LeafFn) EvalError!void {
+    const ka = types.typeOfValue(a);
+    const kb = types.typeOfValue(b);
+    const a_rec = ka == Tag.record;
+    const b_rec = kb == Tag.record;
+    const a_arr = ka == Tag.array;
+    const b_arr = kb == Tag.array;
+
+    // A record and an array have no elementwise reading. Any rule we picked
+    // (by position? by field order?) would be invented, so there isn't one.
+    if ((a_rec and b_arr) or (a_arr and b_rec)) {
+        return ctx.refuse("{s}: {s} and {s}{s} — a record and an array have no elementwise meaning", .{
+            op, describeTop(ctx, a), describeTop(ctx, b), whereIn(ctx, path),
+        });
+    }
+
+    if (a_rec or b_rec) {
+        var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+        if (a_rec and b_rec) {
+            // Same field set required. Keys are canonical (sorted), so a
+            // lockstep walk finds the first divergence and can say which side
+            // is missing it — no intersection, ever: an intersection quietly
+            // computes over the fields that happen to agree, which is a wrong
+            // answer wearing a right one's clothes.
+            var ia = struple.MapView.init(try innerRefusing(ctx, op, path, a)).iterator();
+            var ib = struple.MapView.init(try innerRefusing(ctx, op, path, b)).iterator();
+            var ea = ia.next() catch return ctx.refuse("{s}: the left side is a malformed record{s}", .{ op, whereIn(ctx, path) });
+            var eb = ib.next() catch return ctx.refuse("{s}: the right side is a malformed record{s}", .{ op, whereIn(ctx, path) });
+            while (ea != null or eb != null) {
+                if (ea == null or (eb != null and std.mem.order(u8, ea.?.key, eb.?.key) == .gt)) {
+                    return missingField(ctx, op, path, a, b, eb.?.key, true);
+                }
+                if (eb == null or std.mem.order(u8, ea.?.key, eb.?.key) == .lt) {
+                    return missingField(ctx, op, path, a, b, ea.?.key, false);
+                }
+                var sub = struple.Packer.init(ctx.arena);
+                try broadcast2(ctx, op, &sub, pathField(ctx, path, ea.?.key), ea.?.value, eb.?.value, leaf);
+                try entries.append(ctx.arena, .{ ea.?.key, sub.bytes() });
+                ea = ia.next() catch return ctx.refuse("{s}: the left side is a malformed record{s}", .{ op, whereIn(ctx, path) });
+                eb = ib.next() catch return ctx.refuse("{s}: the right side is a malformed record{s}", .{ op, whereIn(ctx, path) });
+            }
+        } else {
+            // Scalar on one side broadcasts to every field of the other.
+            const rec = if (a_rec) a else b;
+            var it = struple.MapView.init(try innerRefusing(ctx, op, path, rec)).iterator();
+            while (it.next() catch return ctx.refuse("{s}: a malformed record{s}", .{ op, whereIn(ctx, path) })) |e| {
+                var sub = struple.Packer.init(ctx.arena);
+                const l = if (a_rec) e.value else a;
+                const r = if (a_rec) b else e.value;
+                try broadcast2(ctx, op, &sub, pathField(ctx, path, e.key), l, r, leaf);
+                try entries.append(ctx.arena, .{ e.key, sub.bytes() });
+            }
+        }
+        // `appendMap`'s only failure is allocation, which is not a mismatch:
+        // `try`, never a catch that would report a shape problem that isn't
+        // there.
+        try pk.appendMap(entries.items);
+        return;
+    }
+
+    if (a_arr or b_arr) {
+        var elems = struple.Packer.init(ctx.arena);
+        if (a_arr and b_arr) {
+            const na = try arrayLen(ctx, op, path, a);
+            const nb = try arrayLen(ctx, op, path, b);
+            if (na != nb) {
+                // Both lengths named. Grasshopper picks a matching rule
+                // implicitly and it is the most-complained-about behaviour in
+                // the tool; never pick a rule.
+                return ctx.refuse("{s}: {s} of {d} and {s} of {d}{s} — arrays must be the same length", .{
+                    op, describeTop(ctx, a), na, describeTop(ctx, b), nb, whereIn(ctx, path),
+                });
+            }
+            var ra = struple.reader(try innerRefusing(ctx, op, path, a));
+            var rb = struple.reader(try innerRefusing(ctx, op, path, b));
+            var i: usize = 0;
+            while (true) : (i += 1) {
+                const va = (ra.nextView() catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) })) orelse break;
+                const vb = (rb.nextView() catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) })) orelse break;
+                var sub = struple.Packer.init(ctx.arena);
+                try broadcast2(ctx, op, &sub, pathIndex(ctx, path, i), va, vb, leaf);
+                elems.appendRaw(sub.bytes()) catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) });
+            }
+        } else {
+            const arr = if (a_arr) a else b;
+            var r = struple.reader(try innerRefusing(ctx, op, path, arr));
+            var i: usize = 0;
+            while (true) : (i += 1) {
+                const v = (r.nextView() catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) })) orelse break;
+                var sub = struple.Packer.init(ctx.arena);
+                const l = if (a_arr) v else a;
+                const rr = if (a_arr) b else v;
+                try broadcast2(ctx, op, &sub, pathIndex(ctx, path, i), l, rr, leaf);
+                elems.appendRaw(sub.bytes()) catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) });
+            }
+        }
+        pk.appendArray(elems.bytes()) catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) });
+        return;
+    }
+
+    return leaf(ctx, op, pk, path, a, b);
+}
+
+fn missingField(ctx: *EvalCtx, op: []const u8, path: []const u8, a: []const u8, b: []const u8, key: []const u8, on_left: bool) EvalError {
+    return ctx.refuse("{s}: {s} and {s}{s} — field '{s}' is missing on the {s}", .{
+        op, describeTop(ctx, a), describeTop(ctx, b), whereIn(ctx, path),
+        keyName(key), if (on_left) "left" else "right",
+    });
+}
+
+fn arrayLen(ctx: *EvalCtx, op: []const u8, path: []const u8, encoded: []const u8) EvalError!usize {
+    var r = struple.reader(try innerRefusing(ctx, op, path, encoded));
+    var n: usize = 0;
+    while ((r.nextView() catch return ctx.refuse("{s}: cannot decode an array{s}", .{ op, whereIn(ctx, path) })) != null) n += 1;
+    return n;
+}
+
+/// The unary half: one container walk, one leaf. `abs` on a position is a
+/// position; `not` on an array of flags is an array of flags.
+const Leaf1 = *const fn (ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8) EvalError!void;
+
+fn broadcast1(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8, leaf: Leaf1) EvalError!void {
+    const k = types.typeOfValue(a);
+    if (k == Tag.record) {
+        var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+        var it = struple.MapView.init(try innerRefusing(ctx, op, path, a)).iterator();
+        while (it.next() catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) })) |e| {
+            var sub = struple.Packer.init(ctx.arena);
+            try broadcast1(ctx, op, &sub, pathField(ctx, path, e.key), e.value, leaf);
+            try entries.append(ctx.arena, .{ e.key, sub.bytes() });
+        }
+        pk.appendMap(entries.items) catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) });
+        return;
+    }
+    if (k == Tag.array) {
+        var elems = struple.Packer.init(ctx.arena);
+        var r = struple.reader(try innerRefusing(ctx, op, path, a));
+        var i: usize = 0;
+        while (true) : (i += 1) {
+            const v = (r.nextView() catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) })) orelse break;
+            var sub = struple.Packer.init(ctx.arena);
+            try broadcast1(ctx, op, &sub, pathIndex(ctx, path, i), v, leaf);
+            elems.appendRaw(sub.bytes()) catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) });
+        }
+        pk.appendArray(elems.bytes()) catch return ctx.refuse("{s}: a malformed array{s}", .{ op, whereIn(ctx, path) });
+        return;
+    }
+    return leaf(ctx, op, pk, path, a);
+}
+
+fn leaf1Num(comptime f: fn (f64) f64) Leaf1 {
+    return struct {
+        fn leaf(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8) EvalError!void {
+            const x = types.asNumber(a) orelse return ctx.refuse("{s}: {s} is {s}, not a number{s}", .{ op, "the input", describeTop(ctx, a), whereIn(ctx, path) });
+            try pk.appendF64(f(x));
+        }
+    }.leaf;
+}
+
+fn unBool() fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn eval(ctx: *EvalCtx) EvalError!Emit {
+            try broadcast1(ctx, ctx.op.name, &ctx.out[0], "", try raw(ctx, 0), leaf1Bool(fNot));
+            return Emit.first;
+        }
+    }.eval;
+}
+
+fn leaf1Bool(comptime f: fn (bool) bool) Leaf1 {
+    return struct {
+        fn leaf(ctx: *EvalCtx, op: []const u8, pk: *struple.Packer, path: []const u8, a: []const u8) EvalError!void {
+            const x = types.asBool(a) orelse return ctx.refuse("{s}: {s} is {s}, not a boolean{s}", .{ op, "the input", describeTop(ctx, a), whereIn(ctx, path) });
+            try pk.appendBool(f(x));
+        }
+    }.leaf;
+}
+
+// ---------------------------------------------------------------------------
+// The math operators. THIS IS THE ONE SITE (beat 1b, 2026-08-25): every
+// arithmetic word, every comparator and the boolean trio are minted by these
+// four helpers, so broadcast is a property of the helper and not of the words.
+// Beat 1a's split existed exactly so this could land before the math
+// completions did — nothing here is scored twice.
+// ---------------------------------------------------------------------------
+
+/// `<name>` for messages: the op's own word, from the node's op definition
+/// would be ideal, but eval doesn't carry it — so each generated eval closes
+/// over its name at comptime. One string per op, no runtime cost.
 fn binMath(comptime f: fn (f64, f64) f64) fn (*EvalCtx) EvalError!Emit {
     return struct {
         fn eval(ctx: *EvalCtx) EvalError!Emit {
-            return emitF64(ctx, f(try num(ctx, 0), try num(ctx, 1)));
+            try broadcast2(ctx, ctx.op.name, &ctx.out[0], "", try raw(ctx, 0), try raw(ctx, 1), leafNum(f));
+            return Emit.first;
         }
     }.eval;
 }
@@ -865,7 +1225,8 @@ fn binMath(comptime f: fn (f64, f64) f64) fn (*EvalCtx) EvalError!Emit {
 fn unMath(comptime f: fn (f64) f64) fn (*EvalCtx) EvalError!Emit {
     return struct {
         fn eval(ctx: *EvalCtx) EvalError!Emit {
-            return emitF64(ctx, f(try num(ctx, 0)));
+            try broadcast1(ctx, ctx.op.name, &ctx.out[0], "", try raw(ctx, 0), leaf1Num(f));
+            return Emit.first;
         }
     }.eval;
 }
@@ -898,6 +1259,69 @@ fn fRound(v: f64) f64 {
     return @round(v);
 }
 
+// The completions (beat 1b). Nothing to argue about; they were missing. Each
+// one is minted by the same helper as `add`, so each is born broadcasting over
+// records and arrays — which is the whole reason the beat was split.
+fn fSin(v: f64) f64 {
+    return @sin(v);
+}
+fn fCos(v: f64) f64 {
+    return @cos(v);
+}
+fn fTan(v: f64) f64 {
+    return @tan(v);
+}
+fn fSqrt(v: f64) f64 {
+    return @sqrt(v);
+}
+fn fExp(v: f64) f64 {
+    return @exp(v);
+}
+/// Natural log, as every language a reader arrives from spells it. `log 0` is
+/// -inf and a negative is nan — IEEE, like `div` by zero, never a refusal:
+/// arithmetic that has an answer gives it.
+fn fLog(v: f64) f64 {
+    return @log(v);
+}
+fn fCeil(v: f64) f64 {
+    return @ceil(v);
+}
+/// -1, 0, or 1. NaN stays NaN rather than being called zero.
+fn fSign(v: f64) f64 {
+    if (std.math.isNan(v)) return v;
+    return if (v > 0) 1 else if (v < 0) @as(f64, -1) else 0;
+}
+/// The fractional part, always in [0, 1) — `@mod`-shaped, not truncation, so
+/// `fract -0.25` is 0.75 and a phase never goes backwards over zero.
+fn fFract(v: f64) f64 {
+    return v - @floor(v);
+}
+fn fPow(a: f64, b: f64) f64 {
+    return std.math.pow(f64, a, b);
+}
+/// Floored modulo: the sign follows the DIVISOR, so `-90 | mod 360` is 270.
+/// Angles and phases are what asks for this op, and truncated remainder gets
+/// them wrong on exactly the half of the circle people forget to test.
+fn fMod(a: f64, b: f64) f64 {
+    if (b == 0) return std.math.nan(f64);
+    return a - b * @floor(a / b);
+}
+fn fAtan2(y: f64, x: f64) f64 {
+    return std.math.atan2(y, x);
+}
+
+/// `pi` / `tau` — sources with no input, emitting once at mount. They are
+/// operators rather than lexer-known names because the registry is the one
+/// namespace: a name the parser knew and `rill ops` didn't would be a word
+/// with no home.
+fn constant(comptime v: f64) fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn eval(ctx: *EvalCtx) EvalError!Emit {
+            return emitF64(ctx, v);
+        }
+    }.eval;
+}
+
 fn evalClamp(ctx: *EvalCtx) EvalError!Emit {
     const v = try num(ctx, 0);
     const lo = try num(ctx, 1);
@@ -905,10 +1329,23 @@ fn evalClamp(ctx: *EvalCtx) EvalError!Emit {
     return emitF64(ctx, std.math.clamp(v, lo, hi));
 }
 
+/// Comparators broadcast too — `[1, -2, 3] > 0` is `[true, false, true]`,
+/// which is what beat 3's `keep (> 0)` evaluates before it filters.
 fn cmpOp(comptime f: fn (f64, f64) bool) fn (*EvalCtx) EvalError!Emit {
     return struct {
         fn eval(ctx: *EvalCtx) EvalError!Emit {
-            return emitBool(ctx, f(try num(ctx, 0), try num(ctx, 1)));
+            try broadcast2(ctx, ctx.op.name, &ctx.out[0], "", try raw(ctx, 0), try raw(ctx, 1), leafCmp(f));
+            return Emit.first;
+        }
+    }.eval;
+}
+
+/// …and so do the boolean trio, for the same customer.
+fn boolOp(comptime f: fn (bool, bool) bool) fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn eval(ctx: *EvalCtx) EvalError!Emit {
+            try broadcast2(ctx, ctx.op.name, &ctx.out[0], "", try raw(ctx, 0), try raw(ctx, 1), leafBool(f));
+            return Emit.first;
         }
     }.eval;
 }
@@ -965,7 +1402,7 @@ fn evalProject(ctx: *EvalCtx) EvalError!Emit {
     var kp = struple.Packer.init(ctx.arena);
     try kp.appendString(ctx.statics[0].word);
     const m = struple.MapView.init(inner);
-    const val = (m.get(kp.bytes()) catch return error.BadValue) orelse return Emit.none;
+    const val = (m.get(kp.bytes()) catch return ctx.refuse("project: the input is a malformed record", .{})) orelse return Emit.none;
     try splice(ctx, 0, val);
     return Emit.first;
 }
@@ -975,7 +1412,7 @@ fn evalMerge(ctx: *EvalCtx) EvalError!Emit {
     inline for (0..2) |i| {
         const inner = try innerOf(ctx, try raw(ctx, i));
         var it = struple.MapView.init(inner).iterator();
-        while (it.next() catch return error.BadValue) |e| {
+        while (it.next() catch return ctx.refuse("merge: port '{s}' is a malformed record", .{ctx.portName(i)})) |e| {
             const found = for (entries.items) |*ex| {
                 if (std.mem.eql(u8, ex[0], e.key)) break ex;
             } else null;
@@ -1046,14 +1483,16 @@ fn evalInc(ctx: *EvalCtx) EvalError!Emit {
 fn evalCast(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none;
     const amp_bytes = ctx.in[1] orelse try raw(ctx, 0);
-    const amplitude = types.asNumber(amp_bytes) orelse return error.BadValue;
+    const amplitude = types.asNumber(amp_bytes) orelse
+        return ctx.refuse("cast: the amplitude is {s}, not a number", .{describeTop(ctx, amp_bytes)});
     const pos = try raw(ctx, 2); // `at` — required; a cast lands somewhere
     const decay: ?types.Duration = if (ctx.in[3]) |b|
-        (types.asDuration(b) orelse return error.BadValue)
+        (types.asDuration(b) orelse return ctx.refuse("cast: 'decay' is {s}, not a duration — durations carry a unit (4s, 250ms)", .{describeTop(ctx, b)}))
     else
         null;
-    const radius = types.asNumber(ctx.statics[1].literal) orelse return error.BadValue;
-    if (!(radius > 0)) return error.BadValue;
+    const radius = types.asNumber(ctx.statics[1].literal) orelse
+        return ctx.refuse("cast: 'radius' is not a number", .{});
+    if (!(radius > 0)) return ctx.refuse("cast: 'radius' is {d}, and a deposit with no extent reaches nothing", .{radius});
     try ctx.cast(.{
         .channel = ctx.statics[0].channel,
         .amplitude = amplitude,
@@ -1147,9 +1586,9 @@ const CORE = [_]registry.OpDef{
     // flow
     .{ .name = "select", .inputs = &.{ p.in("cond", Tag.boolean), p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "cond ? a : b — all branches exist; one is chosen per tick.", .eval = evalSelect },
     .{ .name = "lerp", .inputs = &.{ p.in("t", Tag.number), p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a + (b - a) * t, t PIPED — `s | lerp 0.5 1.5` is s, lerped between 0.5 and 1.5.", .eval = evalLerp },
-    .{ .name = "and", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = evalAnd },
-    .{ .name = "or", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Boolean or.", .eval = evalOr },
-    .{ .name = "not", .inputs = &.{p.in("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Boolean not.", .eval = evalNot },
+    .{ .name = "and", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = boolOp(fAnd) },
+    .{ .name = "or", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean or.", .eval = boolOp(fOr) },
+    .{ .name = "not", .inputs = &.{p.in("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean not.", .eval = unBool() },
     .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
     .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .routes = .anywhere, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
     .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
@@ -1187,24 +1626,53 @@ const CORE = [_]registry.OpDef{
     .{ .name = "integrate", .inputs = &.{ p.in("in", Tag.number), p.kwIn("max", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Running sum over fed time, clamped to +/-max. The clamp is required — unbounded state is a corpse that rides every dump.", .class = .reads, .ticks = true, .eval = evalIntegrate },
     .{ .name = "range", .inputs = &.{ p.in("t", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Map 0..1 onto lo..hi, CLAMPING outside it — the exit from the unit interval. `lerp` is the same arithmetic that extrapolates.", .eval = evalRange },
     .{ .name = "shape", .inputs = &.{ p.in("t", Tag.number), p.oneOf("curve", &SHAPE_CURVES) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Ease a 0..1 value into 0..1 — curves: linear, smooth, in, out, inout. Input clamps.", .eval = evalShape },
+    // math — and a note on why every one of these declares `out` as `any`.
+    //
+    // Broadcast makes an elementwise operator's OUTPUT KIND follow its input:
+    // `mul 2` on a number gives a number, on an array gives an array, on a
+    // record gives a record. A static `TypeId` cannot say "same as whatever
+    // arrives", so declaring `number` would be a statement that is false
+    // exactly when broadcast is doing its job — and the manual gate caught it
+    // saying so (`window 10s | mul 2 | stats` refused at wire time because
+    // `mul` claimed to emit a number).
+    //
+    // `any` is the honest word here: not statically known. The eval-time
+    // mismatch check is the authority on kinds either way, and beat 2's
+    // `expect`/`match` are how an author pins a shape at a boundary.
     // math
-    .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a + b.", .eval = binMath(fAdd) },
-    .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a - b.", .eval = binMath(fSub) },
-    .{ .name = "mul", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a * b.", .eval = binMath(fMul) },
-    .{ .name = "div", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a / b (IEEE; division by zero yields ±inf).", .eval = binMath(fDiv) },
-    .{ .name = "min", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "The smaller of a and b.", .eval = binMath(fMin) },
-    .{ .name = "max", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "The larger of a and b.", .eval = binMath(fMax) },
+    .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a + b.", .eval = binMath(fAdd) },
+    .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a - b.", .eval = binMath(fSub) },
+    .{ .name = "mul", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a * b.", .eval = binMath(fMul) },
+    .{ .name = "div", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a / b (IEEE; division by zero yields ±inf).", .eval = binMath(fDiv) },
+    .{ .name = "min", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The smaller of a and b.", .eval = binMath(fMin) },
+    .{ .name = "max", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The larger of a and b.", .eval = binMath(fMax) },
     .{ .name = "clamp", .inputs = &.{ p.in("in", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Clamp `in` to [lo, hi].", .eval = evalClamp },
-    .{ .name = "abs", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Absolute value.", .eval = unMath(fAbs) },
-    .{ .name = "floor", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Round toward −inf.", .eval = unMath(fFloor) },
-    .{ .name = "round", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Round to nearest.", .eval = unMath(fRound) },
+    .{ .name = "abs", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Absolute value.", .eval = unMath(fAbs) },
+    .{ .name = "floor", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round toward −inf.", .eval = unMath(fFloor) },
+    .{ .name = "round", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round to nearest.", .eval = unMath(fRound) },
+    // math completions (beat 1b) — every one broadcasts, being minted by the
+    // same helpers as `add`.
+    .{ .name = "sin", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Sine, radians.", .eval = unMath(fSin) },
+    .{ .name = "cos", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Cosine, radians.", .eval = unMath(fCos) },
+    .{ .name = "tan", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Tangent, radians.", .eval = unMath(fTan) },
+    .{ .name = "sqrt", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Square root (IEEE; a negative yields nan).", .eval = unMath(fSqrt) },
+    .{ .name = "exp", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "e to the input.", .eval = unMath(fExp) },
+    .{ .name = "log", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Natural log (IEEE; zero yields -inf, a negative yields nan).", .eval = unMath(fLog) },
+    .{ .name = "ceil", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round toward +inf — `floor`'s missing mirror.", .eval = unMath(fCeil) },
+    .{ .name = "sign", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "-1, 0 or 1 (nan stays nan).", .eval = unMath(fSign) },
+    .{ .name = "fract", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Fractional part, always in [0, 1) — `fract -0.25` is 0.75.", .eval = unMath(fFract) },
+    .{ .name = "pow", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a to the power b — `x | pow 2` is x squared.", .eval = binMath(fPow) },
+    .{ .name = "mod", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Floored modulo: the sign follows the divisor, so `-90 | mod 360` is 270.", .eval = binMath(fMod) },
+    .{ .name = "atan2", .inputs = &.{ p.in("y", Tag.number), p.in("x", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Angle of (x, y) in radians, y PIPED — `dy | atan2 dx`.", .eval = binMath(fAtan2) },
+    .{ .name = "pi", .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "3.14159… — emitted once at mount.", .eval = constant(std.math.pi) },
+    .{ .name = "tau", .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "2*pi — a whole turn, emitted once at mount.", .eval = constant(std.math.tau) },
     // comparators
     .{ .name = "=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Equality (numeric across int/float; byte-wise otherwise).", .eval = evalEq },
     .{ .name = "!=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Inequality.", .eval = evalNe },
-    .{ .name = "<", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a < b.", .eval = cmpOp(fLt) },
-    .{ .name = "<=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a <= b.", .eval = cmpOp(fLe) },
-    .{ .name = ">", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a > b.", .eval = cmpOp(fGt) },
-    .{ .name = ">=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a >= b.", .eval = cmpOp(fGe) },
+    .{ .name = "<", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a < b.", .eval = cmpOp(fLt) },
+    .{ .name = "<=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a <= b.", .eval = cmpOp(fLe) },
+    .{ .name = ">", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a > b.", .eval = cmpOp(fGt) },
+    .{ .name = ">=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a >= b.", .eval = cmpOp(fGe) },
     // records
     .{ .name = "record", .variadic = true, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Record construction { field: stream, … } — a live tuple with named fields.", .eval = evalRecord },
     .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },
