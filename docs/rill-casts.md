@@ -606,15 +606,18 @@ argument, same class, as sensor scans.
   warms to steady state and dims over the time constant when the
   brazier unmounts (held headless in casting.zig; the `--exec` lines
   for the photon run ride the wiring commit). The *walk* — a MOVING
-  standpoint — is not built: it wants a live-position ear, which is
-  §9's recorded ear-with-a-position-port (or `@camera.pos` when the
-  registry lands), and it stays a pointer here until one exists.
-- **The brazier's position is a BORROW, recorded so it moves.** The
-  demo casts `at plane.sensors.hearth.pos` — the hearth-ear's own
-  published standpoint — because a brazier has no position of its own
-  until R6's `@` registry. When `@` lands, the demo's spelling becomes
-  `at @brazier.pos` and the borrow ends; it must not stay glued to
-  the ear.
+  standpoint — **is built (2026-08-25, tags campaign closed): the
+  registry landed and T4's entity-bound ears are the live-position
+  ear this paragraph was waiting for.** `ear bind cam-ear @camera
+  <arche>` makes the standpoint the walk itself; the gate ("THE WALK",
+  casting.zig) carries a camera-bound ear into the brazier's glow and
+  out again, the reading rising and falling with the standpoint.
+- **The brazier's position was a BORROW — repaid (2026-08-25).** The
+  demo used to cast `at plane.sensors.hearth.pos` — the hearth-ear's
+  own published standpoint — because a brazier had no position of its
+  own before R6's `@` registry. The walk gate spells it
+  `at @brazier.pos` over a placed, registered brazier, exactly as this
+  record demanded; nothing is glued to the ear any more.
 
 ---
 
