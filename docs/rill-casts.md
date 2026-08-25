@@ -450,6 +450,24 @@ Published pair per reading: **value and gradient** — the gradient is
 what movement wants. "Sensors report geometry; rills form beliefs"
 survives with fields as one more thing geometry says.
 
+**The symmetry, stamped 2026-08-25: a cast names where it deposits
+(`at`); a read names where it samples (its standpoint path); neither
+has an implicit "here."** The parser enforces the read half — a bare
+`$chan` is refused with the spelling stated
+(`plane.sensors.<post>.$chan`, or `@id.$chan` when the registry
+lands), not just the refusal.
+
+Two things recorded here, not built:
+
+- **`@self.$chan` sugar** inside an instance-bound def, when R4
+  arrives — under the `use` precedent: parse-time expansion, dumps
+  store the expanded path, nothing downstream of the parser knows
+  the sugar exists.
+- **A positioned read for a supervisor is an ear with a `position`
+  port declared on the spine** — never a rill-side query. If a
+  supervisor needs the field "over there", it declares an ear there;
+  the standpoint stays a declared object.
+
 **Per-entity sensors (ruled).** Probe round two assumed
 `sensors/tom/nearest` — a sensor per soldier — without noticing the
 assumption. The ruling: an entity has no implicit instrument. Eyes

@@ -2504,3 +2504,45 @@ test "cast: in an also branch it is an effect — no discard warning" {
     defer prog.deinit();
     try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
 }
+
+// ---------------------------------------------------------------------------
+// The comment move (ruled 2026-08-25): `#` is the tag sigil and cannot also
+// be the comment lead, so comments are `//`. The token-boundary pin is
+// structural — a name-interior `/` must join two name characters, so no
+// slash-form path literal can put two slashes adjacent inside a token.
+// ---------------------------------------------------------------------------
+
+test "comments: `//` to end of line, full-line and trailing, either side of a name" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\// a full-line comment
+        \\plane.hp | mul 2 // after a number token
+        \\  | set plane.out// flush against a name: the name cannot eat the slashes
+    , .{.{ "plane.hp", @as(i64, 4) }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 8), types.asNumber(fx.mock.store.get("plane.out").?).?);
+}
+
+test "comments: slash-form path literals never trip the comment rule" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    // `render/grade/exposure` is one word (single slashes join name chars);
+    // the `//` after it is a comment.
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.v | tap render/grade/exposure // knob path survives");
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "tap1").?);
+    try testing.expectEqualStrings("render/grade/exposure", n.statics[0].word);
+}
+
+test "comments: `#` no longer comments — it is an inert sigil awaiting the tag beat" {
+    try expectParseError("# this used to be a comment", "expected an expression");
+}
+
+test "comments: a tail keeps `//` and `#` as text — the tail takes the raw line" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "sound play pack:horns#audio.stem//v2", .{});
+    defer fx.deinit();
+    const echoed = fx.rt.readSlot("programs.p.sound play1.out.out").?;
+    try testing.expectEqualStrings("pack:horns#audio.stem//v2", types.asString(echoed).?);
+}

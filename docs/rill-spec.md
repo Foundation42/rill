@@ -209,8 +209,8 @@ port, when bound, decides *what*:
 > **Piped value: write what's flowing. Bound value: write this, because something flowed.**
 
 ```
-plane.hp | clamp 0 100 | set plane.ui.bar                      # what's flowing
-plane.signals.horn | set plane.gate.drawbridge_target 1        # this, because something flowed
+plane.hp | clamp 0 100 | set plane.ui.bar                      // what's flowing
+plane.signals.horn | set plane.gate.drawbridge_target 1        // this, because something flowed
 plane.enemies | rose_above 0 | notify plane.signals.horn { kind: "approach" }
 ```
 
@@ -328,13 +328,16 @@ statics, then any non-tail ports the pipe didn't feed, positionally — and capt
 of the line **verbatim** as a string literal on the tail port. This is the honest shape of a
 locator: freeform text, not structure. Console grammars with a `rest` argument map onto it
 directly, which is what lets lines like the above parse unchanged (G1) without teaching the
-tokenizer about `/`, `#`, or `:`.
+tokenizer about `/`, `#`, or `:`. (Comments are `//`, ruled 2026-08-25 — `#` is the tag
+sigil and cannot also be the comment lead. `//` opens a comment only at a token boundary,
+which is structural: a name-interior `/` must join two name characters, so a slash-form
+path like `render/grade/exposure` can never put two slashes adjacent inside a token.)
 
 - Closed shape, enforced at registration: last input only, string-typed, never variadic,
   and every port before the tail is required — a fixed prefix has no room for maybe-there
   arguments. Kwargs don't exist on a tail operator for the same reason.
-- **The tail ends the chain.** Everything to end-of-line is text: `#` does not start a
-  comment there, and `as` does not bind. Piping *into* an operator whose only port is the
+- **The tail ends the chain.** Everything to end-of-line is text: neither `//` nor `#`
+  starts a comment there (the tail takes the raw line), and `as` does not bind. Piping *into* an operator whose only port is the
   tail is an error — the tail is parse-time text, never a stream.
 - **Footgun closed at parse:** an unquoted tail containing `|` is an error — *"tail port
   consumed a pipe — quote the locator or restructure"* — so composing after a tail verb

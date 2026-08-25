@@ -251,9 +251,9 @@ The drawbridge groans upward; it does not teleport. Effect verbs gain the
 command/completion shape (precedent: the camera pose queue):
 
 ```
-set gate/drawbridge.target 1        # starts the winch
-gate/drawbridge.position            # value path, animates 0→1
-gate/drawbridge.arrived             # occurrence on settle, carrying WHERE
+set gate/drawbridge.target 1        // starts the winch
+gate/drawbridge.position            // value path, animates 0→1
+gate/drawbridge.arrived             // occurrence on settle, carrying WHERE
 ```
 
 The narrative's best beat — bridge up *just as* the horsemen arrive — is
@@ -381,9 +381,9 @@ three referents, no bare nouns:
 ```
 spawn ^soldier as @tom | tag @tom #garrison #off-duty
 @tom.health | dropped_below 20 | notify signals/medic { who: "tom" }
-^soldier & #wounded          # kind filtered by state
-#garrison & #in-courtyard    # pure condition algebra
-count ^soldier               # how many of the kind exist at all
+^soldier & #wounded          // kind filtered by state
+#garrison & #in-courtyard    // pure condition algebra
+count ^soldier               // how many of the kind exist at all
 ```
 
 `@tom.health` as a live path is the bonus: instance-scoped subscriptions get

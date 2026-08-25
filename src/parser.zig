@@ -130,12 +130,14 @@ fn isNameStart(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
 }
 
-/// `/` is a name-interior character (never a name start): rill has no `/`
-/// operator — division is the `div` word — so `render/grade/exposure` is
-/// unambiguous, and the console's knob-path arguments ride the bare-word →
-/// string-port coercion with no special case.
+/// Name-interior characters, before the joining rules: `/` and `-` are
+/// handled in the tokenizer loop, because both are name-interior only when
+/// they JOIN two name characters. For `/` (never a name start — rill has no
+/// `/` operator, division is the `div` word) the joining rule is what makes
+/// `//`-comments sound: `render/grade/exposure` is one word, but a name can
+/// never hold two adjacent slashes, so every `//` sits at a token boundary.
 fn isNameChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '/';
+    return std.ascii.isAlphanumeric(c) or c == '_';
 }
 
 fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Token {
@@ -160,7 +162,17 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             col += 1;
             continue;
         }
-        if (c == '#') { // comment to end of line
+        // `//` opens a comment, to end of line (ruled 2026-08-25: `#` is the
+        // tag sigil and cannot also be the comment lead; `//` matches the
+        // house language and collides with none of the four sigils). The
+        // token-boundary pin is structural, not positional: a name-interior
+        // `/` must JOIN two name characters (below, same license `-` has), so
+        // no slash-form path literal can hold two adjacent slashes inside a
+        // token — `render/grade/exposure` never trips this, and any `//` the
+        // tokenizer meets sits at a boundary by construction. Inside a tail
+        // it is still text: the tail slices the raw source to end of line,
+        // and the skipped tokens were never going to be consumed.
+        if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
             while (i < src.len and src[i] != '\n') : (i += 1) col += 1;
             continue;
         }
@@ -169,9 +181,10 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         // rill has no infix minus (subtraction is the `sub` word).
         // `$` opens a name when a name follows: `$alarm` is one token, a
         // field-channel name wearing its sigil (rill-casts.md §3). The sigil
-        // is name-LEAD only — a lone `$` stays an inert raw token. (`#` can
-        // never join it this way: `#` opens a comment, a collision the tag
-        // beat will have to rule on before `#garrison` is sayable in rill.)
+        // is name-LEAD only — a lone `$` stays an inert raw token. (`#` is
+        // free for the tag beat now that comments are `//` — the collision
+        // was ruled out of existence 2026-08-25; until tags land, `#` is an
+        // inert raw token like the other unclaimed sigils.)
         if (isNameStart(c) or
             (c == '$' and i + 1 < src.len and isNameStart(src[i + 1])) or
             (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1]))))
@@ -179,16 +192,18 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             const start = i;
             i += 1;
             col += 1;
-            // `-` is name-INTERIOR when it joins two name characters, the same
-            // license `/` has: `key-light` is one entity name. A lone `-` is
-            // still the unbind sentinel and `-5` is still a negative number,
-            // because both fail the "joins two name characters" test — and rill
-            // has no infix minus (subtraction is the `sub` word), so nothing
-            // else wants this spelling. Without it every hyphenated name an
-            // authoring tool produces is unsayable: `light move key-light 1 2 3`
-            // arrives as five arguments for a four-port row.
+            // `-` and `/` are name-INTERIOR when they join two name
+            // characters: `key-light` is one entity name, `render/grade/
+            // exposure` is one knob path. A lone `-` is still the unbind
+            // sentinel, `-5` is still a negative number, and `//` is always
+            // a comment, because all three fail the "joins two name
+            // characters" test — and rill has no infix minus or slash
+            // (subtraction is `sub`, division is `div`), so nothing else
+            // wants these spellings. Without the `-` rule every hyphenated
+            // name an authoring tool produces is unsayable: `light move
+            // key-light 1 2 3` arrives as five arguments for a four-port row.
             while (i < src.len and (isNameChar(src[i]) or
-                (src[i] == '-' and i + 1 < src.len and isNameChar(src[i + 1])))) : (i += 1) col += 1;
+                ((src[i] == '-' or src[i] == '/') and i + 1 < src.len and isNameChar(src[i + 1])))) : (i += 1) col += 1;
             try toks.append(a, .{ .kind = .name, .text = src[start..i], .line = tl, .col = tc, .off = to });
             continue;
         }
@@ -376,7 +391,8 @@ const Parser = struct {
     reg: *registry.Registry,
     diag: *Diag,
     /// The raw source — tail ports (§3.11) slice their text from here, not
-    /// from tokens, so `#` is text in a tail and `/` needs no token.
+    /// from tokens, so `#` and `//` are text in a tail and `/` needs no
+    /// token.
     src: []const u8,
     toks: []Token,
     pos: usize = 0,
@@ -822,11 +838,13 @@ const Parser = struct {
                     return .{ .outputs = try self.oneSource(arg.source) };
                 }
                 if (t.text[0] == '$') {
-                    // No bare channel read in v1 (rill-casts.md note §3): a
-                    // field is read at a STANDPOINT — a sensor's published
-                    // reading — never as a free-floating stream. This also
-                    // keeps the cycle checker out of the field store.
-                    return self.fail(t, "'{s}' is a field channel — read it at a standpoint (a sensor's published reading), or deposit with 'cast {s} …'", .{ t.text, t.text });
+                    // Stamped 2026-08-25: a field read always names its
+                    // standpoint — cast names where it deposits, a read names
+                    // where it samples, and neither has an implicit "here".
+                    // The error states the spelling, not just the refusal.
+                    // (This is also what keeps the cycle checker out of the
+                    // field store.)
+                    return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: plane.sensors.<post>.{s} (or @id.{s} when the registry lands) — a bare channel has no implicit 'here'. To deposit, 'cast {s} …'", .{ t.text, t.text, t.text, t.text });
                 }
                 const op_tok = self.next();
                 return self.parseOpcall(target, op_tok, null, false);
@@ -1362,8 +1380,9 @@ const Parser = struct {
     /// Arguments for a tail operator (§3.11). The grammar is closed: a fixed
     /// prefix — one positional value per static, then one per non-tail port
     /// the pipe didn't feed — and then *the rest of the line, verbatim*, as a
-    /// string literal on the tail port. Kwargs don't exist here, `#` is text
-    /// (a comment cannot follow a tail), and `as` after the tail is captured
+    /// string literal on the tail port. Kwargs don't exist here, `//` and
+    /// `#` are text (a comment cannot follow a tail — the tail takes the raw
+    /// line), and `as` after the tail is captured
     /// as text too: the tail ends the chain. An unquoted `|` anywhere in the
     /// tail fails loud; a fully-quoted tail is the escape hatch and may
     /// contain anything.

@@ -11,16 +11,16 @@ const rill = @import("rill");
 const struple = @import("struple");
 
 const program_src =
-    \\# player vitals, live as one record
+    \\// player vitals, live as one record
     \\plane.player.{health, stamina} as vitals
     \\
-    \\# healthbar: clamp, normalise, write back
+    \\// healthbar: clamp, normalise, write back
     \\vitals.health | clamp 0 100 | div 100 | set plane.ui.healthbar
     \\
-    \\# heartbeat: an occurrence when health crosses below 20
+    \\// heartbeat: an occurrence when health crosses below 20
     \\plane.player.health | dropped_below 20 | tap heartbeat | set plane.audio.heartbeat
     \\
-    \\# grade: hard select on the underwater flag
+    \\// grade: hard select on the underwater flag
     \\select plane.player.underwater 1 0 | set plane.grade.underwater
 ;
 
