@@ -353,6 +353,72 @@ export fn rill_program_node_name(h: ?*anyopaque, i: usize, out_len: *usize) call
     return n.ptr;
 }
 
+/// Every static declared by every node, flattened: `set`'s path, `cast`'s
+/// channel, `tag`'s subject and condition. The HOST keeps the predicates —
+/// "is this channel declared?" depends on the host's own tables, not rill's —
+/// so the seam hands over the declarations and nothing more.
+///
+/// Kinds: 0 path · 1 word · 2 literal · 3 channel · 4 subject · 5 condition.
+export fn rill_program_static_count(h: ?*anyopaque) callconv(.c) usize {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return 0));
+    var n: usize = 0;
+    for (box.prog.nodes.items) |*node| n += node.statics.len;
+    return n;
+}
+
+export fn rill_program_static_at(
+    h: ?*anyopaque,
+    i: usize,
+    out_node: *CStr,
+    out_kind: *u8,
+    out_val: *CStr,
+) callconv(.c) bool {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return false));
+    var seen: usize = 0;
+    for (box.prog.nodes.items) |*node| {
+        for (node.statics) |sv| {
+            if (seen == i) {
+                out_node.* = .{ .ptr = node.name.ptr, .len = node.name.len };
+                const v: []const u8 = switch (sv) {
+                    .path => |x| x,
+                    .word => |x| x,
+                    .literal => |x| x,
+                    .channel => |x| x,
+                    .subject => |x| x,
+                    .condition => |x| x,
+                };
+                out_kind.* = switch (sv) {
+                    .path => 0,
+                    .word => 1,
+                    .literal => 2,
+                    .channel => 3,
+                    .subject => 4,
+                    .condition => 5,
+                };
+                out_val.* = .{ .ptr = v.ptr, .len = v.len };
+                return true;
+            }
+            seen += 1;
+        }
+    }
+    return false;
+}
+
+/// Which node a static belongs to, by index — the pairing the three host-side
+/// loops need (a coupling is a node that declares BOTH a channel and a
+/// condition, and only the node identity ties them together).
+export fn rill_program_static_node_index(h: ?*anyopaque, i: usize) callconv(.c) i64 {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return -1));
+    var seen: usize = 0;
+    for (box.prog.nodes.items, 0..) |*node, ni| {
+        for (node.statics) |_| {
+            if (seen == i) return @intCast(ni);
+            seen += 1;
+        }
+    }
+    return -1;
+}
+
 /// Does any node of this program route to the host's main thread? The
 /// derivation a host would otherwise write itself over `nodes` × `registry`,
 /// kept on this side so the loop does not cross the boundary N times.
