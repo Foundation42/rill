@@ -58,6 +58,7 @@ const ProgramBox = struct { prog: rill.Program };
 const RuntimeBox = struct {
     rt: rill.Runtime,
     plane_impl: PlaneImpl,
+    hooks_impl: HooksImpl,
 };
 
 /// The last diagnostic, per registry — a parse failure's message, line and
@@ -374,6 +375,48 @@ export fn rill_ctx_now_frame(ctx_h: ?*anyopaque) callconv(.c) u64 {
 // same contract as the Zig `Plane`, expressed without Zig types.
 // ---------------------------------------------------------------------------
 
+/// A field deposit crossing the seam (`cast`). `decay_ns`/`decay_frames`
+/// carry the optional duration: `has_decay` false means "the channel's
+/// declared default", which is not the same as zero.
+pub const CCast = extern struct {
+    channel: [*]const u8,
+    channel_len: usize,
+    amplitude: f64,
+    pos: [*]const u8,
+    pos_len: usize,
+    radius: f64,
+    has_decay: bool,
+    decay_frames: bool,
+    decay_count: u64,
+    to: [*]const u8,
+    to_len: usize,
+};
+
+/// A membership write (`tag` / `untag`).
+pub const CTagWrite = extern struct {
+    subject: [*]const u8,
+    subject_len: usize,
+    tag: [*]const u8,
+    tag_len: usize,
+    adding: bool,
+};
+
+/// One operator failure, for the host to publish. `detail` says WHY in words
+/// — `err` alone gives "BadValue", which names the category and not the fact.
+pub const CErrorEvent = extern struct {
+    node: [*]const u8,
+    node_len: usize,
+    op: [*]const u8,
+    op_len: usize,
+    err: [*]const u8,
+    err_len: usize,
+    detail: [*]const u8,
+    detail_len: usize,
+    frame: u64,
+    time_ns: u64,
+    input_digest: u64,
+};
+
 pub const CPlane = extern struct {
     ctx: ?*anyopaque,
     subscribe: *const fn (ctx: ?*anyopaque, path: [*]const u8, path_len: usize, sub: u32) callconv(.c) c_int,
@@ -382,6 +425,20 @@ pub const CPlane = extern struct {
     /// non-zero for not-found.
     read: *const fn (ctx: ?*anyopaque, path: [*]const u8, path_len: usize, sink: ?*anyopaque, emit: *const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void) callconv(.c) c_int,
     write: *const fn (ctx: ?*anyopaque, path: [*]const u8, path_len: usize, val: [*]const u8, val_len: usize, kind: u8) callconv(.c) c_int,
+    /// The field and membership channels. Null when the host has no field
+    /// store or tag row — rill then refuses a `cast`/`tag` loudly, on the node
+    /// that wrote, exactly as it does in-process.
+    cast: ?*const fn (ctx: ?*anyopaque, c: *const CCast) callconv(.c) c_int = null,
+    tag: ?*const fn (ctx: ?*anyopaque, t: *const CTagWrite) callconv(.c) c_int = null,
+};
+
+/// The optional per-runtime hooks: the log bus (`tap`), the error channel, and
+/// the per-slot publish that mirrors live wires onto the host's plane.
+pub const CHooks = extern struct {
+    ctx: ?*anyopaque = null,
+    log: ?*const fn (ctx: ?*anyopaque, label: [*]const u8, label_len: usize, val: [*]const u8, val_len: usize) callconv(.c) void = null,
+    err: ?*const fn (ctx: ?*anyopaque, ev: *const CErrorEvent) callconv(.c) void = null,
+    publish: ?*const fn (ctx: ?*anyopaque, path: [*]const u8, path_len: usize, val: [*]const u8, val_len: usize) callconv(.c) void = null,
 };
 
 const PlaneImpl = struct {
@@ -408,6 +465,38 @@ const PlaneImpl = struct {
         if (self.c.write(self.c.ctx, path.ptr, path.len, val.ptr, val.len, @intFromEnum(kind)) != 0) return error.Denied;
     }
 
+    fn castThunk(ctx: *anyopaque, c: rill.plane.Cast) rill.plane.PlaneError!void {
+        const self: *PlaneImpl = @ptrCast(@alignCast(ctx));
+        const f = self.c.cast orelse return error.Denied;
+        const cc = CCast{
+            .channel = c.channel.ptr,
+            .channel_len = c.channel.len,
+            .amplitude = c.amplitude,
+            .pos = c.pos.ptr,
+            .pos_len = c.pos.len,
+            .radius = c.radius,
+            .has_decay = c.decay != null,
+            .decay_frames = if (c.decay) |d| d.frames else false,
+            .decay_count = if (c.decay) |d| d.count else 0,
+            .to = c.to.ptr,
+            .to_len = c.to.len,
+        };
+        if (f(self.c.ctx, &cc) != 0) return error.Denied;
+    }
+
+    fn tagThunk(ctx: *anyopaque, t: rill.plane.TagWrite) rill.plane.PlaneError!void {
+        const self: *PlaneImpl = @ptrCast(@alignCast(ctx));
+        const f = self.c.tag orelse return error.Denied;
+        const ct = CTagWrite{
+            .subject = t.subject.ptr,
+            .subject_len = t.subject.len,
+            .tag = t.tag.ptr,
+            .tag_len = t.tag.len,
+            .adding = t.adding,
+        };
+        if (f(self.c.ctx, &ct) != 0) return error.Denied;
+    }
+
     fn asPlane(self: *PlaneImpl) rill.Plane {
         return .{
             .ctx = self,
@@ -415,7 +504,46 @@ const PlaneImpl = struct {
             .unsubscribeFn = unsubscribeThunk,
             .readFn = readThunk,
             .writeFn = writeThunk,
+            .castFn = if (self.c.cast != null) castThunk else null,
+            .tagFn = if (self.c.tag != null) tagThunk else null,
         };
+    }
+};
+
+/// The hook side, kept beside the plane so one box owns everything the
+/// runtime borrows.
+const HooksImpl = struct {
+    c: CHooks,
+
+    fn logThunk(ctx: ?*anyopaque, label: []const u8, val: []const u8) void {
+        const self: *HooksImpl = @ptrCast(@alignCast(ctx.?));
+        const f = self.c.log orelse return;
+        f(self.c.ctx, label.ptr, label.len, val.ptr, val.len);
+    }
+
+    fn errThunk(ctx: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+        const self: *HooksImpl = @ptrCast(@alignCast(ctx.?));
+        const f = self.c.err orelse return;
+        const ce = CErrorEvent{
+            .node = ev.node.ptr,
+            .node_len = ev.node.len,
+            .op = ev.op.ptr,
+            .op_len = ev.op.len,
+            .err = ev.err.ptr,
+            .err_len = ev.err.len,
+            .detail = ev.detail.ptr,
+            .detail_len = ev.detail.len,
+            .frame = ev.frame,
+            .time_ns = ev.time_ns,
+            .input_digest = ev.input_digest,
+        };
+        f(self.c.ctx, &ce);
+    }
+
+    fn publishThunk(ctx: ?*anyopaque, path: []const u8, val: []const u8) void {
+        const self: *HooksImpl = @ptrCast(@alignCast(ctx.?));
+        const f = self.c.publish orelse return;
+        f(self.c.ctx, path.ptr, path.len, val.ptr, val.len);
     }
 };
 
@@ -430,17 +558,50 @@ export fn rill_mount(prog_h: ?*anyopaque, cplane: *const CPlane, now_ns: u64, fr
 /// Mount with the opaque host world every registered operator will see as
 /// `rill_ctx_host` — Matryoshka's `CmdHost`, in practice.
 export fn rill_mount_with_host(prog_h: ?*anyopaque, cplane: *const CPlane, now_ns: u64, frame: u64, host: ?*anyopaque) callconv(.c) ?*anyopaque {
+    return rill_mount_full(prog_h, cplane, null, now_ns, frame, host);
+}
+
+/// The full mount: plane, hooks (log / error / publish), fed time, host world.
+export fn rill_mount_full(
+    prog_h: ?*anyopaque,
+    cplane: *const CPlane,
+    chooks: ?*const CHooks,
+    now_ns: u64,
+    frame: u64,
+    host: ?*anyopaque,
+) callconv(.c) ?*anyopaque {
     const pbox: *ProgramBox = @ptrCast(@alignCast(prog_h orelse return null));
     const box = gpa().create(RuntimeBox) catch return null;
     box.plane_impl = .{ .c = cplane.* };
+    box.hooks_impl = .{ .c = if (chooks) |h| h.* else .{} };
     box.rt = rill.Runtime.mount(gpa(), &pbox.prog, box.plane_impl.asPlane(), .{
         .now = .{ .time_ns = now_ns, .frame = frame },
         .host_ctx = host,
+        .log_fn = if (box.hooks_impl.c.log != null) HooksImpl.logThunk else null,
+        .log_ctx = &box.hooks_impl,
+        .error_fn = if (box.hooks_impl.c.err != null) HooksImpl.errThunk else null,
+        .error_ctx = &box.hooks_impl,
+        .publish_fn = if (box.hooks_impl.c.publish != null) HooksImpl.publishThunk else null,
+        .publish_ctx = &box.hooks_impl,
     }) catch {
         gpa().destroy(box);
         return null;
     };
     return @ptrCast(box);
+}
+
+/// Serialize a mounted program (dump). The bytes are seam-owned and freed by
+/// `rill_free_bytes`.
+export fn rill_dump(h: ?*anyopaque, out_len: *usize) callconv(.c) ?[*]const u8 {
+    const box: *RuntimeBox = @ptrCast(@alignCast(h orelse return null));
+    const bytes = rill.dump(&box.rt, gpa()) catch return null;
+    out_len.* = bytes.len;
+    return bytes.ptr;
+}
+
+export fn rill_free_bytes(ptr: ?[*]const u8, len: usize) callconv(.c) void {
+    const p = ptr orelse return;
+    gpa().free(p[0..len]);
 }
 
 export fn rill_runtime_destroy(h: ?*anyopaque) callconv(.c) void {

@@ -61,6 +61,21 @@ extern fn rill_ctx_host(ctx: ?*anyopaque) ?*anyopaque;
 extern fn rill_ctx_input(ctx: ?*anyopaque, i: usize, out_len: *usize) ?[*]const u8;
 extern fn rill_ctx_input_count(ctx: ?*anyopaque) usize;
 
+const CErrorEvent = extern struct {
+    node: [*]const u8, node_len: usize,
+    op: [*]const u8, op_len: usize,
+    err: [*]const u8, err_len: usize,
+    detail: [*]const u8, detail_len: usize,
+    frame: u64, time_ns: u64, input_digest: u64,
+};
+const CHooks = extern struct {
+    ctx: ?*anyopaque = null,
+    log: ?*const fn (?*anyopaque, [*]const u8, usize, [*]const u8, usize) callconv(.c) void = null,
+    err: ?*const fn (?*anyopaque, *const CErrorEvent) callconv(.c) void = null,
+    publish: ?*const fn (?*anyopaque, [*]const u8, usize, [*]const u8, usize) callconv(.c) void = null,
+};
+extern fn rill_mount_full(prog: ?*anyopaque, plane: *const CPlane, hooks: ?*const CHooks, now_ns: u64, frame: u64, host: ?*anyopaque) ?*anyopaque;
+
 const CPlane = extern struct {
     ctx: ?*anyopaque,
     subscribe: *const fn (?*anyopaque, [*]const u8, usize, u32) callconv(.c) c_int,
@@ -171,4 +186,30 @@ pub fn main() !void {
     }
     std.debug.print("plane writes     : {d}\n", .{writes});
     std.debug.print("host op fired    : {d} times (called back across the seam)\n", .{world.fired});
+
+    // …and the refusal REASON crosses too. `@errorName` would say "BadValue";
+    // what a reader needs is which operator refused and why.
+    try refusalCrossesTheSeam(reg, &plane);
+}
+
+var refusal_seen: bool = false;
+
+fn onError(_: ?*anyopaque, ev: *const CErrorEvent) callconv(.c) void {
+    refusal_seen = true;
+    std.debug.print("refusal          : {s}\n", .{ev.detail[0..ev.detail_len]});
+    std.debug.print("  on node        : {s} (op '{s}', {s})\n", .{
+        ev.node[0..ev.node_len], ev.op[0..ev.op_len], ev.err[0..ev.err_len],
+    });
+}
+
+/// Two records with different field sets under `add` — beat 1b's mismatch
+/// check — driven through the seam so the message crosses a C ABI intact.
+fn refusalCrossesTheSeam(reg: ?*anyopaque, plane: *const CPlane) !void {
+    const src = "{x: 1, y: 2, z: 3} | add {x: 1, y: 2} | set plane.out";
+    const prog = rill_parse(reg, "bad", 3, src.ptr, src.len) orelse return error.ParseFailed;
+    defer rill_program_destroy(prog);
+    var hooks = CHooks{ .err = onError };
+    const rt = rill_mount_full(prog, plane, &hooks, 0, 0, null) orelse return error.MountFailed;
+    defer rill_runtime_destroy(rt);
+    if (!refusal_seen) std.debug.print("refusal          : (none — expected one)\n", .{});
 }
