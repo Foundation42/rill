@@ -272,7 +272,11 @@ This will surprise the first person who writes a brazier, which is why it is sai
 
 A cast is an effect but **not a path write**: the channel static never enters the write
 list, and correctly so — a field has no read side inside rill (readings come from a
-standpoint, rill-casts.md §9), so there is no loop for the cycle check to see. The deposit
+standpoint, rill-casts.md §9), so there is no loop for the cycle check to see. Because
+the channel is a static, a host can check its existence at MOUNT — Matryoshka refuses an
+undeclared channel there, at the same moment capabilities are checked, naming the node —
+while eval-time refusals remain for what only eval can know (a non-finite position, a
+channel deleted under a standing caster). The deposit
 crosses the plane boundary on its own vtable arm (`castFn`), commits through the host's
 main-thread drain for deterministic ordering, and per rill-casts.md §11 **stays out of the
 log** — fields replay by re-derivation. `to #tag` (coupling) parses when the tag store

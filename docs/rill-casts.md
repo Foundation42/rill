@@ -1,6 +1,11 @@
 # Casts, Fields, and the `$` Sigil
 
-**Status:** draft for ratification — Chris + Claude, 2026-08-26.
+**Status: RATIFIED 2026-08-25** — Chris + Claude + Claude Chat: the
+build-time rulings (cc-note-casts.md), the morning rulings (comments,
+standpoint spelling, mutation harness), and the afternoon rulings (rig
+container, console caster kind, mount-time spine check) all landed the
+same day they were made, each with its gate. What remains open is
+recorded in §12 and §10's indecision clause, on purpose.
 **Amended 2026-08-25** with the build-time rulings from
 `cc-note-casts.md` (Chris + Claude Chat): §6 grammar pinned, §5
 reversed to per-deposit runtime physics, §4.1 gains the
@@ -411,16 +416,29 @@ out of the log** — drain yes, log no.
 
 ## 7. Channels declared on the `^` spine (ruled)
 
-`$blight` is declared before it is cast — default falloff, clamp
-range, whether occlusion applies (a wall stops `$torchlight`; it does
-not stop `$dread`), and eventually intrinsic decay if/when promoted
-from rills. A channel is a *kind* of field, and kinds live on the
-archetype spine — which puts channel declarations behind the spine's
-comptime + runtime completeness gates, so a half-added channel is
-refused the way a half-added tenant is.
+`$blight` is declared before it is cast. A channel is a *kind* of
+field, and kinds live on the archetype spine — which puts channel
+declarations behind the spine's comptime + runtime completeness gates,
+so a half-added channel is refused the way a half-added tenant is.
 
 The cast supplies intensity and extent; the channel supplies the
 physics. Every physics question has one home.
+
+**As built (2026-08-25):** `chanarche set <$name> <epsilon> <decay_ms>
+[clamp_lo] [clamp_hi]` — the spine's EIGHTH tenant and its first
+archetype-only one (a channel has no placed instance; casters are
+rills, the console, and later entities). Epsilon is the cull floor and
+the floor of meaning; decay_ms is the default e-folding time deposits
+inherit (§5); the clamp is the canonical value's range (`$blight`'s
+"held to zero" is `clamp_lo 0`). What the draft listed but the
+declaration does NOT yet carry, deliberately: **falloff** is the one
+fixed kernel `(1−(d/r)²)²` until a scene needs a second (declaring a
+knob nothing reads would be a lie wearing a row), and **occlusion**
+awaits the solver's `material_attenuation` arm (§12). A cast's channel
+is a STATIC, so its existence is checked at MOUNT against the spine —
+the same moment capabilities are checked, naming the node in the
+refusal — with eval-time checks kept for what only eval can know
+(a channel deleted under a standing caster; a non-finite position).
 
 ---
 
@@ -453,10 +471,26 @@ standpoint:
 
 - `@tom.$dread` — the absorbed reading at Tom's position.
 - `sensors/gate/$alarm` — an ear-post publishing a channel reading on
-  its declared cadence, with the same digest/staleness/dwell
-  machinery as sight. An "ear" is a sensor archetype whose scan
-  samples channels instead of casting sight-lines; the fifth tenant
-  already built is the template.
+  its declared cadence, with the same digest/staleness machinery as
+  sight. The draft guessed an ear would be a sensor-archetype variant;
+  **as built (2026-08-25) ears are their own NINTH tenant**
+  (`eararche` = the sampler, `ear` = the standpoint), because the
+  sampler doctrine deserved its own shape: the ear archetype carries
+  the sampler state as declared fields — point vs area (a 5-point XZ
+  stencil), gradient on/off, cadence, an instrument clamp — and an
+  ear post is a standpoint plus a REQUIRED sampler binding, with no
+  override mask and no self-carried fallback. A deleted sampler's
+  posts read nothing and freeze their scan clock: staleness declared.
+  The published row: `sensors/<post>/$chan` (value, on change),
+  `…/$chan-grad` (when declared), `…/$chan-scan_ns` (every scan). A
+  new ear says ZERO before it has ever listened — Principle 8, the
+  arm-on-first-observation bug pre-empted at declaration. Two ears
+  with different sampler state read the same field to different
+  numbers: instrument choice, not a second truth (§4.1's line, with
+  a name a graphics person recognises). And ears never sample during
+  rill eval — the store is read by the engine's pass after the
+  drain, structurally (the eval layer cannot even import it), so
+  evaluation order cannot leak into a reading.
 
 Published pair per reading: **value and gradient** — the gradient is
 what movement wants. "Sensors report geometry; rills form beliefs"
@@ -566,7 +600,7 @@ argument, same class, as sensor scans.
 
 ---
 
-## 13. Proposed gates (F-series, to be pre-registered at build time)
+## 13. The gates (F-series — pre-registered here, registered and held in the build)
 
 - **F1 — superposition:** two casters on one channel; the reading
   between them equals the sum of both kernels, and removing either
