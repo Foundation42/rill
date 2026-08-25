@@ -596,6 +596,30 @@ rill granted `tags/squads/*` is refused at mount when it writes
   the fold is load-bearing, not decorative). One rill-side yielding: the
   parser now accepts all-digit path segments, because id-keyed rows are a
   legitimate store shape the language was refusing on spelling alone.
+- **T3 LANDED (2026-08-25):** the surface. `#garrison` lexes one token in
+  rill (guarded like `$`/`@`); `tag <@subject> <#tag>` / `untag …` join the
+  sink family — ONE tag per call (fork B, refused by name), piped the
+  rousing drives, unpiped fires once at tick 0 (the console one-shot's
+  shape). Membership crosses on its own vtable arm at EVAL, like a cast but
+  for the turned-around reason: the host needs the subject as a NAME to
+  refuse a stale binding on the node. The write list learns the composed
+  member key `plane.tags.<tag>.<@subject>` (one composition shared by
+  parser, def instantiate, and dump restore), and the cycle pin falls out
+  of the ordinary prefix rule — set-sub refused, `joined`/`count` siblings
+  legal by construction, not special case. Engine: subjects bind at mount
+  (unregistered → mount refused, node named; the ack says the id); a
+  dead-subject write refuses against the §6 budget and its record carries
+  the CERTIFICATE's reason and frame via the Plane's morgue (`last_deaths`
+  — not a tombstone: no read path, nothing subscribes it); a re-registered
+  name never reattaches. The grant check is live with the stamped wording —
+  `user/` default-all-granted, `agent/`/`pack/` writers refuse as policy
+  with the unblock named; member writes count as writes, casts wait for the
+  capabilities beat. Console one-shot `tag` applies `.document` through the
+  wire, idempotent, twice-is-once. Five rill mutations + five engine
+  mutations bitten; one lesson re-paid: the sigil-word guard first fired
+  before the string coercion and broke the console's own grammar
+  (`entity bind @wall …` — @wall is TEXT there); the wire gate caught it
+  within the hour, which is exactly the gate Chris asked for.
 
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind
