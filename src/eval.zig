@@ -516,6 +516,8 @@ pub const Runtime = struct {
             .write_ctx = self,
             .cast_fn = castThunk,
             .cast_ctx = self,
+            .tag_fn = tagThunk,
+            .tag_ctx = self,
             .log_fn = self.log_fn,
             .log_ctx = self.log_ctx,
             .host = self.host_ctx,
@@ -628,6 +630,18 @@ pub const Runtime = struct {
         // (`Plane.cast` on a null castFn is Denied). The host is expected to
         // say WHY on its own channel before erroring; rill only counts.
         self.plane.cast(c) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.PlaneWrite,
+        };
+    }
+
+    fn tagThunk(ctx: *anyopaque, t: plane_mod.TagWrite) registry.EvalError!void {
+        const self: *Runtime = @ptrCast(@alignCast(ctx));
+        // Same door as a cast, same reason: a stale-binding refusal (the
+        // subject died, or its name was re-registered under a new id) lands
+        // on the node that wrote — counted, §6-reported, wave dies there —
+        // and the host says WHY on its own channel before erroring.
+        self.plane.tag(t) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             else => error.PlaneWrite,
         };

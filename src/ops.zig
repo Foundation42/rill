@@ -685,6 +685,36 @@ fn evalCast(ctx: *EvalCtx) EvalError!Emit {
     return Emit.none;
 }
 
+/// `tag <@subject> <#tag>` / `untag <@subject> <#tag>` — the membership
+/// sinks (ironwood R6 T3). One subject, ONE tag per call (a second tag is a
+/// second statement); the write is a set operation, so the host applies it
+/// idempotently — twice is once — and speaks `joined`/`left` only on actual
+/// transitions. Port 0 is the rousing, per the sink rule. Unpiped there is
+/// no rousing to wait for, so the parser binds a literal one and the
+/// statement fires ONCE, at tick 0 — the console one-shot
+/// (`tag @wall #garrison`) is the customer, mirroring cast's unpiped
+/// deposit-once story. The subject's name was bound to an entity id at
+/// MOUNT (ironwood T2 pin ③); the host refuses a write whose binding has
+/// gone stale, here at the node, ending the program's authority over a
+/// rebound name loudly.
+fn evalTag(ctx: *EvalCtx) EvalError!Emit {
+    return evalMembership(ctx, true);
+}
+
+fn evalUntag(ctx: *EvalCtx) EvalError!Emit {
+    return evalMembership(ctx, false);
+}
+
+fn evalMembership(ctx: *EvalCtx, adding: bool) EvalError!Emit {
+    if (!ctx.in_fresh[0]) return Emit.none;
+    try ctx.tagWrite(.{
+        .subject = ctx.statics[0].subject,
+        .tag = ctx.statics[1].condition,
+        .adding = adding,
+    });
+    return Emit.none;
+}
+
 fn evalConst(ctx: *EvalCtx) EvalError!Emit {
     try splice(ctx, 0, ctx.statics[0].literal);
     return Emit.first;
@@ -800,6 +830,13 @@ const CORE = [_]registry.OpDef{
     // disambiguates what a positional grammar cannot (`cast $alarm 30` —
     // payload or radius?).
     .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true } }, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>]`; piped, the input is the rousing.", .class = .effect, .eval = evalCast },
+    // The membership sinks share `inc`'s port shape — the rousing carries no
+    // payload (a set operation takes nothing from the stream) — and compose
+    // their one write-list entry from the subject/condition pair
+    // (`Program.registerWrites`), which is how the cycle check refuses a
+    // set-subscription while `joined`/`count` reads stay siblings.
+    .{ .name = "tag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .help = "Add `@subject` to a tag — `tag @tom #garrison`; idempotent (twice is once), one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalTag },
+    .{ .name = "untag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .help = "Remove `@subject` from a tag — `untag @tom #garrison`; idempotent, one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalUntag },
     .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Emit a constant once at mount.", .eval = evalConst },
     .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .class = .reads, .eval = evalTap },
 };

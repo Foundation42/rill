@@ -184,6 +184,28 @@ pub const Program = struct {
         self.downstream = out;
     }
 
+    /// Register one effect node's write targets from its statics — the ONE
+    /// composition both call sites (parser bind, dump restore) share, so the
+    /// dump cannot disagree with the parse. `path` statics land directly;
+    /// a `subject`/`condition` pair (the membership sinks, ironwood R6 T3)
+    /// composes the member key `plane.tags.<tag>.<@subject>` — member keys
+    /// wear `@`, service leaves (`joined`/`left`/`count`) are bare words, so
+    /// a set-subscription overlaps and a service read never does.
+    pub fn registerWrites(self: *Program, statics: []const registry.StaticVal, node_id: NodeId) !void {
+        var subject: ?[]const u8 = null;
+        var condition: ?[]const u8 = null;
+        for (statics) |sv| switch (sv) {
+            .path => |wp| try self.writes.append(self.a(), .{ .path = wp, .node = node_id }),
+            .subject => |s| subject = s,
+            .condition => |c| condition = c,
+            else => {},
+        };
+        if (subject != null and condition != null) {
+            const member = try std.fmt.allocPrint(self.a(), "plane.tags.{s}.{s}", .{ condition.?[1..], subject.? });
+            try self.writes.append(self.a(), .{ .path = member, .node = node_id });
+        }
+    }
+
     /// Path-level cycle detection (§4.4): a program that writes a path it also
     /// subscribes to — exactly, or through a segment prefix either way — is
     /// cyclic. Returns the offending pair for the error message.

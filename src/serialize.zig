@@ -82,6 +82,14 @@ pub fn dump(rt: *const eval.Runtime, gpa: std.mem.Allocator) ![]u8 {
                         try one.appendInt(3);
                         try one.appendString(v);
                     },
+                    .subject => |v| {
+                        try one.appendInt(4);
+                        try one.appendString(v);
+                    },
+                    .condition => |v| {
+                        try one.appendInt(5);
+                        try one.appendString(v);
+                    },
                 }
                 try st.appendArray(one.bytes());
             }
@@ -237,6 +245,8 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
                 1 => .{ .word = try asStrIn(a, payload) },
                 2 => .{ .literal = try asBytesIn(a, payload) },
                 3 => .{ .channel = try asStrIn(a, payload) },
+                4 => .{ .subject = try asStrIn(a, payload) },
+                5 => .{ .condition = try asStrIn(a, payload) },
                 else => return error.Malformed,
             });
         }
@@ -294,13 +304,11 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
         }
     }
 
-    // derived: write targets (for the cycle check on future edits)
+    // derived: write targets (for the cycle check on future edits) — the
+    // same composition the parser used, so the dump cannot disagree.
     for (prog.nodes.items) |*n| {
         if (!reg.get(n.op).class.writes()) continue;
-        for (n.statics) |sv| switch (sv) {
-            .path => |wp| try prog.writes.append(a, .{ .path = wp, .node = n.id }),
-            else => {},
-        };
+        try prog.registerWrites(n.statics, n.id);
     }
 
     try prog.finalize();

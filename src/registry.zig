@@ -62,7 +62,15 @@ pub const Port = struct {
 /// write list and the cycle check reads that list, but a field has no read
 /// side inside rill (readings come from a standpoint — a sensor), so a cast
 /// can never close a loop the checker would need to see.
-pub const StaticKind = enum { path, word, literal, channel };
+/// `subject` and `condition` are the membership pair (`tag @tom #garrison`,
+/// ironwood R6 T3), each wearing its sigil. Neither is a `path`, but for the
+/// OPPOSITE reason to `channel`: a membership write DOES have a read side —
+/// the member key `plane.tags.<tag>.<@subject>` — so the pair composes into
+/// exactly one write-list entry (`Program.registerWrites`), which is how the
+/// cycle check sees a set-subscription collide while `joined`/`count`
+/// subscriptions stay legitimate siblings (member keys wear `@`, service
+/// leaves are bare words — disjoint by construction).
+pub const StaticKind = enum { path, word, literal, channel, subject, condition };
 
 pub const StaticDecl = struct {
     name: []const u8,
@@ -76,6 +84,8 @@ pub const StaticVal = union(StaticKind) {
     word: []const u8,
     literal: []const u8, // struple-encoded element
     channel: []const u8, // `$`-sigil field-channel name, sigil included
+    subject: []const u8, // `@`-sigil entity name, sigil included
+    condition: []const u8, // `#`-sigil tag name, sigil included
 };
 
 /// Which outputs emitted this tick. Bit i = output port i.
@@ -140,6 +150,14 @@ pub const EvalCtx = struct {
     /// mount.) Null when the host has no field store — same loud path.
     cast_fn: ?*const fn (ctx: *anyopaque, c: plane.Cast) EvalError!void = null,
     cast_ctx: ?*anyopaque = null,
+    /// Membership channel (`tag`/`untag`): dispatched AT EVAL like a cast,
+    /// and for the same reason — the host's stale-binding refusal (the
+    /// subject's mount-bound id has died, or its name was re-registered)
+    /// must land on the node that wrote, counted and §6-reported, ending
+    /// that program's authority over the subject loudly rather than in a
+    /// failed flush. Null when the host keeps no tag row — same loud path.
+    tag_fn: ?*const fn (ctx: *anyopaque, t: plane.TagWrite) EvalError!void = null,
+    tag_ctx: ?*anyopaque = null,
     /// Debug/log bus for `tap`; null when the host wired none.
     log_fn: ?*const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void = null,
     log_ctx: ?*anyopaque = null,
@@ -180,6 +198,11 @@ pub const EvalCtx = struct {
     pub fn cast(self: *EvalCtx, c: plane.Cast) EvalError!void {
         const f = self.cast_fn orelse return error.PlaneWrite;
         return f(self.cast_ctx.?, c);
+    }
+
+    pub fn tagWrite(self: *EvalCtx, t: plane.TagWrite) EvalError!void {
+        const f = self.tag_fn orelse return error.PlaneWrite;
+        return f(self.tag_ctx.?, t);
     }
 
     pub fn setState(self: *EvalCtx, bytes: []const u8) !void {

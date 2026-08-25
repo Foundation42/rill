@@ -179,14 +179,14 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         // `-` opens a name when it does NOT open a negative number — the
         // console's unbind sentinel (`light arche l1 -`) is a word, and
         // rill has no infix minus (subtraction is the `sub` word).
-        // `$` and `@` open a name when a name follows: `$alarm` and `@tom`
-        // are one token each, sigil included (rill-casts.md §3, ironwood R6).
-        // Sigils are name-LEAD only — a lone `$`/`@` stays an inert raw
-        // token. (`#` is free for the tag surface now that comments are `//`;
-        // until `tag`/`untag` land it stays an inert raw token, and `^`
-        // likewise until archetypes are sayable.)
+        // `$`, `@` and `#` open a name when a name follows: `$alarm`, `@tom`
+        // and `#garrison` are one token each, sigil included (rill-casts.md
+        // §3, ironwood R6; `#` since T3 — comments are `//`, so the tag
+        // sigil collides with nothing). Sigils are name-LEAD only — a lone
+        // `$`/`@`/`#` stays an inert raw token, and `^` stays inert entirely
+        // until archetypes are sayable.
         if (isNameStart(c) or
-            ((c == '$' or c == '@') and i + 1 < src.len and isNameStart(src[i + 1])) or
+            ((c == '$' or c == '@' or c == '#') and i + 1 < src.len and isNameStart(src[i + 1])) or
             (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1]))))
         {
             const start = i;
@@ -507,7 +507,7 @@ const Parser = struct {
         const def_tok = self.next(); // "def"
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected operator name after 'def'", .{});
-        if (name_tok.text[0] == '$' or name_tok.text[0] == '@') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity) — an operator cannot wear it", .{name_tok.text});
+        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — an operator cannot wear it", .{name_tok.text});
         if (self.defs.contains(name_tok.text) or self.reg.find(name_tok.text) != null) {
             return self.fail(name_tok, "'{s}' is already defined", .{name_tok.text});
         }
@@ -518,7 +518,7 @@ const Parser = struct {
             const pt = self.next();
             if (pt.kind == .rparen) break;
             if (pt.kind != .name) return self.fail(pt, "expected port name in def signature", .{});
-            if (pt.text[0] == '$' or pt.text[0] == '@') return self.fail(pt, "'{s}': a sigil names a store row (`$` field, `@` entity) — a port cannot wear it", .{pt.text});
+            if (pt.text[0] == '$' or pt.text[0] == '@' or pt.text[0] == '#') return self.fail(pt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — a port cannot wear it", .{pt.text});
             var ty: types.TypeId = types.Tag.any;
             if (self.peek().kind == .colon) {
                 _ = self.next();
@@ -618,7 +618,7 @@ const Parser = struct {
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected alias name after 'as'", .{});
         if (isReservedWord(name_tok.text)) return self.fail(name_tok, "'{s}' is reserved", .{name_tok.text});
-        if (name_tok.text[0] == '$' or name_tok.text[0] == '@') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity) — an alias cannot wear it", .{name_tok.text});
+        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — an alias cannot wear it", .{name_tok.text});
         if (self.aliases.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' is already bound", .{name_tok.text});
         if (self.program_target.names.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' collides with a stream name", .{name_tok.text});
         if (self.reg.find(name_tok.text) != null or self.defs.contains(name_tok.text)) {
@@ -662,7 +662,7 @@ const Parser = struct {
                 const nt = self.next();
                 if (nt.kind != .name) return self.fail(nt, "expected name after 'as'", .{});
                 if (isReservedWord(nt.text)) return self.fail(nt, "'{s}' is reserved", .{nt.text});
-                if (nt.text[0] == '$' or nt.text[0] == '@') return self.fail(nt, "'{s}': a sigil names a store row (`$` field, `@` entity) — a stream cannot wear it", .{nt.text});
+                if (nt.text[0] == '$' or nt.text[0] == '@' or nt.text[0] == '#') return self.fail(nt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — a stream cannot wear it", .{nt.text});
                 if (target.names.contains(nt.text)) return self.fail(nt, "name '{s}' is already bound (names are single-assignment)", .{nt.text});
                 if (self.aliases.contains(nt.text)) return self.fail(nt, "name '{s}' shadows a use alias", .{nt.text});
                 if (self.reg.find(nt.text) != null or self.defs.contains(nt.text)) {
@@ -872,8 +872,14 @@ const Parser = struct {
                     // path BEFORE the parse (mount-time binding, ironwood R6
                     // T2 pin ③) — so an `@` that reaches the parser is either
                     // unregistered (the host refuses the mount and says so)
-                    // or a bare subject, which only `tag`/`untag` will take.
-                    return self.fail(t, "'{s}' is an entity reference — read a field ('{s}.pos'), or use it as a tag subject once tag/untag land", .{ t.text, t.text });
+                    // or a bare subject, which only `tag`/`untag` take.
+                    return self.fail(t, "'{s}' is an entity reference — read a field ('{s}.pos'), or make it a tag subject: 'X | tag {s} #garrison'", .{ t.text, t.text, t.text });
+                }
+                if (t.text[0] == '#') {
+                    // A condition is written through the membership sinks and
+                    // read at its service leaves — the sigil form is never an
+                    // expression (same shape as the bare-`$` refusal below).
+                    return self.fail(t, "'{s}' is a condition — write membership with 'tag <@subject> {s}', read it at plane.tags.{s}.count (or .joined / .left)", .{ t.text, t.text, t.text[1..] });
                 }
                 if (t.text[0] == '$') {
                     // Stamped 2026-08-25: a field read always names its
@@ -1167,6 +1173,23 @@ const Parser = struct {
             }
         }
 
+        // ONE tag per call (ironwood R6 fork B): a second `#`-condition has
+        // nowhere honest to bind, and "too many arguments" would mislabel a
+        // ruling as an arity accident — refuse it by name.
+        {
+            var conds: usize = 0;
+            var declared: usize = 0;
+            for (args.items) |ag| {
+                if (ag.kind == .word and ag.text.len > 1 and ag.text[0] == '#') conds += 1;
+            }
+            for (def.statics) |sd| {
+                if (sd.kind == .condition) declared += 1;
+            }
+            if (declared > 0 and conds > declared) {
+                return self.fail(op_tok, "'{s}': ONE per call — a second tag is a second statement", .{op_name});
+            }
+        }
+
         // Statics are configuration, not streams: keyword-declared ones bind
         // by name, the rest are consumed from the leading positional args in
         // declaration order.
@@ -1210,6 +1233,18 @@ const Parser = struct {
                         return self.fail(arg.tok, "'{s}' expects a channel for '{s}' — a '$'-sigil name: {s} $alarm …", .{ op_name, sd.name, op_name });
                     }
                     break :blk .{ .channel = try self.a().dupe(u8, arg.text) };
+                },
+                .subject => blk: {
+                    if (arg.kind != .word or arg.text.len < 2 or arg.text[0] != '@') {
+                        return self.fail(arg.tok, "'{s}' expects a subject for '{s}' — an '@'-sigil name: {s} @tom #…", .{ op_name, sd.name, op_name });
+                    }
+                    break :blk .{ .subject = try self.a().dupe(u8, arg.text) };
+                },
+                .condition => blk: {
+                    if (arg.kind != .word or arg.text.len < 2 or arg.text[0] != '#') {
+                        return self.fail(arg.tok, "'{s}' expects a tag for '{s}' — a '#'-sigil name: {s} @tom #garrison", .{ op_name, sd.name, op_name });
+                    }
+                    break :blk .{ .condition = try self.a().dupe(u8, arg.text) };
                 },
             };
         }
@@ -1256,6 +1291,22 @@ const Parser = struct {
             bound[pi] = try self.bindArg(arg, ports[pi], op_name);
         }
 
+        // A membership sink with nothing rousing it fires ONCE, at tick 0:
+        // the parser binds a literal rousing rather than the eval guessing
+        // whether silence means "unpiped" or "piped and quiet". The console
+        // one-shot (`tag @wall #garrison`) is the customer — cast's unpiped
+        // deposit-once story, built from machinery literals already have.
+        if (ports.len > 0 and bound[0] == null and !reserved_primary) {
+            const is_membership = for (def.statics) |sd| {
+                if (sd.kind == .condition) break true;
+            } else false;
+            if (is_membership) {
+                var pk = struple.Packer.init(self.a());
+                pk.appendBool(true) catch return error.OutOfMemory;
+                bound[0] = .{ .kind = .literal, .source = .{ .literal = pk.bytes() }, .ty = types.Tag.boolean, .tok = op_tok };
+            }
+        }
+
         // Type check + collect sources.
         const sources = try self.a().alloc(Source, ports.len);
         for (ports, 0..) |port, i| {
@@ -1293,13 +1344,11 @@ const Parser = struct {
             try self.bindSectionPrimary(target, arg.section_node, mirror, arg.tok);
         }
 
-        // Effect ops with a path static are plane writers — remember for the
-        // cycle check (program level only; templates ban paths already).
+        // Effect ops register their write targets — path statics directly,
+        // the membership pair as its composed member key — for the cycle
+        // check (program level only; a def's nodes register at instantiate).
         if (def.class.writes() and target.template == null) {
-            for (statics) |sv| switch (sv) {
-                .path => |wp| try self.prog.writes.append(self.a(), .{ .path = wp, .node = node_id }),
-                else => {},
-            };
+            self.prog.registerWrites(statics, node_id) catch return error.OutOfMemory;
         }
 
         return .{ .node = node_id, .outputs = try self.outsOf(target, node_id) };
@@ -1315,6 +1364,17 @@ const Parser = struct {
     fn bindArg(self: *Parser, arg: Arg, port: registry.Port, op_name: []const u8) ParseError!Arg {
         var out = arg;
         if (arg.kind == .word) {
+            // A sigil-led word reaching a PORT is always a mistake with a
+            // specific correction — never a string to coerce. For `#`, the
+            // common case is a second tag on a membership sink (one tag per
+            // call, fork B); for `@`, a subject somewhere only tag/untag
+            // could take one.
+            if (arg.text.len > 1 and arg.text[0] == '#') {
+                return self.fail(arg.tok, "'{s}': a '#'-condition binds only a tag static, ONE per call — a second tag is a second statement; a read is plane.tags.{s}.count (or .joined / .left)", .{ arg.text, arg.text[1..] });
+            }
+            if (arg.text.len > 1 and arg.text[0] == '@') {
+                return self.fail(arg.tok, "'{s}' is an entity subject — only tag/untag take one; a field read is '{s}.pos' (folded at mount)", .{ arg.text, arg.text });
+            }
             if (port.ty != types.Tag.string) return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             var pk = struple.Packer.init(self.a());
             pk.appendString(arg.text) catch return error.OutOfMemory;
@@ -1723,6 +1783,13 @@ const Parser = struct {
                 .outputs = outputs,
                 .statics = statics,
             });
+            // A def body may hold a membership sink (templates ban `path`
+            // statics, but `@subject`/`#tag` pairs are legal there) — its
+            // composed member write must land in the write list HERE, or an
+            // instantiated `tag` slips past the cycle check unseen.
+            if (target.template == null and self.reg.get(tn.op).class.writes()) {
+                self.prog.registerWrites(statics, new_id) catch return error.OutOfMemory;
+            }
         }
 
         const outs = try self.a().alloc(Source, tmpl.outputs.len);

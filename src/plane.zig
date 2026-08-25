@@ -37,6 +37,15 @@ pub const Plane = struct {
     /// read surface. Null = the host has no field store; a mounted `cast`
     /// then fails loud at the node instead of writing into nowhere.
     castFn: ?*const fn (ctx: *anyopaque, c: Cast) PlaneError!void = null,
+    /// Membership writes (`tag`/`untag`, ironwood R6 T3). Not a `writeFn`
+    /// kind on purpose, for the cast's reason turned around: the host needs
+    /// the SUBJECT and the TAG as names, not a pre-composed path — the
+    /// subject was bound to an entity id at mount, and the host must refuse
+    /// a write whose binding has gone stale (the bound id died or the name
+    /// was re-registered) ON THE NODE, budget-counted, which a flush-time
+    /// path write cannot do. Null = the host keeps no tag row; a mounted
+    /// `tag` then fails loud at the node.
+    tagFn: ?*const fn (ctx: *anyopaque, t: TagWrite) PlaneError!void = null,
 
     pub fn subscribe(self: Plane, path: []const u8, sub: SubId) PlaneError!void {
         return self.subscribeFn(self.ctx, path, sub);
@@ -54,6 +63,21 @@ pub const Plane = struct {
         const f = self.castFn orelse return error.Denied;
         return f(self.ctx, c);
     }
+    pub fn tag(self: Plane, t: TagWrite) PlaneError!void {
+        const f = self.tagFn orelse return error.Denied;
+        return f(self.ctx, t);
+    }
+};
+
+/// One membership write crossing the plane boundary (ironwood R6 T3).
+/// Sigils ride whole on both names — they are the names' first characters
+/// on every surface, never surface syntax to be stripped. The host owns
+/// idempotence (twice is once), the joined/left mailboxes, and the count;
+/// rill only says who, which tag, and which direction.
+pub const TagWrite = struct {
+    subject: []const u8, // `@`-sigil entity name (`@tom`)
+    tag: []const u8, // `#`-sigil condition name (`#garrison`)
+    adding: bool, // true = tag (join), false = untag (leave)
 };
 
 /// One field deposit crossing the plane boundary (rill-casts.md §2/§4.1).
@@ -129,9 +153,13 @@ pub const MockPlane = struct {
     /// log. Summing kernels is the engine's job (beat 2); tests here assert
     /// what was deposited, which is everything rill core promises.
     casts: std.ArrayListUnmanaged(CastRec) = .empty,
+    /// Membership writes, in dispatch order. The mock records direction and
+    /// names; idempotence, mailboxes and counts are the host's physics.
+    tag_writes: std.ArrayListUnmanaged(TagRec) = .empty,
 
     pub const Write = struct { path: []u8, value: []u8, kind: DeltaKind = .value };
     pub const CastRec = struct { channel: []u8, amplitude: f64, pos: []u8, radius: f64, decay: ?types.Duration };
+    pub const TagRec = struct { subject: []u8, tag: []u8, adding: bool };
 
     pub fn init(gpa: std.mem.Allocator) MockPlane {
         return .{ .gpa = gpa };
@@ -156,6 +184,11 @@ pub const MockPlane = struct {
             self.gpa.free(c.pos);
         }
         self.casts.deinit(self.gpa);
+        for (self.tag_writes.items) |t| {
+            self.gpa.free(t.subject);
+            self.gpa.free(t.tag);
+        }
+        self.tag_writes.deinit(self.gpa);
     }
 
     /// Seed or update a stored value (does not generate a delta — tests feed
@@ -186,6 +219,7 @@ pub const MockPlane = struct {
             .readFn = readThunk,
             .writeFn = writeThunk,
             .castFn = castThunk,
+            .tagFn = tagThunk,
         };
     }
 
@@ -240,6 +274,15 @@ pub const MockPlane = struct {
             .radius = c.radius,
             .decay = c.decay,
         });
+    }
+
+    fn tagThunk(ctx: *anyopaque, t: TagWrite) PlaneError!void {
+        const self: *MockPlane = @ptrCast(@alignCast(ctx));
+        const subject = try self.gpa.dupe(u8, t.subject);
+        errdefer self.gpa.free(subject);
+        const tag_name = try self.gpa.dupe(u8, t.tag);
+        errdefer self.gpa.free(tag_name);
+        try self.tag_writes.append(self.gpa, .{ .subject = subject, .tag = tag_name, .adding = t.adding });
     }
 
     fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void {

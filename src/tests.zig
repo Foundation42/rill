@@ -2022,6 +2022,8 @@ test "every core op declares its class deliberately" {
         .{ .name = "notify", .class = .effect },
         .{ .name = "inc", .class = .effect },
         .{ .name = "cast", .class = .effect }, // writes the world — through the field store, not a path
+        .{ .name = "tag", .class = .effect }, // membership write — through the tag row, member key composed
+        .{ .name = "untag", .class = .effect }, // membership write, leave direction
         .{ .name = "const", .class = .pure },
         .{ .name = "tap", .class = .reads }, // the one that gave the audit away
     };
@@ -2681,4 +2683,155 @@ test "paths: integer segments are legitimate — id-keyed rows parse" {
     var prog = try parseOk(testing.allocator, &reg, "plane.ents.1.pos | set plane.debug.tom");
     defer prog.deinit();
     try testing.expectEqualStrings("plane.ents.1.pos", prog.subs.items[0].path);
+}
+
+// ---------------------------------------------------------------------------
+// tag / untag — the membership sinks (ironwood R6 T3)
+// ---------------------------------------------------------------------------
+
+test "tag: the stamped grammar parses, and the member write enters the write list" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.sighting | rose_above 0 | tag @tom #garrison");
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "tag1").?);
+    try testing.expectEqualStrings("@tom", n.statics[0].subject);
+    try testing.expectEqualStrings("#garrison", n.statics[1].condition);
+    // The composed member key wears the `@` — the cycle pin's spelling.
+    var found = false;
+    for (prog.writes.items) |w| {
+        if (std.mem.eql(u8, w.path, "plane.tags.garrison.@tom")) found = true;
+    }
+    try testing.expect(found);
+}
+
+test "tag: piped, the rousing drives — and each occurrence is its own write" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.horn | tag @tom #garrison", .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), fx.mock.tag_writes.items.len); // no horn yet
+    var pk = struple.Packer.init(testing.allocator);
+    defer pk.deinit();
+    try pk.appendBool(true);
+    try fx.rt.feed(.{ .path = "plane.horn", .value = pk.bytes(), .kind = .occurrence });
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 1), fx.mock.tag_writes.items.len);
+    const t0 = fx.mock.tag_writes.items[0];
+    try testing.expectEqualStrings("@tom", t0.subject);
+    try testing.expectEqualStrings("#garrison", t0.tag);
+    try testing.expect(t0.adding);
+    // Idempotence lives HOST-side: rill says each write; twice-is-once is
+    // the row's physics. Two rousings are two dispatches.
+    try fx.rt.feed(.{ .path = "plane.horn", .value = pk.bytes(), .kind = .occurrence });
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 2), fx.mock.tag_writes.items.len);
+}
+
+test "untag: same shape, leave direction" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.stood_down | untag @tom #garrison", .{});
+    defer fx.deinit();
+    var pk = struple.Packer.init(testing.allocator);
+    defer pk.deinit();
+    try pk.appendBool(true);
+    try fx.rt.feed(.{ .path = "plane.stood_down", .value = pk.bytes(), .kind = .occurrence });
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 1), fx.mock.tag_writes.items.len);
+    try testing.expect(!fx.mock.tag_writes.items[0].adding);
+}
+
+test "tag: unpiped, it fires ONCE at tick 0 — the console one-shot's shape" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "tag @wall #garrison", .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 1), fx.mock.tag_writes.items.len);
+    try testing.expect(fx.mock.tag_writes.items[0].adding);
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 1), fx.mock.tag_writes.items.len);
+}
+
+test "tag: a set-subscription on the tag is a cycle; the service leaves are siblings" {
+    // The cycle pin (ironwood R6, pre-T1): member keys wear `@`, service
+    // leaves are bare words — disjoint by construction. So subscribing the
+    // tag row you write is refused through the ordinary prefix rule, and
+    // subscribing `joined`/`count` is not special-cased into legality: it
+    // simply never overlaps.
+    try expectParseError(
+        \\plane.tags.garrison | set plane.hud.n
+        \\plane.x | tag @tom #garrison
+    , "cycle");
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.tags.garrison.joined | set plane.hud.last_join
+        \\plane.tags.garrison.count | set plane.hud.n
+        \\plane.x | tag @tom #garrison
+    );
+    defer prog.deinit();
+}
+
+test "tag: what refuses to parse, refuses loudly" {
+    // One tag per call (fork B): a second `#` has nowhere honest to bind.
+    try expectParseError("plane.x | tag @tom #a #b", "ONE per call");
+    // Each half wears its sigil.
+    try expectParseError("plane.x | tag tom #garrison", "'@'-sigil");
+    try expectParseError("plane.x | tag @tom garrison", "'#'-sigil");
+    try expectParseError("plane.x | tag @tom", "needs a condition argument");
+    // A bare condition is not an expression — the read spelling is named.
+    try expectParseError("#garrison | set plane.x", "plane.tags.garrison.count");
+    // The sigil guards hold for `#` as they do for `$` and `@`.
+    try expectParseError("plane.x | mul 2 as #x", "cannot wear");
+    try expectParseError("use plane.a as #s", "cannot wear");
+    try expectParseError("def #d(x) = x | mul 2", "cannot wear");
+}
+
+test "tag: a def body's membership write still reaches the cycle check" {
+    // Templates ban `path` statics, but a subject/condition pair is legal in
+    // a def — its composed member write must register at INSTANTIATE, or the
+    // def is a hole in §4.4. (The sink rides an `also` branch: a def must
+    // produce an output, so it cannot END in a sink.) Mutation that bites:
+    // drop registerWrites from instantiate and this parses.
+    try expectParseError(
+        \\def enlist(x) = x | also { tag @tom #garrison }
+        \\plane.tags.garrison | enlist | set plane.y
+    , "cycle");
+}
+
+test "tag: dump/load round-trips the pair, and the restored write list agrees" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "plane.horn | tag @tom #garrison", .{});
+    defer fx.deinit();
+    const bytes = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(bytes);
+    var reg2 = try hostRegistry(testing.allocator);
+    defer reg2.deinit();
+    var prog2 = try rill.loadProgram(testing.allocator, &reg2, bytes);
+    defer prog2.deinit();
+    const n = prog2.node(nodeIdOf(&prog2, "tag1").?);
+    try testing.expectEqualStrings("@tom", n.statics[0].subject);
+    try testing.expectEqualStrings("#garrison", n.statics[1].condition);
+    var found = false;
+    for (prog2.writes.items) |w| {
+        if (std.mem.eql(u8, w.path, "plane.tags.garrison.@tom")) found = true;
+    }
+    try testing.expect(found);
+}
+
+test "tag: a host with no tag row fails the node, counted — never a silent drop" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "tag @tom #garrison");
+    defer prog.deinit();
+    var pl = mock.asPlane();
+    pl.tagFn = null;
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, pl, .{});
+    defer rt.deinit();
+    try testing.expectEqual(@as(usize, 0), mock.tag_writes.items.len);
+    try testing.expectEqual(@as(u64, 1), rt.error_count[nodeIdOf(&prog, "tag1").?]);
 }
