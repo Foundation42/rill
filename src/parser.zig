@@ -1364,18 +1364,22 @@ const Parser = struct {
     fn bindArg(self: *Parser, arg: Arg, port: registry.Port, op_name: []const u8) ParseError!Arg {
         var out = arg;
         if (arg.kind == .word) {
-            // A sigil-led word reaching a PORT is always a mistake with a
-            // specific correction — never a string to coerce. For `#`, the
-            // common case is a second tag on a membership sink (one tag per
-            // call, fork B); for `@`, a subject somewhere only tag/untag
+            // A sigil-led word reaching a non-string port is a mistake with
+            // a specific correction, not an "unknown name". (A STRING port
+            // still coerces it like any word — `entity bind @wall prim wall`
+            // is the console grammar, and `@wall` there is text.) For `#`,
+            // the common case is a second tag on a membership sink (one tag
+            // per call, fork B); for `@`, a subject somewhere only tag/untag
             // could take one.
-            if (arg.text.len > 1 and arg.text[0] == '#') {
-                return self.fail(arg.tok, "'{s}': a '#'-condition binds only a tag static, ONE per call — a second tag is a second statement; a read is plane.tags.{s}.count (or .joined / .left)", .{ arg.text, arg.text[1..] });
+            if (port.ty != types.Tag.string) {
+                if (arg.text.len > 1 and arg.text[0] == '#') {
+                    return self.fail(arg.tok, "'{s}': a '#'-condition binds only a tag static, ONE per call — a second tag is a second statement; a read is plane.tags.{s}.count (or .joined / .left)", .{ arg.text, arg.text[1..] });
+                }
+                if (arg.text.len > 1 and arg.text[0] == '@') {
+                    return self.fail(arg.tok, "'{s}' is an entity subject — only tag/untag take one; a field read is '{s}.pos' (folded at mount)", .{ arg.text, arg.text });
+                }
+                return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             }
-            if (arg.text.len > 1 and arg.text[0] == '@') {
-                return self.fail(arg.tok, "'{s}' is an entity subject — only tag/untag take one; a field read is '{s}.pos' (folded at mount)", .{ arg.text, arg.text });
-            }
-            if (port.ty != types.Tag.string) return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             var pk = struple.Packer.init(self.a());
             pk.appendString(arg.text) catch return error.OutOfMemory;
             const bytes = pk.toOwnedSlice() catch return error.OutOfMemory;
