@@ -554,6 +554,27 @@ rill granted `tags/squads/*` is refused at mount when it writes
   and durable modes is substr work, not a drive-by. Recorded as the fill:
   when radix grows ordered iteration, the seam swaps and no caller moves.
   One store also keeps one delta/replay story meanwhile.
+- **T2 pins (Chris, 2026-08-25 — T1 stamped):** ① Enumeration order is
+  REPLAY-STABLE everywhere the seam enumerates (memcmp on member keys) — it
+  feeds the despawn `left` sequence, and hash order would be a replay leak.
+  ② `entities/despawned` carries id, kind, and LAST KNOWN POSITION (the
+  supervisor that casts `$dread` at where Tom died needs the occurrence to
+  say where) plus reason and frame — the `rills/unmounted` shape.
+  ③ **Name binding is MOUNT-TIME, ruled:** `@tom` binds to an id at mount
+  (the `use` precedent; rebind by remount), the ack says which id, and a
+  re-registered `@tom` does not reattach to a running program. CC concurs —
+  live resolution would be ambient mutable naming and a replay leak — with
+  the consequences stated before building: entity field mirrors are
+  **id-keyed** (`ents/<id>/…`), so a re-registered name cannot reattach a
+  running program's subscriptions even by path; the `@`-fold happens at the
+  LINE level pre-parse (the canonicalLine/use precedent — the log carries
+  the original text, so replay re-resolves by log order to the same ids);
+  an unregistered `@name` refuses the mount, node-and-name in the ack, the
+  spine-check pattern. Tag member keys stay NAME-spelled (R6's own
+  spelling), safe because despawn cleans tags atomically before a name can
+  be re-registered; T3's `tag` sink will refuse at eval when its
+  mount-bound id has gone stale — a rebound name ends the old program's
+  authority over it.
 - **The wire lesson's structural home (Chris):** a gate that walks the verb
   registry and round-trips one sample per verb through the ACTUAL wire
   parser, so no verb can be tested by direct enqueue alone. Third time
