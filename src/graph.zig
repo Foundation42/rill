@@ -98,6 +98,14 @@ pub const Program = struct {
     writes: std.ArrayListUnmanaged(WriteTarget) = .empty,
     /// Non-fatal parse diagnostics, in source order. Arena-owned like the rest.
     warnings: std.ArrayListUnmanaged(Warning) = .empty,
+    /// The LAST top-level statement's value, if it has one — what a one-shot
+    /// echoes (rillbook §2). Broader than `resultSlot` on purpose: a bare
+    /// `plane.x` line has no node, a bare `0.1` has no node AND no
+    /// subscription, yet "what does this print" still has an answer — the
+    /// path's current value, the literal itself. A statement ending in a
+    /// sink sets this null (effects echo nothing). Not serialized: dumps are
+    /// for mounted programs, and the echo is the one-shot's concern.
+    result: ?Source = null,
     /// Downstream adjacency, built by `finalize`: for each slot, the input
     /// slots its value propagates to (non-empty only for output slots).
     downstream: []const []const SlotId = &.{},

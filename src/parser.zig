@@ -698,6 +698,13 @@ const Parser = struct {
                 else => {},
             }
         }
+        // The program's RESULT: the last top-level statement's value, whatever
+        // its shape — a wire, a bare path, a bare literal (`0.1` echoes 0.1,
+        // rillbook's third drive). A sink statement has no outputs and sets
+        // null: effects echo nothing.
+        if (target.template == null) {
+            self.prog.result = if (current.outputs.len > 0) current.outputs[0] else null;
+        }
 
         const end = self.peek();
         if (end.kind != .newline and end.kind != .eof and
