@@ -545,6 +545,15 @@ rill granted `tags/squads/*` is refused at mount when it writes
   order-independent set formula mattered for concurrent writers; our batch
   is one deterministic order. If concurrent tag writers ever exist, the
   formula is recorded here waiting.
+- **Store choice (CC judged, Chris delegated, 2026-08-25):** v1 keeps
+  member keys on the dynamic store behind a Plane API seam (`tagApply`/
+  `tagHas`/`tagMembers`/`tagCount`), enumeration collected-and-sorted at
+  read. The "happy accident" paragraph above wants radix — and substr's
+  radix module has no public ordered/prefix traversal yet, which is the one
+  thing the switch would buy; exposing ART traversal across its concurrent
+  and durable modes is substr work, not a drive-by. Recorded as the fill:
+  when radix grows ordered iteration, the seam swaps and no caller moves.
+  One store also keeps one delta/replay story meanwhile.
 - **The wire lesson's structural home (Chris):** a gate that walks the verb
   registry and round-trips one sample per verb through the ACTUAL wire
   parser, so no verb can be tested by direct enqueue alone. Third time
