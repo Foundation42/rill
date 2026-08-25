@@ -1364,6 +1364,18 @@ const Parser = struct {
                 statics[i] = shape_static.?;
                 continue;
             }
+            // A bare-word flag: present iff the word itself was written.
+            if (sd.flag) {
+                statics[i] = emptyStatic(sd.kind);
+                for (args.items, 0..) |ag, j| {
+                    if (consumed[j] or ag.kw.len > 0) continue;
+                    if (ag.kind != .word or !std.mem.eql(u8, ag.text, sd.name)) continue;
+                    statics[i] = .{ .word = try self.a().dupe(u8, sd.name) };
+                    consumed[j] = true;
+                    break;
+                }
+                continue;
+            }
             var picked: ?Arg = null;
             if (sd.kw) {
                 for (args.items, 0..) |ag, j| {
@@ -1449,6 +1461,9 @@ const Parser = struct {
         }
         for (stream_args) |arg| {
             if (arg.kw.len == 0) continue;
+            // A keyword-introduced BODY (`sort by (…)`) binds to no port —
+            // the section loop below claims it.
+            if (arg.kind == .section and def.body > 0) continue;
             const pi = portIndex(ports, arg.kw) orelse return self.fail(arg.tok, "'{s}' has no port '{s}'", .{ op_name, arg.kw });
             if (bound[pi] != null) return self.fail(arg.tok, "port '{s}' of '{s}' bound twice", .{ arg.kw, op_name });
             bound[pi] = try self.bindArg(arg, ports[pi], op_name);
@@ -1468,6 +1483,9 @@ const Parser = struct {
         var body_node: ?NodeId = null;
         for (stream_args) |arg| {
             if (arg.kind != .section) continue;
+            if (def.body > 0 and def.body_kw.len > 0 and !std.mem.eql(u8, arg.kw, def.body_kw)) {
+                return self.fail(arg.tok, "'{s}' takes its section after '{s}' — write '{s} {s} (…)'", .{ op_name, def.body_kw, op_name, def.body_kw });
+            }
             const want: usize = if (def.body > 0) def.body else 1;
             const open = self.openPorts(target, arg.section_node);
             if (open != want) {
@@ -1545,7 +1563,7 @@ const Parser = struct {
             sources[i] = arg.source;
         }
 
-        if (def.body > 0 and body_node == null) {
+        if (def.body > 0 and def.body_kw.len == 0 and body_node == null) {
             return self.fail(op_tok, "'{s}' needs a section body with {d} open port{s} — '{s} (…)'", .{
                 op_name, def.body, if (def.body == 1) "" else "s", op_name,
             });
@@ -1667,6 +1685,7 @@ const Parser = struct {
     }
 
     fn opHasKeywords(def: *const registry.OpDef) bool {
+        if (def.body_kw.len > 0) return true;
         for (def.statics) |sd| {
             if (sd.kw) return true;
         }
@@ -1678,6 +1697,7 @@ const Parser = struct {
 
     /// The keyword name if `word` introduces a kw-declared static or port.
     fn keywordOf(def: *const registry.OpDef, word: []const u8) ?[]const u8 {
+        if (def.body_kw.len > 0 and std.mem.eql(u8, def.body_kw, word)) return def.body_kw;
         for (def.statics) |sd| {
             if (sd.kw and std.mem.eql(u8, sd.name, word)) return sd.name;
         }

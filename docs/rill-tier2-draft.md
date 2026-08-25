@@ -583,16 +583,16 @@ besides.
 | let the grade drift slowly over a minute | can't | 1 | `noise 20s`, `range` (beat 4) |
 | pick a random idle animation per trigger | can't | 1 | `rand`, `floor` (beat 4) |
 | fly the camera along the intro path over 8s, once | host verb only | 1 | `once`, `along` (`ramp` landed) |
-| slide a light along its rail as the door opens | can't | 1 | `along` (beat 3) |
+| slide a light along its rail as the door opens | ~~can't~~ **1 ✓** | 1 | ~~`along`~~ **landed, beat 3b** |
 | ease the exposure in with a custom curve | can't | 1 | `shape bezier` (`shape`'s five named curves landed; `bezier` is the curves beat) |
 | reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` (own beat) |
-| move a light through three points typed into a cell | ~~host verb only~~ **1 ✓ to STEP, not to travel** | 1 | ~~array literal~~ **landed, beat 2a**; `along` (beat 3) |
+| move a light through three points typed into a cell | ~~host verb only~~ **1 ✓** | 1 | ~~array literal, `along`~~ **landed, beats 2a + 3b** |
 | pick an exposure by time-of-day band | ~~`select` chain~~ **1 ✓** | 1 | ~~array literal, `choose`~~ **landed, beat 2a** |
 | any of these contacts armed? | can't | 1 | ~~`map`, `reduce`~~ **landed, beat 3a** — `map (.armed) \| reduce (or)` |
 | the loudest reading in the last 5s | `stats \| .max` (only because `stats` happens to carry it) | 1 | ~~`reduce`~~ **landed, beat 3a** — `window 5s \| reduce (max)` |
 | just the contacts that are armed | can't | 1 | ~~`keep`~~ **landed, beat 3a** — `keep (.armed)` |
-| nearest hostile from the contact list | invented sensor field | 1 | `sort by`, `first` (beat 3) |
-| top three threats | can't | 1 | `sort by`, `take` (beat 3) |
+| nearest hostile from the contact list | ~~invented sensor field~~ **2 ✓** | 1 | ~~`sort by`, `first`~~ **landed, beat 3b** — the second line is a *field read*, see the note below |
+| top three threats | ~~can't~~ **1 ✓** | 1 | ~~`sort by`, `take`~~ **landed, beat 3b** |
 | refuse a malformed contact list at the boundary | ~~silent~~ **1 ✓** | 1 | ~~`match`~~ **landed, beat 2b** |
 | pin the shape a program reads from the plane | ~~silent~~ **1 ✓** | 1 | ~~`expect`~~ **landed, beat 2b** |
 
@@ -604,6 +604,20 @@ missing support and the list says where.
 **Beat 1a's score: eight rows cleared, one row added and cleared, one
 row re-scored honestly downward.** The rows that moved from "can't" to
 one line are the register family's whole argument.
+
+**Beat 3b's score: three rows cleared, one cleared at TWO lines, and one
+finished that beat 2a half-cleared.** The two-line row is worth reading:
+
+> `[…] | sort by (.distance) | first as near`
+> `near.distance | set plane.ui.nearest`
+
+The sort and the pick are one line. The second line exists because **a
+field read is not a pipe stage**: `.field` reads from a *name* (`near.id`)
+or from a path, and there is no `| .id`. The `project` operator is
+registered and `| project id` parses, but it is not what the manuals
+teach and not what a reader writes. Two ways to spell one thing, one of
+them undocumented, is the shape of an accident rather than a design —
+**stated as a fork below, not decided here.**
 
 **Beat 3a's score: three rows ADDED and cleared, and the addition is the
 point.** §7 said of `map` and `reduce`: *"both have excellent customers
@@ -854,9 +868,38 @@ the tags beat.
    refused by name rather than mis-parsed. Every §2.11 customer is a
    single-operator body.
 
-8. **Beat 3b — order and shape.** `sort`/`first`/`take`, `transpose`,
-   `shuffle`, `along` with inline knots. `without` stays cut (§4 has no
-   row).
+8. **Beat 3b — order and shape. ✅ BUILT 2026-08-25.** `sort` (stable,
+   `by` body, `desc`), `first`, `take`, `transpose`, `shuffle`, `along`
+   with inline knots. `without` stays cut — §4 still has no row for it.
+
+   **Two small mechanisms, each reusing a ratified rule rather than
+   bending it.** `sort`'s body rides the `by` keyword (`OpDef.body_kw`),
+   which is what makes an *optional* body legal: optionals are
+   keyword-only, and `by` is the keyword. `desc` is a **bare-word flag**
+   (`StaticDecl.flag`) — the same shape `exact` took inside the shape
+   literal, generalised once. The optional-static rule exists because
+   `cast $alarm 30` cannot say whether 30 is the payload or the radius; a
+   flag carries no value, so there is nothing for a following argument to
+   shift into and the ambiguity cannot arise.
+
+   **`sort` orders by VALUE, using the store's own total order.** Chris's
+   suggestion — use the radix store as the sorting medium — is banked by
+   struple directly: its encoding is `memcmp`-orderable, which is exactly
+   how the store sorts. One caveat decided the implementation: in raw
+   `memcmp` order the *type byte dominates*, so every integer files before
+   every float. rill has one `number` type and no way to see the
+   difference, so `semanticOrder` (same cross-type sequence, numbers
+   compared by value) is what a sort must use. Gated: `[2.5, 2, 1.5]`
+   sorts to `[1.5, 2, 2.5]`, and a memcmp sort puts `2` first.
+
+   **Stability is this code's, not the algorithm's.** `keyedLess` carries
+   the original index as its tie-break, so ties keep input order whichever
+   sort runs underneath. The first stability gate used four elements and a
+   mutation removing the tie-break SURVIVED it — `std.sort.pdq` falls back
+   to insertion sort below a size threshold, and insertion sort is stable
+   by accident. The gate now uses forty elements and two keys, which is
+   past the fallback. **A gate that passes because of the library
+   underneath is watching nothing** — the ledger's newest line.
 9. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
    `once`, `toggle`, `tally`, `above`, `distance`/`within`/`toward`.
 10. **Deferred to their own beats:** tracks as a tenant (with D),
@@ -910,6 +953,16 @@ host, or the manual rather than the operator table:
   for free; everyone else gets a second explanation.
 - **Tempo on the plane.** `beat` needs the host to publish tempo as
   data. That's the music stack's job and it's small.
+- **FORK — is `.field` a pipe stage?** (raised 2026-08-25, beat 3b).
+  Today a field read names a standpoint: `near.id` off an `as` name, or
+  `plane.a.b`. After a pipe there is no `| .id`, so every row that ends in
+  a field read costs a second line — which is what kept "nearest hostile"
+  at two. The `project` operator *is* registered and `| project id`
+  parses, so there are already two spellings and only one is taught.
+  Options: teach `project`, add `| .field` as sugar for it, or leave it.
+  CC's lean is `| .field`, because `map (.distance)` already made the
+  bare-dot section a spelling readers meet, and one spelling taught twice
+  beats two spellings taught once. **Not decided.**
 - **A schema query on the `Plane`** (recorded 2026-08-25, beat 2b). rill
   has no way to ask what shape a path declares — `Plane` is subscribe /
   read / write / cast / tag — which is why `expect` asserts against the

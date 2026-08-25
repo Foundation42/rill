@@ -475,6 +475,20 @@ ledger always permits — naming the operator and both counts.
 second guard in `evalNode` was written, survived its mutation because nothing could reach it,
 and was deleted.
 
+**Two spellings that reuse ratified rules rather than bending them** (beat 3b). `OpDef.body_kw`
+makes a body keyword-introduced (`sort by (…)`) and therefore *optional* — optionals are
+keyword-only, and `by` is the keyword. `StaticDecl.flag` is a bare-word flag (`sort … desc`):
+it is written as its own name and carries no value, so the ambiguity the optional-static rule
+exists to prevent (`cast $alarm 30` — payload or radius?) cannot arise. A flag must be
+optional; the registry refuses a mandatory one.
+
+**Ordering is by VALUE, not by encoding** (beat 3b). struple's raw bytes are `memcmp`-orderable
+and that is the order the radix store keys on — but there the *type byte dominates*, so every
+integer files before every float. rill has one `number` type and no way to see the difference,
+so `sort` uses `semanticOrder`: the same cross-type sequence (nil < bool < number < string <
+array < map) with numbers compared by exact mathematical value. Stability comes from carrying
+the original index as the comparator's tie-break, so it holds whichever sort algorithm runs.
+
 **A body is one operator** in v0.3. A `def` as a body, and a chained `(.pos.x)`, need the
 caller to drive a *range* of nodes, which needs re-entrant evaluation; both are refused by
 name rather than mis-parsed.
@@ -893,6 +907,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | record | record construction `{…}`, projection `.field`, `merge` |
 | array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
 | over arrays | `map <body>`, `keep <pred>`, `reduce <body> [init v]` — each drives a SECTION BODY per element; §3.15, tier 2 beat 3a |
+| order & shape | `sort [by <body>] [desc]` (stable), `first`, `take <n> [from <i>]`, `transpose`, `shuffle [seed <s>]`, `along <knots>` — tier 2 beat 3b |
 | contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |

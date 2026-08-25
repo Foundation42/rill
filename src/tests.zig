@@ -2090,6 +2090,12 @@ test "every core op declares its class deliberately" {
         .{ .name = "map", .class = .reads }, // drives a body that may hold bound ports
         .{ .name = "keep", .class = .reads },
         .{ .name = "reduce", .class = .reads },
+        .{ .name = "sort", .class = .reads }, // optional key body, same reason
+        .{ .name = "first", .class = .pure },
+        .{ .name = "take", .class = .pure },
+        .{ .name = "transpose", .class = .pure },
+        .{ .name = "shuffle", .class = .pure }, // seeded: same in, same out
+        .{ .name = "along", .class = .pure },
         .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
         .{ .name = "merge", .class = .pure },
@@ -2753,7 +2759,9 @@ test "the manuals parse: every printed example compiles" {
     // type.
     // 35 → 37 (beat 3a): the human manual gained §6d (over arrays) — the body
     // trio and the keep-vs-where crossing pair.
-    try testing.expectEqual(@as(usize, 37), human);
+    // 37 → 38 (beat 3b): the human manual's §6d gained the order-and-shape
+    // quartet.
+    try testing.expectEqual(@as(usize, 38), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -4052,8 +4060,10 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // shapes page.
     // 30 → 33, 70 → 75 (beat 3a): the three rows §2.11 argued and §4 never
     // listed — written down first, then landed — plus the bodies page.
-    try testing.expectEqual(@as(usize, 33), rill_cells);
-    try testing.expectEqual(@as(usize, 75), total);
+    // 33 → 36, 75 → 81 (beat 3b): the nearest-hostile after-cell (two lines,
+    // and the note says why), top-three, and the three-points row finished.
+    try testing.expectEqual(@as(usize, 36), rill_cells);
+    try testing.expectEqual(@as(usize, 81), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -5221,4 +5231,324 @@ test "beat 3a: an unbound OPTIONAL port is absent, not open" {
     // One open port — the input — and not three.
     try testing.expectEqual(@as(usize, 1), prog.nodes.items[body_id].body_open.len);
     try testing.expectEqual(map_id, prog.nodes.items[body_id].body_of.?);
+}
+
+// ---------------------------------------------------------------------------
+// Beat 3b — order and shape: `sort`, `first`, `take`, `transpose`, `shuffle`,
+// `along`.
+// ---------------------------------------------------------------------------
+
+test "beat 3b: nearest hostile from the contact list" {
+    // §4's row, which was an invented sensor field. Two lines rather than one
+    // because a field read names its standpoint and `| .id` is not a pipe
+    // stage — the row's target was 1 and this is 2, so it is scored honestly.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{id: 7, distance: 8}, {id: 4, distance: 3}, {id: 9, distance: 5}] | sort by (.distance) | first as near
+        \\near.distance | set plane.ui.nearest
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, "programs.p.project2.out.out").?);
+}
+
+test "beat 3b: `sort` orders by the key body, and `desc` reverses it" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{id: 1, d: 8}, {id: 2, d: 3}, {id: 3, d: 5}] | sort by (.d) | map (.id) | set plane.asc
+        \\[{id: 1, d: 8}, {id: 2, d: 3}, {id: 3, d: 5}] | sort by (.d) desc | map (.id) | set plane.desc
+    , .{});
+    defer fx.deinit();
+
+    const asc = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.map1.out.out").?);
+    defer testing.allocator.free(asc);
+    try testing.expectEqualSlices(f64, &.{ 2, 3, 1 }, asc);
+
+    const desc = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.map2.out.out").?);
+    defer testing.allocator.free(desc);
+    try testing.expectEqualSlices(f64, &.{ 1, 3, 2 }, desc);
+}
+
+test "beat 3b: `sort` is STABLE — enough ties to make an unstable sort show" {
+    // Chris's pin, on the SECOND attempt. The first version of this gate used
+    // four elements and three ties, and a mutation removing the stability
+    // tie-break SURVIVED it: `std.sort.pdq` falls back to insertion sort below
+    // a size threshold, and insertion sort is stable by accident. A gate that
+    // passes because of the algorithm underneath is watching nothing.
+    //
+    // So: 40 elements, two keys, ties everywhere, which is well past the
+    // fallback and forces the partitioning that reorders equal keys. What
+    // makes this pass is the index tie-break in `keyedLess`, and removing it
+    // now bites.
+    const gpa = testing.allocator;
+    var src = std.ArrayListUnmanaged(u8).empty;
+    defer src.deinit(gpa);
+    var buf: [64]u8 = undefined;
+    try src.appendSlice(gpa, "[");
+    for (0..40) |i| {
+        if (i > 0) try src.appendSlice(gpa, ", ");
+        try src.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{{id: {d}, d: {d}}}", .{ i, i % 2 }));
+    }
+    try src.appendSlice(gpa, "] | sort by (.d) | map (.id) | set plane.asc");
+
+    var fx: Fixture = undefined;
+    try mountFixture(gpa, &fx, src.items, .{});
+    defer fx.deinit();
+
+    const got = try arrayNums(gpa, fx.rt.readSlot("programs.p.map1.out.out").?);
+    defer gpa.free(got);
+    try testing.expectEqual(@as(usize, 40), got.len);
+    // Every d=0 first, then every d=1 — and WITHIN each group, input order.
+    for (0..20) |i| try testing.expectEqual(@as(f64, @floatFromInt(i * 2)), got[i]);
+    for (0..20) |i| try testing.expectEqual(@as(f64, @floatFromInt(i * 2 + 1)), got[20 + i]);
+}
+
+test "beat 3b: `desc` reverses the KEYS and not the ties" {
+    // A "sort ascending, then reverse the array" would give 4, 2, 1, 3 here.
+    // Descending is a different comparison, not a post-pass.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{id: 1, d: 5}, {id: 2, d: 5}, {id: 3, d: 1}, {id: 4, d: 5}] | sort by (.d) | map (.id) | set plane.asc
+        \\[{id: 1, d: 5}, {id: 2, d: 5}, {id: 3, d: 1}, {id: 4, d: 5}] | sort by (.d) desc | map (.id) | set plane.desc
+    , .{});
+    defer fx.deinit();
+
+    const asc = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.map1.out.out").?);
+    defer testing.allocator.free(asc);
+    try testing.expectEqualSlices(f64, &.{ 3, 1, 2, 4 }, asc);
+
+    const desc = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.map2.out.out").?);
+    defer testing.allocator.free(desc);
+    try testing.expectEqualSlices(f64, &.{ 1, 2, 4, 3 }, desc);
+}
+
+test "beat 3b: `sort` with no `by` uses the elements as their own keys" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[3, 1, 2] | sort | set plane.out
+    , .{});
+    defer fx.deinit();
+    const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.sort1.out.out").?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualSlices(f64, &.{ 1, 2, 3 }, out);
+}
+
+test "beat 3b: sorting compares numbers by VALUE, not by encoding" {
+    // struple's raw bytes are memcmp-orderable and that is the store's order —
+    // but there the type byte dominates, so every integer would file before
+    // every float. In rill both are `number`, so a memcmp sort would be a
+    // wrong picture nobody is told about. `2` is an int literal and `1.5` and
+    // `2.5` are floats: a memcmp sort puts 2 first.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[2.5, 2, 1.5] | sort | set plane.out
+    , .{});
+    defer fx.deinit();
+    const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.sort1.out.out").?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualSlices(f64, &.{ 1.5, 2, 2.5 }, out);
+}
+
+test "beat 3b: `sort` needs its section after `by`" {
+    try expectParseError("[1, 2] | sort (.d) | set plane.out", "after 'by'");
+}
+
+test "beat 3b: top three threats, one line" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{id: 1, t: 2}, {id: 2, t: 9}, {id: 3, t: 5}, {id: 4, t: 7}] | sort by (.t) desc | take 3 | map (.id) | set plane.ui.threats
+    , .{});
+    defer fx.deinit();
+    const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.map1.out.out").?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualSlices(f64, &.{ 2, 4, 3 }, out);
+}
+
+test "beat 3b: `take` forgives a short array and `nth` does not — the asymmetry" {
+    // Chris's pin, gated as the pair it is. `take 5` promises AT MOST five and
+    // two is a satisfiable answer; `nth 5` promises THE SIXTH and there isn't
+    // one. Same array, same number, opposite outcomes — which is the whole
+    // claim, so both halves run against the same input.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[1, 2] | take 5 | set plane.taken
+        \\[1, 2] | nth 5 | set plane.picked
+    , .{});
+    defer fx.deinit();
+
+    const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.take1.out.out").?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualSlices(f64, &.{ 1, 2 }, out);
+
+    try expectRefusalNames(&.{ "nth", "out of range" });
+    try testing.expect(fx.rt.readSlot("programs.p.nth1.out.out") == null);
+}
+
+test "beat 3b: `take … from` slices, and past the end is empty rather than an error" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[1, 2, 3, 4, 5] | take 2 from 1 | set plane.mid
+        \\[1, 2] | take 3 from 9 | set plane.past
+    , .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+
+    const mid = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.take1.out.out").?);
+    defer testing.allocator.free(mid);
+    try testing.expectEqualSlices(f64, &.{ 2, 3 }, mid);
+
+    const past = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.take2.out.out").?);
+    defer testing.allocator.free(past);
+    try testing.expectEqual(@as(usize, 0), past.len);
+}
+
+test "beat 3b: `first` errors on empty — it promises one value" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[] | first | set plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "first", "empty" });
+}
+
+test "beat 3b: `transpose` is self-inverse, both directions" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{a: [1, 2], b: [3, 4]} | transpose | set plane.aos
+        \\{a: [1, 2], b: [3, 4]} | transpose | transpose | set plane.round
+    , .{});
+    defer fx.deinit();
+
+    // Record of arrays → array of records.
+    const aos = fx.rt.readSlot("programs.p.transpose1.out.out").?;
+    try testing.expectEqual(types.Tag.array, types.typeOfValue(aos));
+    const inner = try innerOf(testing.allocator, aos);
+    defer testing.allocator.free(inner);
+    var r = struple.reader(inner);
+    const row0 = (try r.nextView()).?;
+    const f0 = try recordFields(testing.allocator, row0);
+    defer freeFields(testing.allocator, f0);
+    try testing.expectEqual(@as(usize, 2), f0.len);
+    try testing.expectEqualStrings("a", fieldName(f0[0]));
+    try testing.expectEqual(@as(f64, 1), f0[0].v);
+    try testing.expectEqual(@as(f64, 3), f0[1].v);
+
+    // …and back again, unchanged.
+    const round = fx.rt.readSlot("programs.p.transpose3.out.out").?;
+    try testing.expectEqual(types.Tag.record, types.typeOfValue(round));
+    const rf = try recordFields(testing.allocator, round);
+    defer freeFields(testing.allocator, rf);
+    try testing.expectEqual(@as(usize, 2), rf.len);
+}
+
+test "beat 3b: `transpose` refuses ragged input in BOTH directions, both sides named" {
+    // Chris's pin. Grasshopper picks a matching rule implicitly and it is the
+    // most-complained-about behaviour in the tool.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\{a: [1, 2], b: [3]} | transpose | set plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "transpose", "'a'", "'b'", "2 elements", "1" });
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\[{a: 1, b: 2}, {a: 3}] | transpose | set plane.out
+    , .{});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "transpose", "record{a, b}", "record{a}" });
+}
+
+test "beat 3b: `shuffle` is seeded, defaults to 0, and replays identically" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle | set plane.a
+        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle seed 0 | set plane.b
+        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle seed 7 | set plane.c
+    , .{});
+    defer fx.deinit();
+
+    const a = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.shuffle1.out.out").?);
+    defer testing.allocator.free(a);
+    const b = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.shuffle2.out.out").?);
+    defer testing.allocator.free(b);
+    const c = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.shuffle3.out.out").?);
+    defer testing.allocator.free(c);
+
+    // Seed 0 is the default: saying it and not saying it are the same program.
+    try testing.expectEqualSlices(f64, a, b);
+    // A different seed is a different permutation — otherwise the seed is
+    // decoration.
+    try testing.expect(!std.mem.eql(f64, a, c));
+    // It IS a permutation: same multiset, eight elements, nothing invented.
+    try testing.expectEqual(@as(usize, 8), a.len);
+    var sum: f64 = 0;
+    for (a) |v| sum += v;
+    try testing.expectEqual(@as(f64, 36), sum);
+    // …and it actually moved something.
+    try testing.expect(!std.mem.eql(f64, a, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }));
+}
+
+test "beat 3b: `along` passes through its knots and clamps outside 0..1" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.t | along [0, 10, 20] | set plane.out
+    , .{.{ "plane.t", @as(f64, 0) }});
+    defer fx.deinit();
+
+    const at = struct {
+        fn go(f: *Fixture, t: f64) !f64 {
+            try feedValue(&f.rt, testing.allocator, "plane.t", t);
+            try f.rt.tick(.{});
+            return slotNum(f, "programs.p.along1.out.out").?;
+        }
+    }.go;
+
+    // Catmull-Rom passes through every knot exactly.
+    try testing.expectEqual(@as(f64, 0), try at(&fx, 0));
+    try testing.expectEqual(@as(f64, 10), try at(&fx, 0.5));
+    try testing.expectEqual(@as(f64, 20), try at(&fx, 1));
+    // A path has ends: outside 0..1 clamps rather than extrapolating.
+    try testing.expectEqual(@as(f64, 0), try at(&fx, -3));
+    try testing.expectEqual(@as(f64, 20), try at(&fx, 4));
+}
+
+test "beat 3b: move a light through three points typed into a cell — the row, finished" {
+    // §4's three-points row, whose other half landed in beat 2a. The knots are
+    // records, so the curve runs through each axis.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos
+    , .{.{ "plane.door.openness", @as(f64, 0.5) }});
+    defer fx.deinit();
+
+    const out = fx.rt.readSlot("programs.p.along1.out.out").?;
+    const f = try recordFields(testing.allocator, out);
+    defer freeFields(testing.allocator, f);
+    try testing.expectEqual(@as(usize, 3), f.len);
+    try testing.expectEqualStrings("x", fieldName(f[0]));
+    try testing.expectEqual(@as(f64, 2), f[0].v); // the middle knot, exactly
+    try testing.expectEqual(@as(f64, 3), f[1].v); // y never moves
+    try testing.expectEqual(@as(f64, 1), f[2].v);
+}
+
+test "beat 3b: `along` refuses fewer than two knots, at mount" {
+    // Chris's pin. Mount runs tick 0, so a mounted program hears this at
+    // mount — one knot is not a path.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.t | along [5] | set plane.out
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "along", "1 knot", "at least two" });
+    try testing.expect(fx.rt.readSlot("programs.p.along1.out.out") == null);
+}
+
+test "beat 3b: `along` refuses knots of different shapes, naming the field" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.t | along [{x: 0, y: 0}, {x: 1, z: 1}] | set plane.out
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "along", "same shape" });
 }

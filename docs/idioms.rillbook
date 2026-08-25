@@ -310,6 +310,27 @@
    "source": "## Nearest hostile from the contact list\n\n§4: *invented sensor field → 1*, needing `sort by` and `first`. Beat 3.\nThe contact source publishes an array; today nothing orders one."
   },
   {
+   "name": "nearest-hostile-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — two lines, and the second one is a finding\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first as near\nnear.id | set plane.ui.nearest\n```\n\nThe sort and the pick are one line. The second exists because **a field\nread is not a pipe stage**: `.field` reads from a name or a path, and\nthere is no `| .id`. §4's target for this row was one line, so it is\nscored at two and the reason is written down rather than rounded away.\nThe fork is in §8 of the tier-2 doc."
+  },
+  {
+   "name": "nearest-hostile-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | sort by (.distance) | first as near\nnear.id | set plane.ui.nearest"
+  },
+  {
+   "name": "top-three-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats"
+  },
+  {
    "name": "top-three-ask",
    "mode": "query",
    "markdown": true,
@@ -336,6 +357,20 @@
    "markdown": false,
    "collapsed": false,
    "source": "[{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | choose plane.stage.leg | set plane.lights.key.pos"
+  },
+  {
+   "name": "three-points-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — the row, finished\n\nBeat 2a made the points typeable and stepping between them one line.\n`along` is the travel: a Catmull-Rom curve that passes through every knot,\nclamping outside 0..1 because a path has ends. The knots are records, so\nthe curve runs through each axis."
+  },
+  {
+   "name": "three-points-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
   },
   {
    "name": "time-of-day-ask",
@@ -525,6 +560,13 @@
    "markdown": true,
    "collapsed": false,
    "source": "## Bodies — a section is an operator with ports left open\n\n```rill\nplane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats\nplane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak\n```\n\n`(clamp 0 1)` is `clamp` with its input open. `(add)` leaves two open.\n`(.distance)` is the field read with its input open. There is **no new\nsyntax** and no closure: a body closes over nothing, `{ }` is still a\nfan-out, and `( )` was always a partial application.\n\n**The consumer says how many arguments it supplies** — `map` one, `reduce`\ntwo — so a section with the wrong number of open ports is refused when\nyou write it, naming the operator and both counts. Only the thing about\nto fill the ports knows how many it will fill.\n\n**`reduce` folds left**: accumulator into the first open port, element\ninto the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2 = 5`. No\n`init` means the first element seeds it. Empty with no `init` is an\nerror — zero is right for `add` and wrong for `mul`, and picking one is\npicking a rule.\n\n**Most map is free.** `window 10s | mul 2` *is* map, because math already\nbroadcasts. Reach for `map` when the body needs an argument or is a field\nread.\n\n**`keep` filters elements, `where` gates the stream.** Both apply to an\narray-valued stream and mean different things — which is exactly why one\nword dispatched by input kind would have had to guess."
+  },
+  {
+   "name": "order-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
   }
  ]
 }

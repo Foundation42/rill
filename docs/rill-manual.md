@@ -499,6 +499,40 @@ plane.gpu.traversal_ms | window 10s | keep (> 0)             // the readings abo
 That is why there are two words: one word dispatched by input kind would
 have to guess between two independent questions.
 
+**Order and shape.**
+
+```rill
+plane.sensors.gate.contacts | sort by (.distance) | first as near
+plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats
+plane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals
+plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos
+```
+
+| op | does |
+|---|---|
+| `sort [by <body>] [desc]` | **stable** — ties keep their input order. Without `by`, the elements are their own keys |
+| `first` | the leading element; empty is an error |
+| `take <n> [from <i>]` | at most `n` elements; a short array is **forgiven** |
+| `transpose` | record of arrays ↔ array of records, self-inverse |
+| `shuffle [seed <s>]` | seeded Fisher–Yates; seed defaults to 0, identical on every machine |
+| `along <knots>` | travel a Catmull-Rom curve through the knots as `t` goes 0..1 |
+
+**`take` forgives and `nth` does not**, and the difference is what each
+one promises. `take 5` promises *at most five* — asking for the top three
+of a list of two is sensible, and the answer is those two. `nth 5`
+promises *the sixth element* — if there isn't one, the program asked for
+something that does not exist. A count can be satisfied; a value cannot
+be invented.
+
+**`along` passes through every knot** and clamps outside 0..1, because a
+path has ends. Fewer than two knots is refused: one knot is not a path.
+Knots may be records, and the curve then runs through each field.
+
+**Ragged input is refused, never matched.** `transpose` names both sides
+and both lengths rather than picking longest, shortest, or
+cross-reference — the implicit matching rule is the most-complained-about
+behaviour in every tool that has one.
+
 ---
 
 ## 6e. Contracts — `expect` and `match`

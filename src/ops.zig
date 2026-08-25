@@ -1547,6 +1547,369 @@ fn evalReduce(ctx: *EvalCtx) EvalError!Emit {
 }
 
 // ---------------------------------------------------------------------------
+// Order — `sort`, `first`, `take` (tier 2, beat 3b)
+// ---------------------------------------------------------------------------
+
+/// One element and its sort key, plus where it started. The index is not a
+/// tie-break of last resort — it is what makes the sort STABLE regardless of
+/// which algorithm runs underneath, so stability is a property of this code
+/// and not a property the standard library happens to have today.
+const Keyed = struct { key: []const u8, elem: []const u8, i: usize };
+
+fn keyedLess(desc: bool, a: Keyed, b: Keyed) bool {
+    // `semanticOrder` compares by VALUE across the numeric encodings — an int
+    // 5 and a float 5.0 are equal — where raw `memcmp` would let the type byte
+    // dominate and file every int before every float. That distinction is
+    // invisible in rill, where both are `number`, so a memcmp sort would be a
+    // wrong picture nobody is told about. The cross-type sequence is otherwise
+    // the store's own: nil < bool < number < string < array < map.
+    //
+    // Every key was compared once before the sort (see `evalSort`), so a
+    // decode error here cannot be new; `.eq` then defers to the index and the
+    // order stays total and deterministic.
+    const ord = struple.semanticOrder(std.heap.page_allocator, a.key, b.key) catch std.math.Order.eq;
+    return switch (ord) {
+        .lt => !desc,
+        .gt => desc,
+        .eq => a.i < b.i,
+    };
+}
+
+fn lessAsc(_: void, a: Keyed, b: Keyed) bool {
+    return keyedLess(false, a, b);
+}
+
+fn lessDesc(_: void, a: Keyed, b: Keyed) bool {
+    return keyedLess(true, a, b);
+}
+
+/// `sort [by <body>] [desc]` — stable, ascending by default. Without `by` the
+/// elements are their own keys; with it, the body computes each key once.
+fn evalSort(ctx: *EvalCtx) EvalError!Emit {
+    const desc = ctx.statics[0].word.len > 0;
+    var rows = std.ArrayListUnmanaged(Keyed).empty;
+    var r = struple.reader(try arrayIn(ctx));
+    var i: usize = 0;
+    while (r.nextView() catch return ctx.refuse("sort: '{s}' is a malformed array", .{ctx.portName(0)})) |e| : (i += 1) {
+        var key: []const u8 = e;
+        if (ctx.call_fn != null) {
+            var sub = struple.Packer.init(ctx.arena);
+            if (!try ctx.call(&.{e}, &sub)) {
+                return ctx.refuse("sort: the key body emitted nothing for element [{d}] — every element needs a key", .{i});
+            }
+            key = try ctx.arena.dupe(u8, sub.bytes());
+        }
+        try rows.append(ctx.arena, .{ .key = key, .elem = e, .i = i });
+    }
+    // Surface any decode failure ONCE, here, where it can still be a refusal:
+    // the comparator cannot fail loudly (it returns bool), so it must not be
+    // where a malformed key is first discovered.
+    for (rows.items) |row| {
+        _ = struple.semanticOrder(ctx.arena, row.key, rows.items[0].key) catch
+            return ctx.refuse("sort: element [{d}] has a key that cannot be ordered", .{row.i});
+    }
+    if (desc) {
+        std.sort.pdq(Keyed, rows.items, {}, lessDesc);
+    } else {
+        std.sort.pdq(Keyed, rows.items, {}, lessAsc);
+    }
+    var inner = struple.Packer.init(ctx.arena);
+    for (rows.items) |row| {
+        inner.appendRaw(row.elem) catch return ctx.refuse("sort: element [{d}] is unencodable", .{row.i});
+    }
+    try ctx.out[0].appendArray(inner.bytes());
+    return Emit.first;
+}
+
+/// `first` — the leading element. Errors on empty, like `nth`: it promises ONE
+/// value and there isn't one. (See the asymmetry note on `take`.)
+fn evalFirst(ctx: *EvalCtx) EvalError!Emit {
+    var r = struple.reader(try arrayIn(ctx));
+    const e = (r.nextView() catch return ctx.refuse("first: '{s}' is a malformed array", .{ctx.portName(0)})) orelse
+        return ctx.refuse("first: the array is empty — there is no first element", .{});
+    try splice(ctx, 0, e);
+    return Emit.first;
+}
+
+/// `take <n> [from <i>]` — up to `n` elements, and **a short array is
+/// forgiven**: `[1, 2] | take 5` is `[1, 2]`, not an error.
+///
+/// The asymmetry with `nth` is deliberate and worth saying out loud. `nth 5`
+/// promises *the sixth element* — if there isn't one, the program asked for
+/// something that does not exist and the honest answer is a refusal. `take 5`
+/// promises *at most five* — "the top three threats" is a sensible thing to
+/// ask of a list of two, and the answer is those two. One promises a value,
+/// the other bounds a count; the count is satisfiable and the value is not.
+/// `from` past the end is the same shape: an empty array, not an error.
+fn evalTake(ctx: *EvalCtx) EvalError!Emit {
+    const n = try wholeCount(ctx, 1, "n");
+    const from = if (ctx.in[2] == null) 0 else try wholeCount(ctx, 2, "from");
+    var inner = struple.Packer.init(ctx.arena);
+    var r = struple.reader(try arrayIn(ctx));
+    var i: usize = 0;
+    var taken: usize = 0;
+    while (taken < n) : (i += 1) {
+        const e = (r.nextView() catch return ctx.refuse("take: '{s}' is a malformed array", .{ctx.portName(0)})) orelse break;
+        if (i < from) continue;
+        inner.appendRaw(e) catch return ctx.refuse("take: element [{d}] is unencodable", .{i});
+        taken += 1;
+    }
+    try ctx.out[0].appendArray(inner.bytes());
+    return Emit.first;
+}
+
+/// A whole non-negative count on port `i`. A fractional or negative count is
+/// refused rather than rounded or clamped — the same rule `nth` applies to an
+/// index, because both are counts and rounding one is a guess.
+fn wholeCount(ctx: *EvalCtx, i: usize, what: []const u8) EvalError!usize {
+    const v = try raw(ctx, i);
+    const f = types.asNumber(v) orelse
+        return ctx.refuse("{s}: '{s}' is {s}, not a number", .{ ctx.op.name, what, describeTop(ctx, v) });
+    if (!std.math.isFinite(f) or f != @floor(f) or f < 0) {
+        return ctx.refuse("{s}: '{s}' is {d} — a count is a whole number from 0", .{ ctx.op.name, what, f });
+    }
+    return @intFromFloat(f);
+}
+
+// ---------------------------------------------------------------------------
+// Shape and curve — `transpose`, `shuffle`, `along` (tier 2, beat 3b)
+// ---------------------------------------------------------------------------
+
+/// `transpose` — AoS ↔ SoA, one word because the operation is self-inverse.
+/// The dispatch is honest by the one-axis rule: one question (record or
+/// array?), disjoint kinds.
+///
+/// **Ragged input refuses, in both directions, with both sides named.**
+/// Grasshopper picks a matching rule implicitly — longest, shortest,
+/// cross-reference — and it is the most-complained-about behaviour in the
+/// tool. Never pick a rule.
+fn evalTranspose(ctx: *EvalCtx) EvalError!Emit {
+    const v = try raw(ctx, 0);
+    return switch (types.typeOfValue(v)) {
+        Tag.record => transposeRecord(ctx, v),
+        Tag.array => transposeArray(ctx, v),
+        else => ctx.refuse("transpose: '{s}' is {s} — it takes a record of arrays or an array of records", .{ ctx.portName(0), describeTop(ctx, v) }),
+    };
+}
+
+/// {a: [1, 2], b: [3, 4]} → [{a: 1, b: 3}, {a: 2, b: 4}]
+fn transposeRecord(ctx: *EvalCtx, v: []const u8) EvalError!Emit {
+    var names = std.ArrayListUnmanaged([]const u8).empty; // encoded keys
+    var cols = std.ArrayListUnmanaged([]const u8).empty; // encoded array values
+    var it = struple.MapView.init(try innerOf(ctx, v)).iterator();
+    var n: ?usize = null;
+    var n_of: []const u8 = "";
+    while (it.next() catch return ctx.refuse("transpose: '{s}' is a malformed record", .{ctx.portName(0)})) |e| {
+        const field = types.asString(e.key) orelse "?";
+        if (types.typeOfValue(e.value) != Tag.array) {
+            return ctx.refuse("transpose: field '{s}' is {s}, not an array — a record of arrays needs every field to be one", .{ field, describeTop(ctx, e.value) });
+        }
+        const len = struple.view(try innerOf(ctx, e.value)).count() catch
+            return ctx.refuse("transpose: field '{s}' is a malformed array", .{field});
+        if (n) |have| {
+            if (len != have) {
+                return ctx.refuse("transpose: field '{s}' has {d} element{s} and '{s}' has {d} — a transpose needs them equal", .{ n_of, have, if (have == 1) "" else "s", field, len });
+            }
+        } else {
+            n = len;
+            n_of = field;
+        }
+        try names.append(ctx.arena, e.key);
+        try cols.append(ctx.arena, e.value);
+    }
+    var rows = struple.Packer.init(ctx.arena);
+    var row: usize = 0;
+    while (row < (n orelse 0)) : (row += 1) {
+        var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+        for (names.items, cols.items) |k, col| {
+            const cell = (struple.view(try innerOf(ctx, col)).at(row) catch null) orelse
+                return ctx.refuse("transpose: a column is a malformed array", .{});
+            try entries.append(ctx.arena, .{ k, cell });
+        }
+        var one = struple.Packer.init(ctx.arena);
+        one.appendMap(entries.items) catch return ctx.refuse("transpose: row [{d}] is unencodable", .{row});
+        rows.appendRaw(one.bytes()) catch return ctx.refuse("transpose: row [{d}] is unencodable", .{row});
+    }
+    try ctx.out[0].appendArray(rows.bytes());
+    return Emit.first;
+}
+
+/// [{a: 1, b: 3}, {a: 2, b: 4}] → {a: [1, 2], b: [3, 4]}
+fn transposeArray(ctx: *EvalCtx, v: []const u8) EvalError!Emit {
+    var names = std.ArrayListUnmanaged([]const u8).empty; // encoded keys, from row 0
+    var cols = std.ArrayListUnmanaged(struple.Packer).empty;
+    var r = struple.reader(try innerOf(ctx, v));
+    var row: usize = 0;
+    while (r.nextView() catch return ctx.refuse("transpose: '{s}' is a malformed array", .{ctx.portName(0)})) |e| : (row += 1) {
+        if (types.typeOfValue(e) != Tag.record) {
+            return ctx.refuse("transpose: element [{d}] is {s}, not a record — an array of records needs every element to be one", .{ row, describeTop(ctx, e) });
+        }
+        const m = struple.MapView.init(try innerOf(ctx, e));
+        if (row == 0) {
+            var it = m.iterator();
+            while (it.next() catch return ctx.refuse("transpose: element [0] is a malformed record", .{})) |en| {
+                try names.append(ctx.arena, en.key);
+                try cols.append(ctx.arena, struple.Packer.init(ctx.arena));
+            }
+        }
+        const count = m.count() catch return ctx.refuse("transpose: element [{d}] is a malformed record", .{row});
+        if (count != names.items.len) {
+            return ctx.refuse("transpose: element [0] is {s} and element [{d}] is {s} — a transpose needs the same field set", .{ describeTop(ctx, try structOf(ctx, v, 0)), row, describeTop(ctx, e) });
+        }
+        for (names.items, 0..) |k, ci| {
+            const cell = (m.get(k) catch null) orelse
+                return ctx.refuse("transpose: element [{d}] has no field '{s}', which element [0] has", .{ row, keyName(k) });
+            cols.items[ci].appendRaw(cell) catch return ctx.refuse("transpose: element [{d}] is unencodable", .{row});
+        }
+    }
+    var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+    for (names.items, 0..) |k, ci| {
+        var col = struple.Packer.init(ctx.arena);
+        col.appendArray(cols.items[ci].bytes()) catch return ctx.refuse("transpose: a column is unencodable", .{});
+        try entries.append(ctx.arena, .{ k, col.bytes() });
+    }
+    try ctx.out[0].appendMap(entries.items);
+    return Emit.first;
+}
+
+fn structOf(ctx: *EvalCtx, arr: []const u8, i: usize) EvalError![]const u8 {
+    return (struple.view(try innerOf(ctx, arr)).at(i) catch null) orelse "";
+}
+
+/// `shuffle [seed <s>]` — Fisher–Yates over a xoshiro256++ stream. Integer
+/// hashing only, so the permutation is bit-identical across machines, and the
+/// seed defaults to 0 so a program that says nothing still replays. Same seed,
+/// same array, same answer, every tick — which is what "deterministic in fed
+/// time" requires of an operator that re-runs on every change.
+fn evalShuffle(ctx: *EvalCtx) EvalError!Emit {
+    const seed: u64 = if (ctx.in[1] == null) 0 else blk: {
+        const f = try num(ctx, 1);
+        if (!std.math.isFinite(f) or f != @floor(f) or f < 0) {
+            return ctx.refuse("shuffle: 'seed' is {d} — a seed is a whole number from 0", .{f});
+        }
+        break :blk @intFromFloat(f);
+    };
+    var items = std.ArrayListUnmanaged([]const u8).empty;
+    var r = struple.reader(try arrayIn(ctx));
+    while (r.nextView() catch return ctx.refuse("shuffle: '{s}' is a malformed array", .{ctx.portName(0)})) |e| {
+        try items.append(ctx.arena, e);
+    }
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
+    var i = items.items.len;
+    while (i > 1) {
+        i -= 1;
+        const j = rand.uintLessThan(usize, i + 1);
+        const tmp = items.items[i];
+        items.items[i] = items.items[j];
+        items.items[j] = tmp;
+    }
+    var inner = struple.Packer.init(ctx.arena);
+    for (items.items) |e| {
+        inner.appendRaw(e) catch return ctx.refuse("shuffle: an element is unencodable", .{});
+    }
+    try ctx.out[0].appendArray(inner.bytes());
+    return Emit.first;
+}
+
+/// The uniform Catmull-Rom basis at `u`, tension ½. At u=0 it is (0,1,0,0) and
+/// at u=1 it is (0,0,1,0), so a knot is passed through exactly.
+fn catmullWeights(u: f64) [4]f64 {
+    const uu = u * u;
+    const uuu = uu * u;
+    return .{
+        0.5 * (-u + 2 * uu - uuu),
+        0.5 * (2 - 5 * uu + 3 * uuu),
+        0.5 * (u + 4 * uu - 3 * uuu),
+        0.5 * (-uu + uuu),
+    };
+}
+
+/// Blend four knots elementwise. Numbers blend; records and arrays recurse,
+/// with the SAME shape rules and the same vocabulary as beat 1b's broadcast —
+/// a curve through positions is a curve through each axis.
+fn blend4(ctx: *EvalCtx, pk: *struple.Packer, w: [4]f64, k: [4][]const u8, path: []const u8) EvalError!void {
+    const kind = types.typeOfValue(k[1]);
+    if (kind == Tag.record) {
+        var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+        var it = struple.MapView.init(try innerRefusing(ctx, "along", path, k[1])).iterator();
+        while (it.next() catch return ctx.refuse("along: a malformed knot{s}", .{whereIn(ctx, path)})) |e| {
+            var sub: [4][]const u8 = undefined;
+            for (k, 0..) |kn, i| {
+                const m = struple.MapView.init(try innerRefusing(ctx, "along", path, kn));
+                sub[i] = (m.get(e.key) catch null) orelse
+                    return ctx.refuse("along: one knot has '{s}' and another does not — every knot needs the same shape", .{keyName(e.key)});
+            }
+            var one = struple.Packer.init(ctx.arena);
+            try blend4(ctx, &one, w, sub, pathField(ctx, path, e.key));
+            try entries.append(ctx.arena, .{ e.key, one.bytes() });
+        }
+        pk.appendMap(entries.items) catch return ctx.refuse("along: a knot is unencodable{s}", .{whereIn(ctx, path)});
+        return;
+    }
+    if (kind == Tag.array) {
+        const n = struple.view(try innerRefusing(ctx, "along", path, k[1])).count() catch
+            return ctx.refuse("along: a malformed knot{s}", .{whereIn(ctx, path)});
+        var elems = struple.Packer.init(ctx.arena);
+        var idx: usize = 0;
+        while (idx < n) : (idx += 1) {
+            var sub: [4][]const u8 = undefined;
+            for (k, 0..) |kn, i| {
+                sub[i] = (struple.view(try innerRefusing(ctx, "along", path, kn)).at(idx) catch null) orelse
+                    return ctx.refuse("along: the knots are arrays of different lengths — every knot needs the same shape", .{});
+            }
+            var one = struple.Packer.init(ctx.arena);
+            try blend4(ctx, &one, w, sub, pathIndex(ctx, path, idx));
+            elems.appendRaw(one.bytes()) catch return ctx.refuse("along: a knot is unencodable{s}", .{whereIn(ctx, path)});
+        }
+        pk.appendArray(elems.bytes()) catch return ctx.refuse("along: a knot is unencodable{s}", .{whereIn(ctx, path)});
+        return;
+    }
+    var acc: f64 = 0;
+    for (k, 0..) |kn, i| {
+        acc += w[i] * (types.asNumber(kn) orelse
+            return ctx.refuse("along: a knot is {s}, not a number{s}", .{ describeTop(ctx, kn), whereIn(ctx, path) }));
+    }
+    try pk.appendF64(acc);
+}
+
+/// `along <knots>` — travel a curve through the knots as `t` goes 0..1.
+/// Catmull-Rom, so the curve passes through every knot; ends are clamped by
+/// duplicating the terminal knot, and `t` outside 0..1 clamps rather than
+/// extrapolating (a path has ends).
+///
+/// **Fewer than two knots refuses**, and because mount runs tick 0 that lands
+/// at mount for every mounted program. One knot is not a path.
+fn evalAlong(ctx: *EvalCtx) EvalError!Emit {
+    const t = try num(ctx, 0);
+    const kv = try raw(ctx, 1);
+    if (types.typeOfValue(kv) != Tag.array) {
+        return ctx.refuse("along: '{s}' is {s}, not an array of knots", .{ ctx.portName(1), describeTop(ctx, kv) });
+    }
+    const view = struple.view(try innerOf(ctx, kv));
+    const n = view.count() catch return ctx.refuse("along: '{s}' is a malformed array", .{ctx.portName(1)});
+    if (n < 2) {
+        return ctx.refuse("along: {d} knot{s} is not a path — `along` needs at least two", .{ n, if (n == 1) "" else "s" });
+    }
+    const at = @min(1.0, @max(0.0, t)) * @as(f64, @floatFromInt(n - 1));
+    var seg: usize = @intFromFloat(@floor(at));
+    if (seg > n - 2) seg = n - 2; // t == 1 lands on the last segment's end
+    const u = at - @as(f64, @floatFromInt(seg));
+    const idx = [4]usize{
+        if (seg == 0) 0 else seg - 1,
+        seg,
+        seg + 1,
+        if (seg + 2 > n - 1) n - 1 else seg + 2,
+    };
+    var k: [4][]const u8 = undefined;
+    for (idx, 0..) |ix, i| {
+        k[i] = (view.at(ix) catch null) orelse return ctx.refuse("along: '{s}' is a malformed array", .{ctx.portName(1)});
+    }
+    try blend4(ctx, &ctx.out[0], catmullWeights(u), k, "");
+    return Emit.first;
+}
+
+// ---------------------------------------------------------------------------
 // Contracts — `expect` and `match` (tier 2, beat 2b)
 //
 // One shape literal, two promises. `expect` asserts ONCE, at mount, and its
@@ -2005,6 +2368,14 @@ const CORE = [_]registry.OpDef{
     .{ .name = "map", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .help = "The body once per element, in order — `map (clamp 0 1)`. Keeps the length; use `keep` to drop.", .eval = evalMap },
     .{ .name = "keep", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .help = "The elements a predicate says true for — `keep (> 0)`. Filters ELEMENTS; `where` gates the stream.", .eval = evalKeep },
     .{ .name = "reduce", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("init", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .body = 2, .help = "Left fold — `reduce (add) [init 0]`. Accumulator fills the body's first open port, element the second; no init means the first element seeds.", .eval = evalReduce },
+    // tier 2, beat 3b — order. `sort`'s body rides the `by` keyword, which is
+    // what makes it optional without breaking "optionals are keyword-only".
+    .{ .name = "sort", .inputs = &.{p.in("in", Tag.array)}, .statics = &.{.{ .name = "desc", .kind = .word, .flag = true, .optional = true }}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .body_kw = "by", .help = "Stable sort — `sort by (.distance) [desc]`. Without `by`, the elements are their own keys. Ties keep their input order.", .eval = evalSort },
+    .{ .name = "first", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The leading element — `sort by (.distance) | first`. Empty is an error: it promises one value.", .eval = evalFirst },
+    .{ .name = "take", .inputs = &.{ p.in("in", Tag.array), p.in("n", Tag.number), p.kwOpt("from", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "At most `n` elements, from `from` — `take 3`. A short array is forgiven; `nth` past the end is not.", .eval = evalTake },
+    .{ .name = "transpose", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "AoS ↔ SoA, self-inverse — `{a: [1,2], b: [3,4]}` ↔ `[{a:1,b:3},{a:2,b:4}]`. Ragged input refuses, both sides named.", .eval = evalTranspose },
+    .{ .name = "shuffle", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Seeded Fisher–Yates — `shuffle [seed 7] | take 3` is three at random, no repeats. Seed defaults to 0; bit-identical across machines.", .eval = evalShuffle },
+    .{ .name = "along", .inputs = &.{ p.in("t", Tag.number), p.in("knots", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Travel a Catmull-Rom curve through the knots as t goes 0..1 — `along [a, b, c]`. Clamps outside 0..1; fewer than two knots refuses.", .eval = evalAlong },
     // tier 2, beat 2b — contracts. One shape literal, two promises.
     .{ .name = "expect", .inputs = &.{p.opt("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .fails_mount = true, .help = "Assert a shape ONCE, at mount — `expect {id: string, distance: number} [exact]`. A mismatch refuses the mount. Costs nothing afterwards; never falls back to a runtime check.", .eval = evalExpect },
     .{ .name = "match", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Assert a shape on EVERY value — `match {id: string} [exact]`. A mismatch kills the wave and names the field and both sides.", .eval = evalMatch },

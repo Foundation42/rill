@@ -84,6 +84,17 @@ pub const StaticDecl = struct {
     kind: StaticKind,
     /// Keyword-introduced in source text (`radius 12`), same rule as Port.kw.
     kw: bool = false,
+    /// A **bare-word flag**: written as its own name and nothing else
+    /// (`sort by (.threat) desc`). Present ⇒ the static holds the word;
+    /// absent ⇒ the empty value every consumer already treats as absent.
+    ///
+    /// This is a narrowing of the keyword-optional static, not an exception to
+    /// "optionals are keyword-only": that rule exists because `cast $alarm 30`
+    /// cannot say whether 30 is the payload or the radius, and a flag has no
+    /// value to be ambiguous about — the word IS the value. Same shape `exact`
+    /// took inside the shape literal (beat 2b), generalised once so the next
+    /// flag costs nothing. Implies `optional`.
+    flag: bool = false,
     /// Unbound is legal: the static fills with its kind's EMPTY value
     /// (`""`), which every consumer must treat as "absent". First customer:
     /// `cast … [to #tag]` — an uncoupled cast is the common case, and a
@@ -420,6 +431,12 @@ pub const OpDef = struct {
     /// per tick like any other node. Both spellings are `( )`; what decides is
     /// the consumer's declaration, never a lookahead.
     body: u8 = 0,
+    /// When non-empty, the section body is introduced by this word
+    /// (`sort by (.distance)`) and is therefore **optional** — which is the
+    /// ratified rule kept, not bent: optionals are keyword-only, and `by` is
+    /// the keyword. `map`/`keep`/`reduce` leave it empty, so their body is
+    /// positional and required.
+    body_kw: []const u8 = "",
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,
@@ -499,8 +516,15 @@ pub const Registry = struct {
         // An optional static must be keyword-introduced: a positional
         // maybe-there argument binds greedily, and every static after it
         // would shift by whether it was said.
+        //
+        // A FLAG is the one narrowing (beat 3b): it is written as its own name
+        // and carries no value, so there is nothing for a following argument
+        // to shift into — the ambiguity the rule exists to prevent cannot
+        // arise. A flag must be optional, because a mandatory word that only
+        // ever has one spelling says nothing.
         for (def.statics) |sd| {
-            if (sd.optional and !sd.kw) return error.BadStatic;
+            if (sd.flag and !sd.optional) return error.BadStatic;
+            if (sd.optional and !sd.kw and !sd.flag) return error.BadStatic;
         }
         const id: OpId = @intCast(self.ops.items.len);
         try self.ops.append(self.gpa, def);

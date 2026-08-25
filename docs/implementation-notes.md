@@ -611,6 +611,85 @@ consumer's stream* and becomes a **body the consumer drives per element**.
   element, an empty `reduce` going silent, the body link unserialized, and
   both open-vs-optional sites.
 
+## Tier 2, beat 3b — order and shape (2026-08-25)
+
+Built: `sort`, `first`, `take`, `transpose`, `shuffle`, `along`.
+
+- **Two mechanisms, each reusing a ratified rule.** `OpDef.body_kw` makes
+  a section body keyword-introduced (`sort by (…)`) and therefore
+  optional — the ratified "optionals are keyword-only" rule kept, with
+  `by` as the keyword. `StaticDecl.flag` is a bare-word flag (`desc`),
+  the same shape `exact` took inside the shape literal, generalised once
+  so the next flag costs nothing. The registry's optional-static check now
+  reads `if (sd.flag and !sd.optional) … if (sd.optional and !sd.kw and
+  !sd.flag) …`: a flag carries no value, so the ambiguity that rule exists
+  to prevent (`cast $alarm 30` — payload or radius?) cannot arise.
+
+- **Sorting uses the store's own total order, by value.** Chris's
+  suggestion to use the radix store as the sorting medium is banked by
+  struple directly — its encoding is `memcmp`-orderable, which is how the
+  store sorts. One caveat decided it: in raw `memcmp` order the TYPE BYTE
+  dominates, so every integer files before every float. rill has one
+  `number` type and no way to see the difference, so `sort` uses
+  `semanticOrder` — the same cross-type sequence (nil < bool < number <
+  string < array < map), numbers compared by exact value. Gated:
+  `[2.5, 2, 1.5]` sorts to `[1.5, 2, 2.5]`, and a memcmp sort puts `2`
+  first.
+
+- **Stability is ours, not the library's.** `keyedLess` carries each
+  element's original index as its tie-break, so ties keep input order
+  whichever algorithm runs. Errors are surfaced once, before the sort, in
+  a pass that compares every key against key 0 — a comparator returns
+  `bool` and cannot refuse, so it must not be where a malformed key is
+  first discovered.
+
+- **A gate that passed because of the library underneath.** The first
+  stability gate used four elements and three ties, and the mutation
+  removing the tie-break SURVIVED it: `std.sort.pdq` falls back to
+  insertion sort below a size threshold, and insertion sort is stable by
+  accident. Rewritten with forty elements and two keys, past the
+  fallback; the mutation now bites. **New ledger line: a gate that passes
+  because of the library underneath is watching nothing** — the same
+  shape as "prose approves plausible semantics", one layer down.
+
+- **`take` forgives and `nth` refuses, and the asymmetry is the point.**
+  `take 5` promises *at most five*; two is a satisfiable answer. `nth 5`
+  promises *the sixth element*; if there isn't one the program asked for
+  something that does not exist. A count can be satisfied, a value cannot
+  be invented. `from` past the end is the same shape: empty, not an error.
+  Gated as a pair, on one input, so the claim is the difference.
+
+- **`along` blends four knots elementwise**, recursing over records and
+  arrays with beat 1b's vocabulary — a curve through positions is a curve
+  through each axis. Uniform Catmull-Rom, tension ½, so every knot is
+  passed through exactly; ends duplicate the terminal knot; `t` outside
+  0..1 clamps, because a path has ends. Fewer than two knots refuses, and
+  because mount runs tick 0 that lands at mount for every mounted program.
+
+- **`transpose` refuses ragged input in both directions**, naming both
+  sides. The array→record direction reports the two field sets in the
+  type-word vocabulary (`record{a, b}` vs `record{a}`).
+
+- **`shuffle` is xoshiro256++ over Fisher–Yates**, integer-only, seed
+  defaulting to 0 — bit-identical across machines, and the same
+  permutation every tick, which is what determinism in fed time requires
+  of an operator that re-runs on every change.
+
+- **A finding the row-scoring surfaced: `.field` is not a pipe stage.**
+  "Nearest hostile" lands at two lines, not one, because a field read
+  names a standpoint (`near.id`) and there is no `| .id`. The `project`
+  operator is registered and `| project id` parses, so there are already
+  two spellings and only one is taught. Recorded as a fork in the tier-2
+  doc §8 rather than decided; the row is scored at 2 and says why.
+
+- **Gates: 18 new (227 → 245), Debug and ReleaseFast. Mutations: 12/12
+  bitten** after the stability gate was rewritten (11/12 before, the
+  survivor being the finding above) — the tie-break, desc reversing ties,
+  memcmp ordering, `take` erroring short, `transpose` picking shortest,
+  the default seed, `along` extrapolating, `along` accepting one knot, the
+  Catmull-Rom basis, `first` going silent, flags unrecognised, and `sort`
+  accepting a positional section.
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no
@@ -640,6 +719,16 @@ A refusal message is built from the thing being refused, so the message
 must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
+
+**Addendum, 2026-08-25 (beat 3b): a gate that passes because of the
+library underneath is watching nothing.** `sort`'s stability gate used
+four elements; the mutation removing the stability tie-break survived it,
+because `std.sort.pdq` falls back to insertion sort on small inputs and
+insertion sort is stable by accident. The gate was measuring the standard
+library, not the code under it. Rewritten at forty elements, past the
+fallback. Same family as "prose approves plausible semantics, execution
+approves actual semantics" — one layer further down, and the tell is the
+same: the check passed without the code having to do anything.
 
 From beat 1a's surviving mutation, and it generalises:
 
