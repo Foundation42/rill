@@ -307,6 +307,82 @@ export fn rill_program_node_op(prog_h: ?*anyopaque, node: usize) callconv(.c) i6
     return @intCast(pbox.prog.nodes.items[node].op);
 }
 
+// ── program introspection ───────────────────────────────────────────────────
+// A host inspects a parsed program before mounting it: does it subscribe its
+// own wires, what does it write, which channels does it cast into, does it
+// touch main. In-process that is field access on the graph; across a seam it
+// is these iterators, which hand out borrowed spans valid until the program is
+// destroyed.
+
+export fn rill_program_sub_count(h: ?*anyopaque) callconv(.c) usize {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return 0));
+    return box.prog.subs.items.len;
+}
+
+export fn rill_program_sub_path(h: ?*anyopaque, i: usize, out_len: *usize) callconv(.c) ?[*]const u8 {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return null));
+    if (i >= box.prog.subs.items.len) return null;
+    const p = box.prog.subs.items[i].path;
+    out_len.* = p.len;
+    return p.ptr;
+}
+
+export fn rill_program_write_count(h: ?*anyopaque) callconv(.c) usize {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return 0));
+    return box.prog.writes.items.len;
+}
+
+export fn rill_program_write_path(h: ?*anyopaque, i: usize, out_len: *usize) callconv(.c) ?[*]const u8 {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return null));
+    if (i >= box.prog.writes.items.len) return null;
+    const p = box.prog.writes.items[i].path;
+    out_len.* = p.len;
+    return p.ptr;
+}
+
+export fn rill_program_cast_count(h: ?*anyopaque) callconv(.c) usize {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return 0));
+    return box.prog.casts.items.len;
+}
+
+export fn rill_program_node_name(h: ?*anyopaque, i: usize, out_len: *usize) callconv(.c) ?[*]const u8 {
+    const box: *ProgramBox = @ptrCast(@alignCast(h orelse return null));
+    if (i >= box.prog.nodes.items.len) return null;
+    const n = box.prog.nodes.items[i].name;
+    out_len.* = n.len;
+    return n.ptr;
+}
+
+/// Does any node of this program route to the host's main thread? The
+/// derivation a host would otherwise write itself over `nodes` × `registry`,
+/// kept on this side so the loop does not cross the boundary N times.
+export fn rill_program_routes_to_main(prog_h: ?*anyopaque, reg_h: ?*anyopaque) callconv(.c) bool {
+    const pbox: *ProgramBox = @ptrCast(@alignCast(prog_h orelse return false));
+    const rbox: *RegistryBox = @ptrCast(@alignCast(reg_h orelse return false));
+    for (pbox.prog.nodes.items) |n| {
+        if (rbox.reg.get(n.op).routes == .main) return true;
+    }
+    return false;
+}
+
+/// Per-node counters, for the host's live view.
+export fn rill_node_eval_count(h: ?*anyopaque, node: usize) callconv(.c) u64 {
+    const box: *RuntimeBox = @ptrCast(@alignCast(h orelse return 0));
+    if (node >= box.rt.eval_count.len) return 0;
+    return box.rt.eval_count[node];
+}
+
+export fn rill_node_error_count(h: ?*anyopaque, node: usize) callconv(.c) u64 {
+    const box: *RuntimeBox = @ptrCast(@alignCast(h orelse return 0));
+    if (node >= box.rt.error_count.len) return 0;
+    return box.rt.error_count[node];
+}
+
+export fn rill_node_count(h: ?*anyopaque) callconv(.c) usize {
+    const box: *RuntimeBox = @ptrCast(@alignCast(h orelse return 0));
+    return box.rt.eval_count.len;
+}
+
 // ── what a host operator sees when it runs ──────────────────────────────────
 // Matryoshka's thunks use exactly two things — the host pointer and the input
 // values — because each converts to its own context immediately. The rest is
