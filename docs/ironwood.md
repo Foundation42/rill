@@ -586,7 +586,9 @@ rill granted `tags/squads/*` is refused at mount when it writes
   `plane.ents.<id>.pos`, ack names the binding); `entities/despawned`
   certificates carry name, kind, last position, reason, frame; despawn
   cleans the corpse's tags in sorted order, each departure said on the
-  tag's `left` mailbox; `entityService` refreshes id-keyed pos mirrors
+  tag's `left` mailbox. **Shutdown is not a despawn — no certificates,
+  no `left`**: nothing died, the world ended, and nobody is left to
+  hear it (the `rills/unmounted` precedent); `entityService` refreshes id-keyed pos mirrors
   publish-on-change and turns a deleted instance into its `.deleted`
   certificate. Entities ride rig lines and project records; ids reassigned
   in row order at load, swap-before-remount, so replay re-folds to the
