@@ -2660,3 +2660,13 @@ test "tail_all: registration keeps the closed shape — tail_all implies tail, l
     const not_last = [_]registry.Port{ .{ .name = "s", .ty = types.Tag.string, .tail = true, .tail_all = true }, .{ .name = "b", .ty = types.Tag.number } };
     try testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_last, .help = "", .eval = nop }));
 }
+
+test "diagnostics: a path after a pipe names the forgotten `set`" {
+    // The most-forgotten spelling in live use (twice in one morning): the
+    // intent is a write, the spelling is `set`, and the error says so.
+    try expectParseError("plane.render.grade.exposure | plane.render.grade.highlights", "did you forget `set`?");
+    try expectParseError(
+        \\use plane.render.grade as g
+        \\plane.hp | g.exposure
+    , "did you forget `set`?");
+}

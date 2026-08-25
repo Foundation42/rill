@@ -742,6 +742,12 @@ const Parser = struct {
                 try self.parseAlsoBlock(target, current.outputs[0], op_tok);
                 continue; // `current` untouched — the identity, in one line
             }
+            // A path after a pipe is the most-forgotten spelling in live use
+            // (Chris, twice in one morning): a pipe feeds an OPERATOR, and
+            // writing what's flowing to a path is `set`. Name the fix.
+            if (op_tok.kind == .name and (std.mem.eql(u8, op_tok.text, "plane") or self.aliases.contains(op_tok.text))) {
+                return self.fail(op_tok, "'{s}…' is a path, and a pipe feeds an operator — did you forget `set`? (… | set {s}.…)", .{ op_tok.text, op_tok.text });
+            }
             current.* = try self.parseOpcall(target, op_tok, current.outputs[0], false);
         }
     }

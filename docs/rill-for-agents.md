@@ -199,6 +199,7 @@ first, so `sound play` is one operator.
 | `cast $alarm 30` for radius 30 | payload-or-radius is ambiguous | `cast $alarm radius 30 at <ref>` |
 | `sample 5` | durations carry units | `sample 5s` (or `5f` if you mean frames) |
 | `x \| mul 2 { set plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { set plane.a }` |
+| `x \| plane.y` | a pipe feeds an OPERATOR; a path on the right is a write | `x \| set plane.y` (the error asks: did you forget `set`?) |
 | `as $x` / `def $f(…)` | sigils name store rows, never streams/ops | pick an unsigiled name |
 | waiting for a path to vanish | absence is unobservable | subscribe to the occurrence that says so |
 
