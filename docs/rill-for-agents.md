@@ -71,8 +71,9 @@ actual spelling *is* the design.
 - Any `plane.…` path anywhere is a **subscription**. Reads are
   subscriptions; there is no polling and no imperative read.
 - Each tick: fed deltas mark subscribed slots fresh → dirty nodes
-  evaluate once, in order → writes flush as one batch. **Parse order
-  is topological order**: names are single-assignment,
+  evaluate once, in order → writes land through the host's drain
+  (casts dispatch at eval, straight into the host's cast inbox).
+  **Parse order is topological order**: names are single-assignment,
   defined-before-use.
 - **Values** compare-and-suppress (same bytes = silence). **Occurrences**
   always propagate (twice is twice). Threshold ops convert value → 
@@ -163,8 +164,10 @@ first, so `sound play` is one operator.
   needs `every 1f` in front. Your bag dies with your unmount.
 - **Reading names its standpoint.** `$alarm` alone is a parse error
   (the message tells you the spelling). Read an ear's published value:
-  `plane.sensors.<post>.$alarm`, with `…-grad` and `…-scan_ns` beside
-  it and `…/pos` for where the post stands. Ears publish zero at
+  `plane.sensors.<post>.$alarm`, with `….$alarm.grad` and
+  `….$alarm.scan_ns` beside it and `….pos` for where the post stands —
+  sibling segments, so "one channel, several readings" is visible in
+  the spelling and nothing lexes like a castable channel. Ears publish zero at
   binding, so your `rose_above` baselines correctly.
 - Deposits and readings are deterministic in fed time and stay out of
   the log; replay re-derives them.

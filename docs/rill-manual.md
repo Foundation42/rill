@@ -129,11 +129,16 @@ plane.signals.horn | set plane.gate.drawbridge_target 1  // this, because someth
 plane.enemies | rose_above 0 | notify plane.signals.horn { kind: "approach" }
 ```
 
-(Two blocks, not one, and the parse gate is why: as a single program the
-second line would *subscribe* to the horn the third line *notifies* —
-the cycle check refuses exactly that. The gatekeeper caught the manual's
-own first draft doing it, which is the kind of proofreading a manual
-about a refusing parser deserves.)
+(Two blocks = two programs, and the rule is worth learning right here:
+**a program may not both write and subscribe to one path — even in
+unconnected branches.** The check is path-level (spec §4.4) and
+deliberately conservative: self-rousing through the plane is the
+hazard, the check does not trace whether your write actually reaches
+your read, and the split is cheap — so it refuses the pairing
+outright. A supervisor that notifies an alert mailbox and also watches
+it is not a bug; it is two programs. Recorded, not built: a
+graph-level cycle check that refuses only when the write reaches the
+read, if a scene ever earns it.)
 
 The verbs:
 
@@ -307,9 +312,11 @@ presence:
 ## 9. What the parser refuses, and why
 
 - **Cycles.** A program that writes a path it also subscribes to
-  (exactly, or by prefix) is refused at mount, with the loop named.
-  Counters are why `inc` exists — a blind delta reads nothing, so it
-  passes legitimately.
+  (exactly, or by segment prefix) is refused at mount, with the pair
+  named — **even when the branches are unconnected**: the check is
+  path-level, not graph-level, on purpose (§4 has the rule and the
+  fix: split into two programs). Counters are why `inc` exists — a
+  blind delta reads nothing, so it passes legitimately.
 - **Self-feeding.** A program subscribing to its own published wires
   would re-trigger itself every frame; refused.
 - **Unknown names.** A bare word is only ever a string literal when it

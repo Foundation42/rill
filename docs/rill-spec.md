@@ -589,9 +589,13 @@ carry values this tick.
 
 v0: static cycle detection at mount time. Error message points at the loop
 (`programs.hud: cycle — node set(plane.x) feeds node read(plane.x) via …`), the program refuses
-to mount, the engine never spins. Path-level analysis: a program that writes a path it also
-subscribes to (directly or through the graph) is cyclic. Deliberate feedback later via an
-explicit one-tick-delay operator.
+to mount, the engine never spins. **Path-level analysis, connected or not**: a program that
+both writes and subscribes to one path (exactly, or by segment prefix) is refused, even when
+the writing branch never feeds the reading one — self-rousing through the plane is the
+hazard, and the conservative check keeps the plane out of the reachability question. The fix
+is always the split into two programs. Recorded, not built: a graph-level refinement that
+refuses only when the write actually reaches the read, if a scene ever earns it. Deliberate
+feedback later via an explicit one-tick-delay operator.
 
 ### 4.5 Determinism
 

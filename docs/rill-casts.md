@@ -482,7 +482,12 @@ standpoint:
   override mask and no self-carried fallback. A deleted sampler's
   posts read nothing and freeze their scan clock: staleness declared.
   The published row: `sensors/<post>/$chan` (value, on change),
-  `…/$chan-grad` (when declared), `…/$chan-scan_ns` (every scan). A
+  `…/$chan/grad` (when declared), `…/$chan/scan_ns` (every scan) —
+  grad and freshness are SIBLING SEGMENTS under the channel, matching
+  `…/pos`, never suffixes glued onto its name: `$torchlight-grad`
+  would lex as a channel named torchlight-grad and the first agent to
+  see it would try to cast it. One channel, several readings, visible
+  in the spelling. A
   new ear says ZERO before it has ever listened — Principle 8, the
   arm-on-first-observation bug pre-empted at declaration. Two ears
   with different sampler state read the same field to different
@@ -596,7 +601,20 @@ argument, same class, as sensor scans.
   here so the connection is on record; built when the game asks.
 - **Tiltyard demo item** — a brazier casting `$torchlight`, a relic
   casting negative `$blight`, a rill dimming the lamp as the camera
-  walks into the dark.
+  walks into the dark. **The stamp says which half is built
+  (2026-08-25):** what is gated is the *unmount* form — the lamp
+  warms to steady state and dims over the time constant when the
+  brazier unmounts (held headless in casting.zig; the `--exec` lines
+  for the photon run ride the wiring commit). The *walk* — a MOVING
+  standpoint — is not built: it wants a live-position ear, which is
+  §9's recorded ear-with-a-position-port (or `@camera.pos` when the
+  registry lands), and it stays a pointer here until one exists.
+- **The brazier's position is a BORROW, recorded so it moves.** The
+  demo casts `at plane.sensors.hearth.pos` — the hearth-ear's own
+  published standpoint — because a brazier has no position of its own
+  until R6's `@` registry. When `@` lands, the demo's spelling becomes
+  `at @brazier.pos` and the borrow ends; it must not stay glued to
+  the ear.
 
 ---
 
