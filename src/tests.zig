@@ -2087,6 +2087,9 @@ test "every core op declares its class deliberately" {
         .{ .name = "record", .class = .pure },
         .{ .name = "array", .class = .pure },
         .{ .name = "nth", .class = .pure },
+        .{ .name = "map", .class = .reads }, // drives a body that may hold bound ports
+        .{ .name = "keep", .class = .reads },
+        .{ .name = "reduce", .class = .reads },
         .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
         .{ .name = "merge", .class = .pure },
@@ -2748,7 +2751,9 @@ test "the manuals parse: every printed example compiles" {
     // literal block in that section is deliberately NOT tagged ```rill — a
     // shape is not a program, and tagging it would ask the parser to mount a
     // type.
-    try testing.expectEqual(@as(usize, 35), human);
+    // 35 → 37 (beat 3a): the human manual gained §6d (over arrays) — the body
+    // trio and the keep-vs-where crossing pair.
+    try testing.expectEqual(@as(usize, 37), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -4045,8 +4050,10 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // 28 → 30, 66 → 70 (beat 2b): the two contract rows' after-cells — one
     // `match`, one `expect`, because the two promises are the point — and the
     // shapes page.
-    try testing.expectEqual(@as(usize, 30), rill_cells);
-    try testing.expectEqual(@as(usize, 70), total);
+    // 30 → 33, 70 → 75 (beat 3a): the three rows §2.11 argued and §4 never
+    // listed — written down first, then landed — plus the bodies page.
+    try testing.expectEqual(@as(usize, 33), rill_cells);
+    try testing.expectEqual(@as(usize, 75), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -4941,4 +4948,277 @@ test "beat 2b: a shape survives dump and restore" {
     var rt2 = try rill.Runtime.mount(testing.allocator, &prog2, mock2.asPlane(), .{ .error_fn = Refusal.on });
     defer rt2.deinit();
     try expectRefusalNames(&.{ "match", "extra", "not in the shape" });
+}
+
+// ---------------------------------------------------------------------------
+// Beat 3a — bodies: `map`, `keep`, `reduce`.
+//
+// The structural half of beat 3. A section stops being "a node wired to the
+// consumer's stream" and becomes a BODY the consumer drives per element — so
+// most of what follows is about that mechanism holding: arity declared by the
+// consumer, the body skipped by the sweep, a body's own bound ports still
+// live, and a body's refusal still landing in its own words.
+// ---------------------------------------------------------------------------
+
+test "beat 3a: `map` runs the body once per element, in order" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[-1, 0.5, 3] | map (clamp 0 1) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const out = fx.rt.readSlot("programs.p.map1.out.out") orelse return error.TestUnexpectedResult;
+    const nums = try arrayNums(testing.allocator, out);
+    defer testing.allocator.free(nums);
+    // In order, and the same length: a map that reordered or shortened would
+    // still produce "three numbers".
+    try testing.expectEqualSlices(f64, &.{ 0, 0.5, 1 }, nums);
+}
+
+test "beat 3a: `keep` filters ELEMENTS and `where` gates the STREAM — the crossing case" {
+    // The one-axis rule, executed. `keep` takes a section and filters
+    // elements; `where` takes a boolean stream and gates arrivals. Both apply
+    // to an array-valued stream, which is precisely why one word dispatched by
+    // kind would have had to guess.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[-2, 5, 0, 7] | keep (> 0) | set plane.kept
+        \\[-2, 5, 0, 7] | where plane.gate.open | set plane.gated
+    , .{.{ "plane.gate.open", true }});
+    defer fx.deinit();
+
+    const kept = fx.rt.readSlot("programs.p.keep1.out.out") orelse return error.TestUnexpectedResult;
+    const nums = try arrayNums(testing.allocator, kept);
+    defer testing.allocator.free(nums);
+    try testing.expectEqualSlices(f64, &.{ 5, 7 }, nums);
+
+    // `where` passed the WHOLE array through, untouched — it gated, it did not
+    // filter. Four elements, not two.
+    const gated = fx.rt.readSlot("programs.p.where1.out.out") orelse return error.TestUnexpectedResult;
+    const all = try arrayNums(testing.allocator, gated);
+    defer testing.allocator.free(all);
+    try testing.expectEqualSlices(f64, &.{ -2, 5, 0, 7 }, all);
+}
+
+test "beat 3a: `reduce` is a LEFT fold — and the gate runs where left and right differ" {
+    // "A rather than B": `(10 - 3) - 2` is 5 and `10 - (3 - 2)` is 9, so this
+    // array is chosen because the two folds disagree. A right fold cannot pass.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[10, 3, 2] | reduce (sub) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    try testing.expect(@as(f64, 5) != @as(f64, 9)); // the inequality, asserted first
+    try testing.expectEqual(@as(f64, 5), slotNum(&fx, "programs.p.reduce1.out.out").?);
+}
+
+test "beat 3a: with no `init` the first element seeds; `init` seeds instead" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[1, 2, 3] | reduce (add) | set plane.plain
+        \\[1, 2, 3] | reduce (add) init 100 | set plane.seeded
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 6), slotNum(&fx, "programs.p.reduce1.out.out").?);
+    try testing.expectEqual(@as(f64, 106), slotNum(&fx, "programs.p.reduce2.out.out").?);
+}
+
+test "beat 3a: an empty array with no `init` is an error naming the operator" {
+    // There is no honest value to invent: 0 is right for `add` and wrong for
+    // `mul`, and picking one is picking a rule.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[] | reduce (add) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "reduce", "empty", "init" });
+    try testing.expect(fx.rt.readSlot("programs.p.reduce1.out.out") == null);
+    try testing.expectEqualStrings("reduce", Refusal.opName());
+}
+
+test "beat 3a: an empty array WITH `init` folds to the init" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[] | reduce (add) init 42 | set plane.out
+    , .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try testing.expectEqual(@as(f64, 42), slotNum(&fx, "programs.p.reduce1.out.out").?);
+}
+
+test "beat 3a: the consumer declares section arity, and a mismatch names both counts" {
+    // Chris's pin, both directions. The message must name the operator and
+    // both numbers — "wrong arity" alone tells an author nothing about which
+    // way to fix it.
+    try expectParseError("[1, 2] | map (add) | set plane.out", "supplies 1 argument");
+    try expectParseError("[1, 2] | map (add) | set plane.out", "leaves 2 ports open");
+    try expectParseError("[1, 2] | reduce (clamp 0 1) | set plane.out", "supplies 2 arguments");
+    try expectParseError("[1, 2] | reduce (clamp 0 1) | set plane.out", "leaves 1 port open");
+    // …and the operator is named in both.
+    try expectParseError("[1, 2] | map (add) | set plane.out", "map");
+    try expectParseError("[1, 2] | reduce (clamp 0 1) | set plane.out", "reduce");
+}
+
+test "beat 3a: a body-driving operator with no body refuses at parse" {
+    // Earlier than mount, which is strictly louder: an operator whose whole
+    // job is running a body cannot be given none.
+    try expectParseError("[1, 2] | map | set plane.out", "needs a section body");
+    try expectParseError("[1, 2] | reduce | set plane.out", "2 open ports");
+}
+
+test "beat 3a: `(.field)` is a section — the projection body" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{id: 1, distance: 8}, {id: 2, distance: 3}] | map (.distance) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const out = fx.rt.readSlot("programs.p.map1.out.out") orelse return error.TestUnexpectedResult;
+    const nums = try arrayNums(testing.allocator, out);
+    defer testing.allocator.free(nums);
+    try testing.expectEqualSlices(f64, &.{ 8, 3 }, nums);
+}
+
+test "beat 3a: any-of over a set — `map (.armed) | reduce (or)`" {
+    // §2.11's loudest customer, in one line.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{armed: false}, {armed: true}] | map (.armed) | reduce (or) | set plane.any
+        \\[{armed: false}, {armed: false}] | map (.armed) | reduce (or) | set plane.none
+    , .{});
+    defer fx.deinit();
+
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.reduce1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.reduce2.out.out").?).?);
+}
+
+test "beat 3a: a body's own BOUND port is live" {
+    // A body is not a closure, but it may hold ports of its own that the
+    // program feeds. A value arriving there must rouse the CONSUMER — the body
+    // has no output anyone reads and the sweep skips it — which is the one
+    // thing about this mechanism that has no local symptom when it is wrong.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[1, 5, 9] | keep (> plane.threshold) | set plane.out
+    , .{.{ "plane.threshold", @as(f64, 0) }});
+    defer fx.deinit();
+
+    {
+        const out = fx.rt.readSlot("programs.p.keep1.out.out") orelse return error.TestUnexpectedResult;
+        const nums = try arrayNums(testing.allocator, out);
+        defer testing.allocator.free(nums);
+        try testing.expectEqualSlices(f64, &.{ 1, 5, 9 }, nums);
+    }
+    try feedValue(&fx.rt, testing.allocator, "plane.threshold", @as(f64, 6));
+    try fx.rt.tick(.{});
+    {
+        const out = fx.rt.readSlot("programs.p.keep1.out.out") orelse return error.TestUnexpectedResult;
+        const nums = try arrayNums(testing.allocator, out);
+        defer testing.allocator.free(nums);
+        try testing.expectEqualSlices(f64, &.{9}, nums);
+    }
+}
+
+test "beat 3a: a body node is not evaluated by the sweep" {
+    // The body's open port has no source, so a swept body would refuse every
+    // tick — silently, since nothing reads its output. What keeps it out of
+    // the sweep is `markNode`'s redirect (a body is never marked dirty), not a
+    // skip in `evalNode`: a guard there survived its mutation, because nothing
+    // could reach it. See the note on `Runtime.markNode`.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[1, 2, 3] | map (clamp 0 1) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try fx.rt.tick(.{});
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    // The body's own output slot never carries a value: nothing propagates
+    // from a body, because the only reader is the operator that called it.
+    try testing.expect(fx.rt.readSlot("programs.p.clamp1.out.out") == null);
+}
+
+test "beat 3a: a body's refusal arrives in the BODY's words" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[1, 2] | map (nth 0) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    // `nth` refused, not `map` — the words are the body's, so an author is
+    // told which step went wrong rather than which step was driving.
+    try expectRefusalNames(&.{ "nth", "not an array" });
+}
+
+test "beat 3a: `map` keeps the length — a body that emits nothing is refused" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[1, 2, 3] | map (where false) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "map", "emitted nothing", "keep" });
+}
+
+test "beat 3a: `keep` refuses a predicate that does not answer a boolean" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[1, 2, 3] | keep (add 1) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "keep", "not a boolean" });
+}
+
+test "beat 3a: a body survives dump and restore" {
+    // `Node.body` is the only body link that is serialized; the other three
+    // are derived by `linkBodies` at the end of a parse AND at the end of a
+    // load, so this is where those two paths would disagree.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.xs | keep (> plane.threshold) | reduce (add) | set plane.out
+    , .{ .{ "plane.xs", [_]f64{ 1, 5, 9 } }, .{ "plane.threshold", @as(f64, 4) } });
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 14), slotNum(&fx, "programs.p.reduce1.out.out").?);
+
+    const dumped = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(dumped);
+    var prog2 = try rill.loadProgram(testing.allocator, &fx.reg, dumped);
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    try mock2.putValue("plane.xs", [_]f64{ 1, 5, 9 });
+    try mock2.putValue("plane.threshold", @as(f64, 4));
+    Refusal.reset();
+    var rt2 = try rill.Runtime.mount(testing.allocator, &prog2, mock2.asPlane(), .{ .error_fn = Refusal.on });
+    defer rt2.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try testing.expectEqual(@as(f64, 14), types.asNumber(rt2.readSlot("programs.p.reduce1.out.out").?).?);
+}
+
+test "beat 3a: an unbound OPTIONAL port is absent, not open" {
+    // Arity counts the ports a section left open, and an optional port nobody
+    // bound is a different thing: `ease`'s `up`/`down` are absent, not slots
+    // waiting for the consumer. Counting them would make every section over an
+    // op with optionals unusable.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = rill.parse(testing.allocator, &reg, "p",
+        \\[1, 2] | map (ease 100ms) | set plane.out
+    , &diag) catch |err| {
+        if (err == error.Parse) std.debug.print("parse: {s}\n", .{diag.msg()});
+        return err;
+    };
+    defer prog.deinit();
+
+    const map_id = nodeIdOf(&prog, "map1") orelse return error.TestUnexpectedResult;
+    const body_id = prog.nodes.items[map_id].body orelse return error.TestUnexpectedResult;
+    // One open port — the input — and not three.
+    try testing.expectEqual(@as(usize, 1), prog.nodes.items[body_id].body_open.len);
+    try testing.expectEqual(map_id, prog.nodes.items[body_id].body_of.?);
 }

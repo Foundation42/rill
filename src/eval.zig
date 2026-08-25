@@ -525,6 +525,7 @@ pub const Runtime = struct {
     self.detail.clear();
 
     var wake_thunk = WakeThunk{ .rt = self, .node = node_id };
+        var call_thunk = CallThunk{ .rt = self, .node = node_id, .arena = arena };
         var ctx = registry.EvalCtx{
             .arena = arena,
             .in = in,
@@ -546,6 +547,8 @@ pub const Runtime = struct {
             .now_frame = self.now.frame,
             .wake_fn = WakeThunk.wake,
             .wake_ctx = &wake_thunk,
+            .call_fn = if (n.body != null) CallThunk.call else null,
+            .call_ctx = &call_thunk,
             .detail = &self.detail,
             .op = def,
         };
@@ -633,10 +636,26 @@ pub const Runtime = struct {
         }
     }
 
+    /// The ONE place `dirty` is ever set — which is what makes the body
+    /// redirect below sufficient on its own.
+    ///
+    /// A value arriving on a BODY's bound input (`keep (> plane.threshold)`)
+    /// must rouse the operator that drives the body, not the body: the body
+    /// has no output anyone reads, and its open ports have no source, so
+    /// evaluating it in the sweep would refuse every tick.
+    ///
+    /// `evalNode` briefly carried a matching `if (n.is_body) return;` guard.
+    /// A mutation removing it SURVIVED the whole suite, which is the ledger's
+    /// finding-shaped outcome: with this the only writer of `dirty`, a body is
+    /// never marked, so that guard could not run. Deleted rather than kept as
+    /// belt-and-braces — a check nothing can reach is a check nobody can trust
+    /// — and `Node.is_body` went with it, since `body_of != null` is the same
+    /// fact and is the one that is load-bearing.
     fn markNode(self: *Runtime, nid: NodeId) !void {
-        if (self.dirty[nid]) return;
-        self.dirty[nid] = true;
-        try self.touched_nodes.append(self.gpa, nid);
+        const target = if (self.prog.node(nid).body_of) |owner| owner else nid;
+        if (self.dirty[target]) return;
+        self.dirty[target] = true;
+        try self.touched_nodes.append(self.gpa, target);
     }
 
     const WakeThunk = struct {
@@ -648,6 +667,90 @@ pub const Runtime = struct {
             self.rt.arm(deadline, self.node) catch return error.OutOfMemory;
         }
     };
+
+    /// Drives one node's section body. Carries the caller's node and arena
+    /// because a body call is *inside* the caller's evaluation — it borrows
+    /// the tick arena and dies with it, like every other value in the tick.
+    const CallThunk = struct {
+        rt: *Runtime,
+        node: NodeId,
+        arena: std.mem.Allocator,
+
+        fn call(ctx: *anyopaque, args: []const []const u8, out: *struple.Packer) registry.EvalError!bool {
+            const self: *CallThunk = @ptrCast(@alignCast(ctx));
+            return self.rt.callBody(self.node, self.arena, args, out);
+        }
+    };
+
+    /// Evaluate a section body once. `args` fill its open ports in order; its
+    /// bound ports read their slots exactly as the sweep would. Returns false
+    /// when the body emitted nothing.
+    ///
+    /// This is `evalNode` with the two ends replaced: inputs come from the
+    /// caller instead of the slots, and the output goes to the caller instead
+    /// of propagating. Everything between — the op's own state, its arena, its
+    /// refusal detail — is the same, so a body refuses in exactly the words it
+    /// would refuse in anywhere else.
+    fn callBody(self: *Runtime, caller: NodeId, arena: std.mem.Allocator, args: []const []const u8, out: *struple.Packer) registry.EvalError!bool {
+        const body_id = self.prog.node(caller).body orelse return error.BadValue;
+        const b = self.prog.node(body_id);
+        const def = self.prog.reg.get(b.op);
+        if (args.len != b.body_open.len) return error.BadValue;
+
+        const in = try arena.alloc(?[]const u8, b.inputs.len);
+        const in_fresh = try arena.alloc(bool, b.inputs.len);
+        for (b.inputs, 0..) |sid, i| {
+            in[i] = if (self.has[sid]) self.values[sid].items else null;
+            // A body sees every argument as fresh: it is being called, not
+            // roused, and arrival-dependent ops inside a body would otherwise
+            // read the caller's last tick.
+            in_fresh[i] = self.fresh[sid];
+            for (b.body_open, 0..) |open_sid, k| {
+                if (open_sid != sid) continue;
+                in[i] = args[k];
+                in_fresh[i] = true;
+            }
+        }
+        const outs = try arena.alloc(struple.Packer, b.outputs.len);
+        for (outs) |*o| o.* = struple.Packer.init(arena);
+
+        var wake_thunk = WakeThunk{ .rt = self, .node = body_id };
+        var ctx = registry.EvalCtx{
+            .arena = arena,
+            .in = in,
+            .in_fresh = in_fresh,
+            .out = outs,
+            .statics = b.statics,
+            .state = &self.node_state[body_id],
+            .state_gpa = self.gpa,
+            .write_fn = queueWriteThunk,
+            .write_ctx = self,
+            .cast_fn = castThunk,
+            .cast_ctx = self,
+            .tag_fn = tagThunk,
+            .tag_ctx = self,
+            .log_fn = self.log_fn,
+            .log_ctx = self.log_ctx,
+            .host = self.host_ctx,
+            .now_ns = self.now.time_ns,
+            .now_frame = self.now.frame,
+            .wake_fn = WakeThunk.wake,
+            .wake_ctx = &wake_thunk,
+            .detail = &self.detail,
+            .op = def,
+        };
+        self.eval_count[body_id] +|= 1;
+        const emit = def.eval(&ctx) catch |err| {
+            self.error_count[body_id] += 1;
+            return err;
+        };
+        if (!emit.has(0) or outs.len == 0) return false;
+        out.appendRaw(outs[0].bytes()) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.BadValue,
+        };
+        return true;
+    }
 
     fn castThunk(ctx: *anyopaque, c: plane_mod.Cast) registry.EvalError!void {
         const self: *Runtime = @ptrCast(@alignCast(ctx));

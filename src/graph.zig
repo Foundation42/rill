@@ -54,6 +54,21 @@ pub const Node = struct {
     inputs: []SlotId,
     outputs: []SlotId,
     statics: []registry.StaticVal,
+    /// The section body this node drives, per element (`map`, `keep`,
+    /// `reduce` — tier 2 beat 3). The ONLY link that is serialized; the three
+    /// below are derived from it by `linkBodies`, at the end of a parse and at
+    /// the end of a load, so a dump carries one number instead of four
+    /// mutually-consistent ones.
+    body: ?NodeId = null,
+    /// Set on the BODY node: who drives it — and, being non-null, the fact
+    /// that this node IS a body. A value arriving on one of the body's *bound*
+    /// inputs (`keep (> plane.threshold)`) must rouse the consumer, not the
+    /// body; `Runtime.markNode` is the single place that happens, which is why
+    /// there is no second "skip bodies" flag (see the note there).
+    body_of: ?NodeId = null,
+    /// Set on the BODY node: its open input slots, in port order. These are
+    /// what `args` fills.
+    body_open: []SlotId = &.{},
 };
 
 /// One deduplicated plane subscription and the input slots it feeds.
@@ -195,6 +210,36 @@ pub const Program = struct {
         const out = try alloc.alloc([]const SlotId, lists.len);
         for (lists, out) |*l, *o| o.* = l.items;
         self.downstream = out;
+        try self.linkBodies();
+    }
+
+    /// Derive every body link from the one that is serialized (`Node.body`).
+    /// Called at the end of a parse and at the end of a load, so a parsed
+    /// program and a restored one cannot disagree — the dump carries one
+    /// number and this rebuilds the other three from it.
+    pub fn linkBodies(self: *Program) !void {
+        for (self.nodes.items) |*n| {
+            n.body_of = null;
+            n.body_open = &.{};
+        }
+        for (self.nodes.items) |*n| {
+            const body_id = n.body orelse continue;
+            const b = &self.nodes.items[body_id];
+            b.body_of = n.id;
+            const bdef = self.reg.get(b.op);
+            var open = std.ArrayListUnmanaged(SlotId).empty;
+            for (b.inputs) |sid| {
+                const sl = &self.slots.items[sid];
+                if (sl.source != .none) continue;
+                // An unbound OPTIONAL port is absent, not open — it must not
+                // become a slot the consumer fills. Same rule the parser's
+                // arity check applies, derived from the same registry so a
+                // restored program cannot disagree with a parsed one.
+                if (sl.port < bdef.inputs.len and bdef.inputs[sl.port].optional) continue;
+                try open.append(self.a(), sid);
+            }
+            b.body_open = open.items;
+        }
     }
 
     /// Register one effect node's write targets from its statics — the ONE

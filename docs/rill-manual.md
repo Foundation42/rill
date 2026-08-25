@@ -450,7 +450,58 @@ One thing, one spelling.
 
 ---
 
-## 6d. Contracts — `expect` and `match`
+## 6d. Over arrays — bodies
+
+Three operators take a **body**: a section, which is an operator with
+ports left open.
+
+```rill
+plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats
+plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak
+plane.sensors.gate.contacts | map (.distance) | stats | set plane.ui.spread
+```
+
+| op | does | fills |
+|---|---|---|
+| `map <body>` | the body once per element, in order | 1 — the element |
+| `keep <pred>` | the elements the predicate says true for | 1 — the element |
+| `reduce <body> [init <v>]` | a left fold to one value | 2 — accumulator, then element |
+
+**There is no new syntax.** `(clamp 0 1)` is the `clamp` operator with
+its input left open; `(add)` leaves two open; `(.distance)` is the field
+read with its input left open. A body closes over nothing — it is not a
+lambda, and `{ }` is still a fan-out.
+
+**The consumer says how many arguments it supplies**, so a section with
+the wrong number of open ports is refused when you write it, naming the
+operator and both counts:
+
+> `'map' supplies 1 argument to its section, and this section leaves 2 ports open`
+
+**`reduce` folds left.** The accumulator fills the first open port and
+the element the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2`.
+With no `init` the first element seeds it; an empty array with no `init`
+is an error, because there is no honest value to invent — zero is right
+for `add` and wrong for `mul`.
+
+**Most map is free.** Math already broadcasts elementwise, so
+`window 10s | mul 2` *is* map. Reach for `map` when the body needs an
+argument or is a field read.
+
+**`keep` filters elements; `where` gates the stream.** Both apply to an
+array-valued stream and they mean different things:
+
+```rill
+plane.gpu.traversal_ms | window 10s | where plane.debug.on   // the window, while debug is on
+plane.gpu.traversal_ms | window 10s | keep (> 0)             // the readings above zero
+```
+
+That is why there are two words: one word dispatched by input kind would
+have to guess between two independent questions.
+
+---
+
+## 6e. Contracts — `expect` and `match`
 
 A shape on the wire, and the value either fits it or does not pass. An
 assertion, not a branch. Two words, because there are two different

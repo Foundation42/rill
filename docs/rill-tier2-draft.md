@@ -588,6 +588,9 @@ besides.
 | reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` (own beat) |
 | move a light through three points typed into a cell | ~~host verb only~~ **1 ✓ to STEP, not to travel** | 1 | ~~array literal~~ **landed, beat 2a**; `along` (beat 3) |
 | pick an exposure by time-of-day band | ~~`select` chain~~ **1 ✓** | 1 | ~~array literal, `choose`~~ **landed, beat 2a** |
+| any of these contacts armed? | can't | 1 | ~~`map`, `reduce`~~ **landed, beat 3a** — `map (.armed) \| reduce (or)` |
+| the loudest reading in the last 5s | `stats \| .max` (only because `stats` happens to carry it) | 1 | ~~`reduce`~~ **landed, beat 3a** — `window 5s \| reduce (max)` |
+| just the contacts that are armed | can't | 1 | ~~`keep`~~ **landed, beat 3a** — `keep (.armed)` |
 | nearest hostile from the contact list | invented sensor field | 1 | `sort by`, `first` (beat 3) |
 | top three threats | can't | 1 | `sort by`, `take` (beat 3) |
 | refuse a malformed contact list at the boundary | ~~silent~~ **1 ✓** | 1 | ~~`match`~~ **landed, beat 2b** |
@@ -601,6 +604,15 @@ missing support and the list says where.
 **Beat 1a's score: eight rows cleared, one row added and cleared, one
 row re-scored honestly downward.** The rows that moved from "can't" to
 one line are the register family's whole argument.
+
+**Beat 3a's score: three rows ADDED and cleared, and the addition is the
+point.** §7 said of `map` and `reduce`: *"both have excellent customers
+in §2.11's own bullet list that never made it onto §4. Beat 3 adds those
+rows or drops the words; it does not land them on the prose."* The rows
+above are those customers, written down before the words landed. They
+did not pre-exist, and saying so is the difference between admission
+rule 1 having teeth and having a loophole. `keep`'s row came the same
+way.
 
 **Beat 2b's score: both contract rows cleared.** They were the two rows
 whose "today" column read *silent* — a shape mismatch discovered
@@ -814,12 +826,40 @@ the tags beat.
    the runtime, the registry carries the answer and `evalNode` derives
    the behaviour, matching `class`/`ticks`/`routes`. Audited exhaustively
    both ways; one declarer.
-7. **Beat 3 — over arrays and records.** `map`/`reduce`/`sort`/`take`/
-   `keep`, `without`/`transpose`/`shuffle`, `along` with inline knots.
-   The names are already settled (§2.11, §2.12) — this beat builds them.
-8. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
+7. **Beat 3a — bodies: `map`, `keep`, `reduce`. ✅ BUILT 2026-08-25.**
+   The structural half. A section stops being *a node wired to the
+   consumer's stream* and becomes a **body the consumer drives per
+   element**, called through `EvalCtx.call`.
+
+   **Consumer-declared arity** (Chris's pin, 2026-08-25): `OpDef.body`
+   says how many arguments this operator supplies to its section — `map`
+   1, `reduce` 2 — and the consumer declares it because only the thing
+   about to fill the open ports knows how many it will fill. A mismatch
+   names the operator and **both counts**. It refuses at **parse**, which
+   is earlier than mount and therefore satisfies the pin strictly: a
+   section's arity is knowable from the text, and "loud earlier is always
+   allowed" is already the ledger's line.
+
+   Two mechanisms now wear `( )`, and what decides is the consumer's
+   declaration, never a lookahead at the section's text: `def.body > 0`
+   is a body; `def.body == 0` is the tier-1 predicate section (`where
+   (> 0)`), which mirrors the consumer's stream into its one open port
+   and rides the sweep unchanged. The crossing case is gated in one
+   program.
+
+   **Bodies are ONE operator** in beat 3a. `(.field)` is a section too —
+   the `project` operator with its port left open. A `def` as a body, and
+   a chained `(.pos.x)`, need a body to be a node *range* the caller
+   drives, which needs re-entrant evaluation; recorded as deferred, and
+   refused by name rather than mis-parsed. Every §2.11 customer is a
+   single-operator body.
+
+8. **Beat 3b — order and shape.** `sort`/`first`/`take`, `transpose`,
+   `shuffle`, `along` with inline knots. `without` stays cut (§4 has no
+   row).
+9. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
    `once`, `toggle`, `tally`, `above`, `distance`/`within`/`toward`.
-9. **Deferred to their own beats:** tracks as a tenant (with D),
+10. **Deferred to their own beats:** tracks as a tenant (with D),
    `beat` (needs tempo on the plane), `walk`, `spring`, `smooth`
    (needs the window-with-times shape), `group by`.
 

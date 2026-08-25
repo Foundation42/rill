@@ -1453,6 +1453,100 @@ fn indexEval(comptime arr_port: usize, comptime idx_port: usize) fn (*EvalCtx) E
 }
 
 // ---------------------------------------------------------------------------
+// Over arrays — `map`, `keep`, `reduce` (tier 2, beat 3a)
+//
+// All three drive a SECTION BODY: an operator with ports left open, called
+// once per element with the element in an open port. There is no new syntax —
+// rill already had sections — and no closure: a body closes over nothing, so
+// "called N times in a fixed order" is the entire contract.
+//
+// Most map is free (`window 10s | mul 2` IS map, since beat 1b). These are for
+// the cases broadcast cannot reach: a body with an argument, a predicate, and
+// a fold.
+// ---------------------------------------------------------------------------
+
+/// The array on port 0, unpacked, or a refusal naming the type word.
+fn arrayIn(ctx: *EvalCtx) EvalError![]const u8 {
+    const av = try raw(ctx, 0);
+    if (types.typeOfValue(av) != Tag.array) {
+        return ctx.refuse("{s}: '{s}' is {s}, not an array", .{ ctx.op.name, ctx.portName(0), describeTop(ctx, av) });
+    }
+    return innerOf(ctx, av);
+}
+
+/// `map <body>` — the body once per element, in order. A body that emits
+/// nothing is refused rather than dropping the element: `map` preserves
+/// length, and a map that silently shortened its array is exactly the kind of
+/// wrong picture nobody is told about. Dropping elements is `keep`.
+fn evalMap(ctx: *EvalCtx) EvalError!Emit {
+    var inner = struple.Packer.init(ctx.arena);
+    var r = struple.reader(try arrayIn(ctx));
+    var i: usize = 0;
+    while (r.nextView() catch return ctx.refuse("map: '{s}' is a malformed array", .{ctx.portName(0)})) |e| : (i += 1) {
+        var sub = struple.Packer.init(ctx.arena);
+        if (!try ctx.call(&.{e}, &sub)) {
+            return ctx.refuse("map: the body emitted nothing for element [{d}] — a map keeps the length; use 'keep' to drop elements", .{i});
+        }
+        inner.appendRaw(sub.bytes()) catch return ctx.refuse("map: the body produced something unencodable at [{d}]", .{i});
+    }
+    try ctx.out[0].appendArray(inner.bytes());
+    return Emit.first;
+}
+
+/// `keep <pred>` — the elements the predicate says true for, unchanged. A
+/// second word rather than `where` dispatched by kind: `where` gates a STREAM
+/// by a boolean stream, `keep` filters ELEMENTS by a section, and the crossing
+/// case (`window 10s | where plane.gate.open`) is real and must keep working.
+/// Two axes, so one word would have to guess — see the one-axis rule.
+fn evalKeep(ctx: *EvalCtx) EvalError!Emit {
+    var inner = struple.Packer.init(ctx.arena);
+    var r = struple.reader(try arrayIn(ctx));
+    var i: usize = 0;
+    while (r.nextView() catch return ctx.refuse("keep: '{s}' is a malformed array", .{ctx.portName(0)})) |e| : (i += 1) {
+        var sub = struple.Packer.init(ctx.arena);
+        if (!try ctx.call(&.{e}, &sub)) {
+            return ctx.refuse("keep: the predicate emitted nothing for element [{d}] — a predicate answers true or false", .{i});
+        }
+        const verdict = types.asBool(sub.bytes()) orelse
+            return ctx.refuse("keep: the predicate answered {s} for element [{d}], not a boolean", .{ describeTop(ctx, sub.bytes()), i });
+        if (verdict) inner.appendRaw(e) catch return ctx.refuse("keep: element [{d}] is unencodable", .{i});
+    }
+    try ctx.out[0].appendArray(inner.bytes());
+    return Emit.first;
+}
+
+/// `reduce <body> [init <v>]` — a LEFT fold (ruled 2026-08-25). The
+/// accumulator fills the body's first open port and the element the second, so
+/// `reduce (sub)` reads as the subtraction a reader expects. With no `init`
+/// the first element seeds; an empty array with no `init` is an error naming
+/// the operator, because there is no honest value to invent — zero is right
+/// for `add` and wrong for `mul`, and picking one is picking a rule.
+///
+/// Recomputed from the array every tick, in fixed order. An incremental
+/// running sum drifts in f32 and a recompute does not, and the ledger's line
+/// is that an expectation must be faithful to the implementation's arithmetic
+/// — so the implementation is the simple one and the gates can assert it.
+fn evalReduce(ctx: *EvalCtx) EvalError!Emit {
+    var r = struple.reader(try arrayIn(ctx));
+    var acc: ?[]const u8 = ctx.in[1]; // the `init` port, absent when unbound
+    var i: usize = 0;
+    while (r.nextView() catch return ctx.refuse("reduce: '{s}' is a malformed array", .{ctx.portName(0)})) |e| : (i += 1) {
+        if (acc == null) {
+            acc = e;
+            continue;
+        }
+        var sub = struple.Packer.init(ctx.arena);
+        if (!try ctx.call(&.{ acc.?, e }, &sub)) {
+            return ctx.refuse("reduce: the body emitted nothing at element [{d}] — a fold needs an answer every step", .{i});
+        }
+        acc = try ctx.arena.dupe(u8, sub.bytes());
+    }
+    const final = acc orelse return ctx.refuse("reduce: the array is empty and no 'init' was given — there is no answer to fold to", .{});
+    try splice(ctx, 0, final);
+    return Emit.first;
+}
+
+// ---------------------------------------------------------------------------
 // Contracts — `expect` and `match` (tier 2, beat 2b)
 //
 // One shape literal, two promises. `expect` asserts ONCE, at mount, and its
@@ -1904,6 +1998,13 @@ const CORE = [_]registry.OpDef{
     .{ .name = "array", .variadic = true, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Array construction [ a, b, c ] — a live tuple with positions instead of names.", .eval = evalArray },
     .{ .name = "nth", .inputs = &.{ p.in("in", Tag.array), p.in("i", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The i-th element, 0-based — `window 5s | nth 0`. Out of range is an error, never a clamp.", .eval = indexEval(0, 1) },
     .{ .name = "choose", .inputs = &.{ p.in("i", Tag.number), p.in("of", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "`nth` with the index piped — `plane.time.band | choose [0.2, 1, 0.6, 0.05]`. Pick one of these.", .eval = indexEval(1, 0) },
+    // tier 2, beat 3a — over arrays, driving a section body per element.
+    // `.reads` rather than `.pure`: a body may hold BOUND ports of its own
+    // (`keep (> plane.threshold)`), so the answer is not a function of this
+    // node's own ports alone — which is exactly what `pure` licences.
+    .{ .name = "map", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .help = "The body once per element, in order — `map (clamp 0 1)`. Keeps the length; use `keep` to drop.", .eval = evalMap },
+    .{ .name = "keep", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .help = "The elements a predicate says true for — `keep (> 0)`. Filters ELEMENTS; `where` gates the stream.", .eval = evalKeep },
+    .{ .name = "reduce", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("init", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .body = 2, .help = "Left fold — `reduce (add) [init 0]`. Accumulator fills the body's first open port, element the second; no init means the first element seeds.", .eval = evalReduce },
     // tier 2, beat 2b — contracts. One shape literal, two promises.
     .{ .name = "expect", .inputs = &.{p.opt("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .fails_mount = true, .help = "Assert a shape ONCE, at mount — `expect {id: string, distance: number} [exact]`. A mismatch refuses the mount. Costs nothing afterwards; never falls back to a runtime check.", .eval = evalExpect },
     .{ .name = "match", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Assert a shape on EVERY value — `match {id: string} [exact]`. A mismatch kills the wave and names the field and both sides.", .eval = evalMatch },

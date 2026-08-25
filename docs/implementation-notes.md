@@ -537,6 +537,80 @@ Built: one shape literal, two operators, and one new registry field.
   fails_mount audit is exhaustive both ways beside the class and ticks
   audits.
 
+## Tier 2, beat 3a — bodies: `map`, `keep`, `reduce` (2026-08-25)
+
+The structural half of beat 3. A section stops being *a node wired to the
+consumer's stream* and becomes a **body the consumer drives per element**.
+
+- **Consumer-declared arity** (Chris's pin). `OpDef.body` says how many
+  arguments this operator supplies to its section — `map` 1, `reduce` 2 —
+  and the *consumer* declares it because only the thing about to fill the
+  open ports knows how many it will fill. A mismatch names the operator
+  and both counts. It refuses at **parse**: a section's arity is knowable
+  from the text, parse precedes mount, and "loud earlier is always
+  allowed" is already the ledger's line. The pin said "at mount"; parse is
+  strictly stronger, and the difference is recorded rather than assumed.
+
+- **Two mechanisms, one bracket, and the consumer decides.** `def.body ==
+  0` is the tier-1 predicate section (`where (> 0)`): its one open port is
+  wired at parse to the consumer's own stream and the sweep evaluates it
+  like any node. `def.body > 0` is a body: no port, never swept, driven
+  through `EvalCtx.call`. Nothing looks at the section's text to decide —
+  the declaration does — which is the same discipline the shape literal
+  uses (`StaticKind.shape` dispatches, not `braceOpensRecord`).
+
+- **Open ≠ absent.** Inside a section an unbound *required* port is OPEN;
+  an unbound *optional* port is absent and is not counted. Both the
+  parser's arity check and `linkBodies`' `body_open` derive this from the
+  same registry, so a parsed program and a restored one cannot disagree.
+  Two mutations, one per site, and both bite.
+
+- **`callBody` is `evalNode` with the two ends replaced.** Inputs come
+  from the caller instead of the slots; the output goes to the caller
+  instead of propagating. Everything between — the op's own state, arena,
+  refusal detail — is identical, so a body refuses in exactly the words it
+  would use anywhere else (gated: `map (nth 0)` refuses as *`nth`*, not as
+  `map`).
+
+- **A body is not a closure, but it may hold bound ports.** `keep (>
+  plane.threshold)` is legal and live. A value arriving there must rouse
+  the **consumer**, because the body has no output anyone reads —
+  `markNode` redirects through `Node.body_of`.
+
+- **A dead guard, found by mutation and deleted.** `evalNode` also carried
+  `if (n.is_body) return;`. Removing it SURVIVED the whole suite: with
+  `markNode` the only writer of `dirty`, a body is never marked, so that
+  branch could not run. Per the ledger — *a mutation that survives and is
+  right is a finding about the code* — it was deleted with the reason at
+  the site, and `Node.is_body` went with it (`body_of != null` is the same
+  fact and is the load-bearing one). Belt-and-braces was the tempting
+  call; a check nothing can reach is a check nobody can trust.
+
+- **A body is ONE operator.** `(.field)` is a section too — `project` with
+  its port left open. A `def` as a body, and a chained `(.pos.x)`, would
+  need the caller to drive a node *range*, i.e. re-entrant evaluation of
+  the normal slot machinery; deferred, and **refused by name** rather than
+  mis-parsed. Every customer in draft §2.11 is a single-operator body.
+
+- **One number on the wire.** Only `Node.body` is serialized; `body_of`
+  and `body_open` are derived by `Program.linkBodies`, called at the end of
+  a parse and at the end of a load. Four mutually-consistent fields in a
+  dump is four chances to disagree.
+
+- **Three §4 rows were added BEFORE the words landed.** §7 said `map` and
+  `reduce` had customers in §2.11's prose that never reached §4, and that
+  beat 3 must add the rows or drop the words. The rows went in first. That
+  order is the whole difference between admission rule 1 having teeth and
+  having a loophole.
+
+- **Gates: 17 new (210 → 227), Debug and ReleaseFast. Mutations: 10/10
+  bitten** after the dead-guard deletion (9/10 before it, the survivor
+  being the finding above) — right-folding `reduce`, dropping the arity
+  check, dropping the `markNode` redirect, reversing `body_open`, `map`
+  dropping empty results, `keep` emitting the verdict instead of the
+  element, an empty `reduce` going silent, the body link unserialized, and
+  both open-vs-optional sites.
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no

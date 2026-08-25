@@ -1453,8 +1453,34 @@ const Parser = struct {
             if (bound[pi] != null) return self.fail(arg.tok, "port '{s}' of '{s}' bound twice", .{ arg.kw, op_name });
             bound[pi] = try self.bindArg(arg, ports[pi], op_name);
         }
+        // Sections. Two mechanisms, and the CONSUMER's declaration decides
+        // which — never a lookahead at the section's own text.
+        //
+        //   `def.body > 0`  the section is a BODY the operator drives per
+        //                   element (`map`, `keep`, `reduce`). It binds to no
+        //                   port and the sweep never evaluates it.
+        //   `def.body == 0` the tier-1 predicate section (`where (> 0)`),
+        //                   which mirrors the consumer's stream into its one
+        //                   open port and rides the sweep like any node.
+        //
+        // Both check arity against what the consumer says it supplies, and a
+        // predicate says 1 by construction.
+        var body_node: ?NodeId = null;
         for (stream_args) |arg| {
-            if (arg.kw.len > 0 or arg.kind != .section) continue;
+            if (arg.kind != .section) continue;
+            const want: usize = if (def.body > 0) def.body else 1;
+            const open = self.openPorts(target, arg.section_node);
+            if (open != want) {
+                return self.fail(arg.tok, "'{s}' supplies {d} argument{s} to its section, and this section leaves {d} port{s} open", .{
+                    op_name, want, if (want == 1) "" else "s", open, if (open == 1) "" else "s",
+                });
+            }
+            if (def.body > 0) {
+                if (body_node != null) return self.fail(arg.tok, "'{s}' drives one section body, and two were given", .{op_name});
+                body_node = arg.section_node;
+                continue;
+            }
+            if (arg.kw.len > 0) continue; // a keyword-bound predicate binds below
             const pi = for (ports, 0..) |port, i| {
                 if (bound[i] == null and port.ty == types.Tag.boolean) break i;
             } else return self.fail(arg.tok, "'{s}' has no free boolean port for a predicate", .{op_name});
@@ -1495,6 +1521,15 @@ const Parser = struct {
                     sources[i] = .none;
                     continue;
                 }
+                // Inside a section, a required port the author did not fill is
+                // not missing — it is OPEN, and open ports are what a section
+                // IS. `(add)` leaves two; `(clamp 0 1)` leaves one. How many
+                // are allowed is the consumer's declaration, checked where the
+                // consumer binds it, because only the consumer knows.
+                if (reserved_primary) {
+                    sources[i] = .none;
+                    continue;
+                }
                 return self.fail(op_tok, "port '{s}' of '{s}' is not bound", .{ port.name, op_name });
             };
             const val_ty = if (arg.kind == .section) self.sourceTy(target, arg.source) else arg.ty;
@@ -1510,11 +1545,21 @@ const Parser = struct {
             sources[i] = arg.source;
         }
 
-        const node_id = try self.makeNode(target, op_id, sources, statics, op_tok);
+        if (def.body > 0 and body_node == null) {
+            return self.fail(op_tok, "'{s}' needs a section body with {d} open port{s} — '{s} (…)'", .{
+                op_name, def.body, if (def.body == 1) "" else "s", op_name,
+            });
+        }
 
-        // Sections mirror the consumer's primary input.
+        const node_id = try self.makeNode(target, op_id, sources, statics, op_tok);
+        target.nodes.items[node_id].body = body_node;
+
+        // Predicate sections mirror the consumer's primary input. A BODY does
+        // not: its open ports are filled per element, at eval, by the operator
+        // that declared it — wiring them to a stream is exactly the thing a
+        // body is not.
         for (stream_args) |arg| {
-            if (arg.kind != .section) continue;
+            if (arg.kind != .section or def.body > 0) continue;
             if (ports.len == 0 or sources.len == 0) return self.fail(arg.tok, "'{s}' has no primary input for the predicate to read", .{op_name});
             const mirror = sources[0];
             switch (mirror) {
@@ -1651,6 +1696,22 @@ const Parser = struct {
             .port => |i| if (target.template) |t| t.ports[i].ty else types.Tag.any,
             .none => types.Tag.any,
         };
+    }
+
+    /// How many ports a section leaves OPEN: required inputs with no source.
+    /// An unbound *optional* port is not open — it is absent, which is a
+    /// different thing and must not be counted as a slot the consumer fills.
+    fn openPorts(self: *Parser, target: *Target, section_node: NodeId) usize {
+        const n = &target.nodes.items[section_node];
+        const def = self.reg.get(n.op);
+        var open: usize = 0;
+        for (n.inputs) |sid| {
+            const s = &target.slots.items[sid];
+            if (s.source != .none) continue;
+            if (s.port < def.inputs.len and def.inputs[s.port].optional) continue;
+            open += 1;
+        }
+        return open;
     }
 
     /// The section's first unbound input mirrors `mirror`. Plane mirrors also
@@ -1807,6 +1868,29 @@ const Parser = struct {
             },
             .lparen => {
                 _ = self.next();
+                // `(.field)` — a projection section, which is what `sort by`
+                // and `map` mostly want. It is the `project` operator with its
+                // one port left open, exactly like every other section; the
+                // spelling just skips the operator's name because a field read
+                // already has one.
+                if (self.peek().kind == .dot) {
+                    _ = self.next();
+                    const ft = self.next();
+                    if (ft.kind != .name) return self.fail(ft, "expected a field name after '.' in a section", .{});
+                    if (self.peek().kind == .dot) {
+                        return self.fail(self.peek(), "a section body is ONE operator — '(.{s}.…)' is two steps; name it with a 'def'", .{ft.text});
+                    }
+                    const proj_id = self.reg.find("project") orelse return self.fail(ft, "core operator 'project' is not registered", .{});
+                    const st = try self.a().alloc(registry.StaticVal, 1);
+                    st[0] = .{ .word = try self.a().dupe(u8, ft.text) };
+                    const srcs = try self.a().alloc(Source, 1);
+                    srcs[0] = .none;
+                    const pnode = try self.makeNode(target, proj_id, srcs, st, ft);
+                    const pclose = self.next();
+                    if (pclose.kind != .rparen) return self.fail(pclose, "expected ')' after '.{s}'", .{ft.text});
+                    const pouts = target.nodes.items[pnode].outputs;
+                    return .{ .kind = .section, .source = .{ .wire = pouts[0] }, .section_node = pnode, .tok = ft };
+                }
                 const op_tok = self.next();
                 if (op_tok.kind != .name and op_tok.kind != .sym) return self.fail(op_tok, "expected operator inside '(…)'", .{});
                 const res = try self.parseOpcall(target, op_tok, null, true);

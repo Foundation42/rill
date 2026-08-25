@@ -103,6 +103,12 @@ pub fn dump(rt: *const eval.Runtime, gpa: std.mem.Allocator) ![]u8 {
             var st_arr = struple.Packer.init(a);
             try st_arr.appendArray(st.bytes());
             try putEntry(&ne, a, "statics", st_arr.bytes());
+            // The ONE body link on the wire (tier 2 beat 3a). `is_body`,
+            // `body_of` and `body_open` are derived from it by
+            // `Program.linkBodies`, at the end of a parse and at the end of a
+            // load — one number instead of four that could disagree. Absent on
+            // a node that drives no body, so old dumps stay loadable.
+            if (n.body) |b| try putEntry(&ne, a, "body", try packInt(a, b));
             var nm = struple.Packer.init(a);
             try nm.appendMap(ne.items);
             try stream.appendRaw(nm.bytes());
@@ -258,6 +264,10 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
                 else => return error.Malformed,
             });
         }
+        const body: ?graph.NodeId = if (try mapGet(nm, scratch, "body")) |bv|
+            @intCast(try asInt(bv))
+        else
+            null;
         try prog.nodes.append(a, .{
             .id = node_id,
             .op = op_id,
@@ -265,6 +275,7 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
             .inputs = try loadIdArray(a, scratch, (try mapGet(nm, scratch, "in")) orelse return error.Malformed),
             .outputs = try loadIdArray(a, scratch, (try mapGet(nm, scratch, "out")) orelse return error.Malformed),
             .statics = statics.items,
+            .body = body,
         });
     }
 

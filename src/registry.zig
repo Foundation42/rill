@@ -233,6 +233,10 @@ pub const EvalCtx = struct {
     /// when the host mounted no wheel; `wake` then fails loud.
     wake_fn: ?*const fn (ctx: *anyopaque, deadline: Deadline) EvalError!void = null,
     wake_ctx: ?*anyopaque = null,
+    /// Drives this node's section body — see `call`. Null on every node that
+    /// declares no body.
+    call_fn: ?*const fn (ctx: *anyopaque, args: []const []const u8, out: *struple.Packer) EvalError!bool = null,
+    call_ctx: ?*anyopaque = null,
 
     pub fn write(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
         return self.write_fn(self.write_ctx, path, val, .value);
@@ -289,6 +293,19 @@ pub const EvalCtx = struct {
     pub fn wake(self: *EvalCtx, deadline: Deadline) EvalError!void {
         const f = self.wake_fn orelse return error.BadValue;
         return f(self.wake_ctx.?, deadline);
+    }
+
+    /// Run this operator's section body once, with `args` filling its open
+    /// ports in order, and append its output to `out`. Returns false when the
+    /// body emitted nothing (a body may eat a value, same as any operator).
+    ///
+    /// The body is a node the sweep skips; this is the only thing that drives
+    /// it, and it is driven N times per tick where N is however many elements
+    /// the consumer has. Bodies close over nothing and hold no state that
+    /// survives the call, so "N times in a fixed order" is the whole contract.
+    pub fn call(self: *EvalCtx, args: []const []const u8, out: *struple.Packer) EvalError!bool {
+        const f = self.call_fn orelse return self.refuse("{s}: no section body is attached", .{self.op.name});
+        return f(self.call_ctx.?, args, out);
     }
 };
 
@@ -386,6 +403,23 @@ pub const OpDef = struct {
     /// It says *fails the mount*, not *fails the tick*: after mount, this
     /// operator's refusals are ordinary refusals like everyone else's.
     fails_mount: bool = false,
+    /// **Consumer-declared section arity** (tier 2 beat 3, ruled 2026-08-25).
+    /// Non-zero means this operator takes a section body — `map (clamp 0 1)`,
+    /// `reduce (add)` — with exactly this many open ports, and the operator
+    /// drives it per element through `EvalCtx.call` rather than the sweep
+    /// evaluating it. `map` declares 1, `reduce` declares 2.
+    ///
+    /// The consumer declares the arity because the consumer is what knows it:
+    /// a section is an operator with ports left open, and only the thing about
+    /// to fill them knows how many it will supply. A mismatch is refused by
+    /// name, with both counts.
+    ///
+    /// Zero is the tier-1 predicate section (`where (> 0)`), which is a
+    /// different mechanism entirely: it mirrors the consumer's own STREAM into
+    /// the section's open port at parse time and the sweep evaluates it once
+    /// per tick like any other node. Both spellings are `( )`; what decides is
+    /// the consumer's declaration, never a lookahead.
+    body: u8 = 0,
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,

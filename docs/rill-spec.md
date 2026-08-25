@@ -450,6 +450,39 @@ deposits the pause never earned. Replay feeds the same time sequence, so determi
 untouched either way; this rule is the honest physics. A zero period is refused at the
 node — a metronome with no interval is a storm wearing a duration.
 
+### 3.15 Section bodies (v0.3, tier 2 beat 3a, 2026-08-25)
+
+A section — `(clamp 0 1)`, `(add)`, `(> 0)`, `(.distance)` — is an operator with ports left
+**open**. Inside a section an unbound *required* port is open rather than missing; an unbound
+*optional* port stays absent, which is a different thing and is not counted.
+
+Two mechanisms wear the same brackets, and **the consumer's declaration decides which** —
+never a lookahead at the section's own text:
+
+| `OpDef.body` | mechanism |
+|---|---|
+| `0` | **predicate section** (tier 1, `where (> 0)`). Its one open port is wired at parse to the consumer's own primary stream, and the sweep evaluates it like any node. |
+| `n > 0` | **body** (`map` 1, `reduce` 2). It binds to no port, the sweep never evaluates it, and the consumer drives it once per element through `EvalCtx.call`, filling its open ports in port order. |
+
+**Arity is declared by the consumer**, because only the thing about to fill the open ports
+knows how many it will fill. A mismatch is refused at parse — earlier than mount, which the
+ledger always permits — naming the operator and both counts.
+
+**A body closes over nothing**, but it may hold *bound* ports of its own
+(`keep (> plane.threshold)`). A value arriving there rouses the **consumer**, not the body:
+`Runtime.markNode` is the single writer of the dirty set and redirects through
+`Node.body_of`. That redirect is the whole mechanism for keeping bodies out of the sweep — a
+second guard in `evalNode` was written, survived its mutation because nothing could reach it,
+and was deleted.
+
+**A body is one operator** in v0.3. A `def` as a body, and a chained `(.pos.x)`, need the
+caller to drive a *range* of nodes, which needs re-entrant evaluation; both are refused by
+name rather than mis-parsed.
+
+Only `Node.body` is serialized; `body_of` and `body_open` are derived by
+`Program.linkBodies` at the end of a parse **and** at the end of a load, so a dump carries
+one number rather than several that could disagree.
+
 ### 3.13 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:
@@ -859,6 +892,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
 | record | record construction `{…}`, projection `.field`, `merge` |
 | array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
+| over arrays | `map <body>`, `keep <pred>`, `reduce <body> [init v]` — each drives a SECTION BODY per element; §3.15, tier 2 beat 3a |
 | contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |

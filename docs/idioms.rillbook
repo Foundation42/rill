@@ -490,6 +490,41 @@
    "markdown": true,
    "collapsed": false,
    "source": "## Shapes — what you write down on purpose\n\nThe engine's mismatch check (beat 1b) catches what you *didn't* anticipate.\n`expect` and `match` are where you write down what you did.\n\n```\n{id: string, distance: number}\n{pos: {x: number, y: number, z: number}, kind?: string}\n[number]\n{id: string} exact\n```\n\nThe type words are the same ones a refusal prints — `number`, `boolean`,\n`string`, `any` — so what the language says back to you and what you write\nare one vocabulary. `[T]` is an array of `T`, nesting is `{…}` inside `{…}`,\n`?` marks a field that may be absent, and `any` marks one that must be\npresent but may be anything.\n\n**Shapes are open by default.** Extra fields pass; `exact` closes them, and it\ncloses *every* record in the shape, not only the outermost — the word closes\nthe shape, and a closed outside with open insides is a promise nobody asked\nfor.\n\n**Where each belongs.** `expect` at the boundary with the plane, where the\nvalue is there at mount and you want the mount to fail loudly if the world\nisn't what you think. `match` after anything whose shape is only known on\narrival: a contact list, a record built from `window`, a host verb's result."
+  },
+  {
+   "name": "over-arrays-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Over arrays — the three rows §2.11 argued and §4 never listed\n\nThree asks that had excellent arguments in the design doc and no row on\nthe simple-things list, which under admission rule 1 means the words were\n**listed, not admitted**. Beat 3a wrote the rows down first, then landed\nthem — the order matters, because rule 1 without that order is a loophole.\n\n- *any of these contacts armed?* — couldn't be said\n- *the loudest reading in the last 5s* — only via `stats | .max`, which\n  happens to carry it\n- *just the contacts that are armed* — couldn't be said"
+  },
+  {
+   "name": "any-armed",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | map (.armed) | reduce (or) | set plane.ui.any_armed"
+  },
+  {
+   "name": "loudest-recent",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak"
+  },
+  {
+   "name": "keep-armed",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats"
+  },
+  {
+   "name": "bodies-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Bodies — a section is an operator with ports left open\n\n```rill\nplane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats\nplane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak\n```\n\n`(clamp 0 1)` is `clamp` with its input open. `(add)` leaves two open.\n`(.distance)` is the field read with its input open. There is **no new\nsyntax** and no closure: a body closes over nothing, `{ }` is still a\nfan-out, and `( )` was always a partial application.\n\n**The consumer says how many arguments it supplies** — `map` one, `reduce`\ntwo — so a section with the wrong number of open ports is refused when\nyou write it, naming the operator and both counts. Only the thing about\nto fill the ports knows how many it will fill.\n\n**`reduce` folds left**: accumulator into the first open port, element\ninto the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2 = 5`. No\n`init` means the first element seeds it. Empty with no `init` is an\nerror — zero is right for `add` and wrong for `mul`, and picking one is\npicking a rule.\n\n**Most map is free.** `window 10s | mul 2` *is* map, because math already\nbroadcasts. Reach for `map` when the body needs an argument or is a field\nread.\n\n**`keep` filters elements, `where` gates the stream.** Both apply to an\narray-valued stream and mean different things — which is exactly why one\nword dispatched by input kind would have had to guess."
   }
  ]
 }
