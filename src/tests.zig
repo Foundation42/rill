@@ -2672,3 +2672,13 @@ test "diagnostics: a path after a pipe names the forgotten `set`" {
         \\plane.hp | g.exposure
     , "did you forget `set`?");
 }
+
+test "paths: integer segments are legitimate — id-keyed rows parse" {
+    // The @ registry's mirrors are id-keyed (`plane.ents.1.pos`), and the
+    // tokenizer's trailing-dot rule already splits `1.pos` correctly.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "plane.ents.1.pos | set plane.debug.tom");
+    defer prog.deinit();
+    try testing.expectEqualStrings("plane.ents.1.pos", prog.subs.items[0].path);
+}

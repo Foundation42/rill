@@ -1036,7 +1036,17 @@ const Parser = struct {
                 const outs = &target.nodes.items[rec].outputs;
                 return .{ .kind = .stream, .source = .{ .wire = outs.*[0] }, .ty = types.Tag.record, .tok = head };
             }
-            if (seg.kind != .name) return self.fail(seg, "expected path segment after '.'", .{});
+            // A segment is a word OR a plain integer — id-keyed rows
+            // (`plane.ents.1.pos`, the @ registry's mirrors) are legitimate
+            // store shapes, and the tokenizer's trailing-dot rule already
+            // splits `1.pos` into `1` `.` `pos`.
+            const seg_ok = seg.kind == .name or (seg.kind == .number and blk: {
+                for (seg.text) |ch| {
+                    if (!std.ascii.isDigit(ch)) break :blk false;
+                }
+                break :blk true;
+            });
+            if (!seg_ok) return self.fail(seg, "expected path segment after '.'", .{});
             _ = self.next();
             try path.append(self.a(), '.');
             try path.appendSlice(self.a(), seg.text);
