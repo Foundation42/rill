@@ -99,6 +99,14 @@ fn feedValue(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8, value:
     try rt.feed(.{ .path = path, .value = enc });
 }
 
+/// Feed an OCCURRENCE — the kind that always propagates, identical bytes and
+/// all. A trigger pulled twice is two pulls.
+fn feedOcc(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8) !void {
+    const enc = try packOne(gpa, true);
+    defer gpa.free(enc);
+    try rt.feed(.{ .path = path, .value = enc, .kind = .occurrence });
+}
+
 const Fixture = struct {
     reg: rill.Registry,
     mock: rill.MockPlane,
@@ -2096,6 +2104,15 @@ test "every core op declares its class deliberately" {
         .{ .name = "transpose", .class = .pure },
         .{ .name = "shuffle", .class = .pure }, // seeded: same in, same out
         .{ .name = "along", .class = .pure },
+        .{ .name = "pulse", .class = .reads }, // fed time
+        .{ .name = "once", .class = .reads }, // own state: fired or not
+        .{ .name = "toggle", .class = .reads },
+        .{ .name = "tally", .class = .reads },
+        .{ .name = "above", .class = .reads }, // hysteresis is state
+        .{ .name = "noise", .class = .reads }, // fed time
+        .{ .name = "rand", .class = .reads }, // own draw counter
+        .{ .name = "distance", .class = .pure },
+        .{ .name = "within", .class = .pure },
         .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
         .{ .name = "merge", .class = .pure },
@@ -2161,6 +2178,8 @@ test "every core op declares whether it may tick" {
         // `hold` needs no wake at all: nothing happens at the end of its
         // window, the next arrival simply finds it expired.
         .{ .name = "hold", .ticks = false },
+        .{ .name = "pulse", .ticks = true }, // a value source on fed time
+        .{ .name = "noise", .ticks = true }, // as long as time is fed
         .{ .name = "wave", .ticks = false }, // pure shaper; ticks if its t does
         .{ .name = "range", .ticks = false },
         .{ .name = "shape", .ticks = false },
@@ -2761,7 +2780,9 @@ test "the manuals parse: every printed example compiles" {
     // trio and the keep-vs-where crossing pair.
     // 37 → 38 (beat 3b): the human manual's §6d gained the order-and-shape
     // quartet.
-    try testing.expectEqual(@as(usize, 38), human);
+    // 38 → 39 (beat 4): the human manual gained §6f (events, levels, noise
+    // and space).
+    try testing.expectEqual(@as(usize, 39), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -2799,6 +2820,11 @@ const accepts_anything = [_][]const u8{
     "=", "!=",
     "tag",
     "untag",
+    // `once` and `toggle` and `tally` move or count arrivals without reading
+    // them: any value is a legal thing to pass, flip on, or count.
+    "once", "toggle", "tally",
+    // `rand` reads only WHETHER it was roused, never what with.
+    "rand",
     // `array` packs its ports without reading them, exactly as `record` does:
     // every value is a legal element, and there is nothing left to refuse.
     "array",
@@ -4062,8 +4088,12 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // listed — written down first, then landed — plus the bodies page.
     // 33 → 36, 75 → 81 (beat 3b): the nearest-hostile after-cell (two lines,
     // and the note says why), top-three, and the three-points row finished.
-    try testing.expectEqual(@as(usize, 36), rill_cells);
-    try testing.expectEqual(@as(usize, 81), total);
+    // 36 → 45, 81 → 92 (beat 4): after-cells for the flash, the toggle, the
+    // kill count, night-falls, the torch, the drift, the idle pick, the
+    // camera shake (four lines, and the note says why), the mount fade-in —
+    // and the levels page.
+    try testing.expectEqual(@as(usize, 45), rill_cells);
+    try testing.expectEqual(@as(usize, 92), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -5571,4 +5601,679 @@ test "beat 3b: `along` refuses knots of different shapes, naming the field" {
     , .{.{ "plane.t", @as(f64, 0.5) }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "along", "same shape" });
+}
+
+// ---------------------------------------------------------------------------
+// Beat 4 — events, levels, noise, randomness, space.
+//
+// The shaping pin: LEVELS EMIT AT TICK 0, CROSSINGS BASELINE SILENTLY. A
+// program that reads a level must have one to read on its first evaluation;
+// a crossing nobody crossed is not an event.
+// ---------------------------------------------------------------------------
+
+test "beat 4a: `pulse` is a VALUE source and `every` is the occurrence source" {
+    // One node, one kind. An operator that both fired an occurrence AND held a
+    // value would be two operators sharing a name, and nothing downstream
+    // could tell which one it was talking to. Asserted from the registry, so a
+    // later edit to either declaration fails here rather than in a host.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    const pulse = reg.get(reg.find("pulse").?);
+    const every = reg.get(reg.find("every").?);
+    try testing.expectEqual(registry.PortKind.value, pulse.outputs[0].kind);
+    try testing.expectEqual(registry.PortKind.occurrence, every.outputs[0].kind);
+}
+
+test "beat 4a: `pulse` is 1 for its width and 0 for the rest of the period" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\pulse 1s width 100ms | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const at = struct {
+        fn go(f: *Fixture, ns: u64) !f64 {
+            try f.rt.tick(.{ .time_ns = ns });
+            return slotNum(f, "programs.p.pulse1.out.out").?;
+        }
+    }.go;
+
+    try testing.expectEqual(@as(f64, 1), try at(&fx, 0));
+    try testing.expectEqual(@as(f64, 1), try at(&fx, 50_000_000));
+    try testing.expectEqual(@as(f64, 0), try at(&fx, 100_000_000));
+    try testing.expectEqual(@as(f64, 0), try at(&fx, 900_000_000));
+    try testing.expectEqual(@as(f64, 1), try at(&fx, 1_000_000_000)); // next period
+    try testing.expectEqual(@as(f64, 0), try at(&fx, 1_200_000_000));
+}
+
+test "beat 4a: `pulse` width defaults to a tenth of the period" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\pulse 1s | set plane.a
+        \\pulse 1s width 100ms | set plane.b
+    , .{});
+    defer fx.deinit();
+
+    // Same programs, tick for tick — which is what "defaults to a tenth" means.
+    for ([_]u64{ 0, 50_000_000, 99_000_000, 100_000_000, 500_000_000, 1_050_000_000 }) |ns| {
+        try fx.rt.tick(.{ .time_ns = ns });
+        try testing.expectEqual(
+            slotNum(&fx, "programs.p.pulse2.out.out").?,
+            slotNum(&fx, "programs.p.pulse1.out.out").?,
+        );
+    }
+}
+
+test "beat 4a: `pulse` refuses a width on the other lane" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\pulse 1s width 3f | set plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "pulse", "different lanes" });
+}
+
+test "beat 4a: unpiped, `once` fires at tick 0 by §3.8 and never again" {
+    // Unpiped at the head, the value binds port 0 and is both rousing and
+    // payload — §3.8's rule, no new one. `tally` downstream counts how many
+    // times it actually fired, which is the only way to see "never again"
+    // rather than "emitted the same thing twice".
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\once 1 | tally | set plane.fires
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.tally1.out.out").?);
+    for ([_]u64{ 1_000_000_000, 2_000_000_000, 5_000_000_000 }) |ns| {
+        try fx.rt.tick(.{ .time_ns = ns });
+    }
+    // Still zero further arrivals: the literal was written once, at mount, and
+    // nothing ever marked the node again.
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.tally1.out.out").?);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.once1.out.out").?);
+}
+
+test "beat 4a: fade the exposure in over 2s on mount — one line, and it ticks" {
+    // §4's row, which read "can't (no `once`)". It turns out not to need
+    // `once` at all: `range` CLAMPS, so a clock scaled into 0..1 is a fade
+    // that finishes and stays finished.
+    //
+    // The cost is real and is why the row carries a note: this chain
+    // re-evaluates every frame forever, because `clock` does. The stopping
+    // spelling would be `once 1 | ramp 2s`, and it does not work — `ramp`
+    // baselines at its FIRST target, so it starts at 1 rather than fading to
+    // it. That gap is a fork (`ramp from`), not a thing to fake here.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\clock | div 2 | range 0 1 | set plane.render.grade.exposure
+    , .{});
+    defer fx.deinit();
+
+    const out = "programs.p.range1.out.out";
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+    try fx.rt.tick(.{ .time_ns = 1_000_000_000 });
+    try testing.expectEqual(@as(f64, 0.5), slotNum(&fx, out).?);
+    try fx.rt.tick(.{ .time_ns = 2_000_000_000 });
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+    // Clamped, not extrapolating — the fade is over and stays over.
+    try fx.rt.tick(.{ .time_ns = 9_000_000_000 });
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+}
+
+test "beat 4a: the finding — `ramp` cannot start a mount fade, and says so by doing" {
+    // Pinned as a fact rather than left as a comment: `ramp` baselines at its
+    // first target, so `once 1 | ramp 2s` is a jump. If someone gives `ramp` a
+    // `from` port, this gate is where the change announces itself.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\once 1 | ramp 2s | set plane.render.grade.exposure
+    , .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.ramp1.out.out").?);
+}
+
+test "beat 4a: piped, `once` passes the FIRST arrival and then goes deaf" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.trigger | once | set plane.out
+    , .{.{ "plane.trigger", @as(f64, 11) }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 11), slotNum(&fx, "programs.p.once1.out.out").?);
+    try feedValue(&fx.rt, testing.allocator, "plane.trigger", @as(f64, 22));
+    try fx.rt.tick(.{});
+    // Still the first one. A `once` that passed the latest would read 22 here,
+    // which is the only way this gate can fail.
+    try testing.expectEqual(@as(f64, 11), slotNum(&fx, "programs.p.once1.out.out").?);
+}
+
+test "beat 4a: toggle a light on a keypress — the row, one line" {
+    // §4's row, which was ~3 lines. Emits its initial `false` at mount (the
+    // level pin) and flips from the NEXT arrival on, so the value present at
+    // mount is not silently eaten as the first press.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key_l | toggle | set plane.lights.key.on
+    , .{.{ "plane.input.key_l", true }});
+    defer fx.deinit();
+
+    const out = "programs.p.toggle1.out.out";
+    try testing.expect(!types.asBool(fx.rt.readSlot(out).?).?);
+    for ([_]bool{ true, false, true }) |expect_on| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.input.key_l");
+        try fx.rt.tick(.{});
+        try testing.expectEqual(expect_on, types.asBool(fx.rt.readSlot(out).?).?);
+    }
+}
+
+test "beat 4a: count kills — the row, one line, and it starts at 0" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.kill | tally | set plane.ui.kills
+    , .{.{ "plane.events.kill", true }});
+    defer fx.deinit();
+
+    const out = "programs.p.tally1.out.out";
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+    for ([_]f64{ 1, 2, 3 }) |n| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.events.kill");
+        try fx.rt.tick(.{});
+        try testing.expectEqual(n, slotNum(&fx, out).?);
+    }
+}
+
+test "beat 4a: `tally` survives RESTORE and not REMOUNT" {
+    // The pin, and the distinction it rests on: restoring is resuming a
+    // program, remounting is starting one. The count lives in node state, so
+    // both answers fall out rather than being enforced anywhere.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.kill | tally | set plane.ui.kills
+    , .{.{ "plane.events.kill", true }});
+    defer fx.deinit();
+    for (0..3) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.events.kill");
+        try fx.rt.tick(.{});
+    }
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, "programs.p.tally1.out.out").?);
+
+    const dumped = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(dumped);
+
+    // Restore: resumed, so the count came with it.
+    var prog2 = try rill.loadProgram(testing.allocator, &fx.reg, dumped);
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
+    defer rt2.deinit();
+    try rill.restoreState(&rt2, dumped);
+    try testing.expectEqual(@as(f64, 3), types.asNumber(rt2.readSlot("programs.p.tally1.out.out").?).?);
+
+    // Remount: restarted, so it is 0 again.
+    var fx3: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx3,
+        \\plane.events.kill | tally | set plane.ui.kills
+    , .{.{ "plane.events.kill", true }});
+    defer fx3.deinit();
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx3, "programs.p.tally1.out.out").?);
+}
+
+test "beat 4a: night falls → lights on, and it does NOT chatter at dusk" {
+    // The row that put a correctness column on §4: a strict comparator scored
+    // ✓ at one line *and* flipped the light on and off across the threshold
+    // every frame. "A rather than B": this gate drives the exact oscillation
+    // where the two disagree and asserts the disagreement at every step.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.world.light | above 0.3 0.2 | set plane.lights.street.on
+        \\plane.world.light | < 0.3 | set plane.strict
+    , .{.{ "plane.world.light", @as(f64, 0.5) }});
+    defer fx.deinit();
+
+    const hyst = "programs.p.above1.out.out";
+    const strict = "programs.p.lt1.out.out";
+    // Bright: above the trip, so "night" is false either way.
+    try testing.expect(types.asBool(fx.rt.readSlot(hyst).?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot(strict).?).?);
+
+    // Dusk, wobbling either side of 0.3 — the sensor noise that caused this.
+    var flips_strict: usize = 0;
+    var flips_hyst: usize = 0;
+    var last_s = types.asBool(fx.rt.readSlot(strict).?).?;
+    var last_h = types.asBool(fx.rt.readSlot(hyst).?).?;
+    for ([_]f64{ 0.29, 0.31, 0.28, 0.32, 0.27, 0.31 }) |v| {
+        try feedValue(&fx.rt, testing.allocator, "plane.world.light", v);
+        try fx.rt.tick(.{});
+        const s = types.asBool(fx.rt.readSlot(strict).?).?;
+        const h = types.asBool(fx.rt.readSlot(hyst).?).?;
+        if (s != last_s) flips_strict += 1;
+        if (h != last_h) flips_hyst += 1;
+        last_s = s;
+        last_h = h;
+    }
+    // The strict comparator chattered; the hysteresis band did not move at all,
+    // because nothing ever got below 0.2.
+    try testing.expectEqual(@as(usize, 6), flips_strict);
+    try testing.expectEqual(@as(usize, 0), flips_hyst);
+
+    // …and it still releases when night actually falls past the release point.
+    try feedValue(&fx.rt, testing.allocator, "plane.world.light", @as(f64, 0.15));
+    try fx.rt.tick(.{});
+    try testing.expect(!types.asBool(fx.rt.readSlot(hyst).?).?);
+}
+
+test "beat 4a: `above` emits its LEVEL at mount, both ways" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.hi | above 0.3 0.2 | set plane.a
+        \\plane.lo | above 0.3 0.2 | set plane.b
+    , .{ .{ "plane.hi", @as(f64, 0.9) }, .{ "plane.lo", @as(f64, 0.1) } });
+    defer fx.deinit();
+
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.above1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.above2.out.out").?).?);
+}
+
+test "beat 4a: `above` refuses a release above the trip" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.v | above 0.2 0.3 | set plane.out
+    , .{.{ "plane.v", @as(f64, 0.5) }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "above", "hysteresis", "below the trip" });
+}
+
+/// An f32 bit pattern, for pinning noise. Values would let a different
+/// arithmetic order pass; bit patterns will not. `@floatCast` f64→f32 is exact
+/// here because the operator computed in f32 and widened exactly.
+fn bits32(v: f64) u32 {
+    return @bitCast(@as(f32, @floatCast(v)));
+}
+
+test "beat 4b: `noise` is pinned to its BIT PATTERNS, not to values" {
+    // The ledger's hardest line lands here: an expectation is faithful to the
+    // implementation's arithmetic or it is not an expectation. A float64
+    // oracle for f32 code is prose in numeric clothing, so this pins the
+    // exact f32 words the operator produced — which is also what makes
+    // "bit-identical across machines" a checkable claim rather than a hope.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 1s | set plane.n
+        \\noise 1s seed 7 | set plane.n7
+        \\noise 1s octaves 3 | set plane.n3
+    , .{});
+    defer fx.deinit();
+
+    const Case = struct { ns: u64, n: u32, n7: u32, n3: u32 };
+    for ([_]Case{
+        .{ .ns = 0, .n = 0x3F000000, .n7 = 0x3F000000, .n3 = 0x3F000000 },
+        .{ .ns = 250_000_000, .n = 0x3EB7636E, .n7 = 0x3F01906A, .n3 = 0x3ED6C002 },
+        .{ .ns = 500_000_000, .n = 0x3E8EEFAC, .n7 = 0x3F052BFC, .n3 = 0x3EBF6462 },
+        .{ .ns = 1_500_000_000, .n = 0x3F1CEA02, .n7 = 0x3EDB4F78, .n3 = 0x3F1085B8 },
+        .{ .ns = 3_700_000_000, .n = 0x3EA7C9EE, .n7 = 0x3F1C3E3F, .n3 = 0x3ED33E94 },
+    }) |c| {
+        try fx.rt.tick(.{ .time_ns = c.ns });
+        try testing.expectEqual(c.n, bits32(slotNum(&fx, "programs.p.noise1.out.out").?));
+        try testing.expectEqual(c.n7, bits32(slotNum(&fx, "programs.p.noise2.out.out").?));
+        try testing.expectEqual(c.n3, bits32(slotNum(&fx, "programs.p.noise3.out.out").?));
+    }
+}
+
+test "beat 4b: `noise` stays inside 0..1, and the seed decorrelates" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 300ms | set plane.a
+        \\noise 300ms seed 1 | set plane.b
+        \\noise 300ms seed 2 | set plane.c
+    , .{});
+    defer fx.deinit();
+
+    var differed: usize = 0;
+    var samples: usize = 0;
+    var ns: u64 = 0;
+    while (ns < 4_000_000_000) : (ns += 37_000_000) {
+        try fx.rt.tick(.{ .time_ns = ns });
+        samples += 1;
+        const a = slotNum(&fx, "programs.p.noise1.out.out").?;
+        const b = slotNum(&fx, "programs.p.noise2.out.out").?;
+        const c = slotNum(&fx, "programs.p.noise3.out.out").?;
+        for ([_]f64{ a, b, c }) |v| {
+            try testing.expect(v >= 0 and v <= 1);
+        }
+        if (a != b and b != c and a != c) differed += 1;
+    }
+    // Three seeds are three independent streams — the whole reason `seed` is
+    // "the decorrelator". Not EVERY sample differs: 1D gradient noise is zero
+    // at every lattice point, so all seeds meet at 0.5 there whatever their
+    // gradients. What matters is that they are apart nearly everywhere else.
+    // 108 of 109 as built. The one that matches is fed time zero — a lattice
+    // point, where 1D gradient noise is zero for every seed by construction.
+    try testing.expect(differed * 10 > samples * 9);
+}
+
+test "beat 4b: `noise` is SMOOTH — that is what separates it from `rand`" {
+    // Gradient noise, not white: consecutive samples a fraction of a period
+    // apart must be close. A hash-per-tick would pass a 0..1 range check and
+    // fail this.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 1s | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    var prev: ?f64 = null;
+    var ns: u64 = 0;
+    while (ns < 3_000_000_000) : (ns += 10_000_000) { // 1/100th of a period
+        try fx.rt.tick(.{ .time_ns = ns });
+        const v = slotNum(&fx, "programs.p.noise1.out.out").?;
+        if (prev) |p| try testing.expect(@abs(v - p) < 0.05);
+        prev = v;
+    }
+}
+
+test "beat 4b: `noise` is stateless — the same fed time gives the same value" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 1s | set plane.a
+        \\noise 1s | set plane.b
+    , .{});
+    defer fx.deinit();
+
+    // Two nodes, same declaration, same fed time — and no state to diverge.
+    var ns: u64 = 0;
+    while (ns < 2_000_000_000) : (ns += 130_000_000) {
+        try fx.rt.tick(.{ .time_ns = ns });
+        try testing.expectEqual(
+            slotNum(&fx, "programs.p.noise1.out.out").?,
+            slotNum(&fx, "programs.p.noise2.out.out").?,
+        );
+    }
+}
+
+test "beat 4b: `noise` refuses an octave count it cannot mean" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\noise 1s octaves 0 | set plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "noise", "octaves", "1 to 8" });
+}
+
+test "beat 4b: pick a random idle animation per trigger — the row, one line" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.idle | rand | mul 4 | floor | choose ["a", "b", "c", "d"] | set plane.anim.idle
+    , .{.{ "plane.events.idle", true }});
+    defer fx.deinit();
+
+    var seen = [_]bool{ false, false, false, false };
+    for (0..40) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.events.idle");
+        try fx.rt.tick(.{});
+        const pick = types.asString(fx.rt.readSlot("programs.p.choose1.out.out").?).?;
+        seen[pick[0] - 'a'] = true;
+    }
+    // Every branch reachable — a `rand` that returned a constant would pass a
+    // range check and fail this.
+    for (seen) |s| try testing.expect(s);
+}
+
+test "beat 4b: `rand` draws a fresh value per rousing and replays identically" {
+    const draw = struct {
+        fn go(out: *[6]f64) !void {
+            var fx: Fixture = undefined;
+            try mountFixture(testing.allocator, &fx,
+                \\plane.trigger | rand | set plane.out
+            , .{.{ "plane.trigger", true }});
+            defer fx.deinit();
+            for (out) |*slot| {
+                try feedOcc(&fx.rt, testing.allocator, "plane.trigger");
+                try fx.rt.tick(.{});
+                slot.* = slotNum(&fx, "programs.p.rand1.out.out").?;
+            }
+        }
+    }.go;
+
+    var a: [6]f64 = undefined;
+    var b: [6]f64 = undefined;
+    try draw(&a);
+    try draw(&b);
+    // Deterministic: the same arrivals give the same sequence, which is what
+    // "replay is bit-identical" requires of a random source.
+    try testing.expectEqualSlices(f64, &a, &b);
+    // …and it is a SEQUENCE, not one number repeated.
+    for (a) |v| try testing.expect(v >= 0 and v < 1);
+    try testing.expect(a[0] != a[1] and a[1] != a[2]);
+}
+
+test "beat 4b: `rand` seeds decorrelate, and 0 is the default" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.trigger | rand | set plane.a
+        \\plane.trigger | rand seed 0 | set plane.b
+        \\plane.trigger | rand seed 9 | set plane.c
+    , .{.{ "plane.trigger", true }});
+    defer fx.deinit();
+
+    var same_as_default: usize = 0;
+    var differed: usize = 0;
+    for (0..8) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.trigger");
+        try fx.rt.tick(.{});
+        const a = slotNum(&fx, "programs.p.rand1.out.out").?;
+        const b = slotNum(&fx, "programs.p.rand2.out.out").?;
+        const c = slotNum(&fx, "programs.p.rand3.out.out").?;
+        if (a == b) same_as_default += 1;
+        if (a != c) differed += 1;
+    }
+    try testing.expectEqual(@as(usize, 8), same_as_default); // seed 0 IS the default
+    try testing.expectEqual(@as(usize, 8), differed);
+}
+
+test "beat 4b: alarm when a raider is within 10m of the gate — the row, one line" {
+    // §4's row, which "needs `distance`". `within` is the question people
+    // actually ask, and it keeps the comparison from being written backwards.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
+    , .{
+        .{ "plane.entities.raider.pos", .{ .x = @as(f64, 0), .y = @as(f64, 0), .z = @as(f64, 30) } },
+        .{ "plane.gate.pos", .{ .x = @as(f64, 0), .y = @as(f64, 0), .z = @as(f64, 0) } },
+    });
+    defer fx.deinit();
+
+    const out = "programs.p.within1.out.out";
+    try testing.expect(!types.asBool(fx.rt.readSlot(out).?).?);
+
+    // The raider closes to 5m.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var pk = struple.Packer.init(a);
+    try pk.appendMap(&.{
+        .{ try packOne(a, "x"), try packOne(a, @as(f64, 3)) },
+        .{ try packOne(a, "y"), try packOne(a, @as(f64, 0)) },
+        .{ try packOne(a, "z"), try packOne(a, @as(f64, 4)) },
+    });
+    try fx.rt.feed(.{ .path = "plane.entities.raider.pos", .value = pk.bytes() });
+    try fx.rt.tick(.{});
+    try testing.expect(types.asBool(fx.rt.readSlot(out).?).?);
+}
+
+test "beat 4b: `distance` is euclidean over record{x, y, z}" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: 3, y: 0, z: 4} | distance {x: 0, y: 0, z: 0} | set plane.d
+        \\{x: 1, y: 2, z: 2} | within {x: 0, y: 0, z: 0} 3 | set plane.near
+        \\{x: 1, y: 2, z: 2} | within {x: 0, y: 0, z: 0} 2 | set plane.far
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 5), slotNum(&fx, "programs.p.distance1.out.out").?);
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.within1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.within2.out.out").?).?);
+}
+
+test "beat 4b: the spatial pair names the missing axis, on either side" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\{x: 1, y: 2} | distance {x: 0, y: 0, z: 0} | set plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "distance", "'a'", "no 'z'", "record{x, y, z}" });
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\{x: 1, y: 2, z: 3} | distance {x: 0, z: 0} | set plane.out
+    , .{});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "distance", "'b'", "no 'y'" });
+
+    var fx3: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx3,
+        \\plane.n | distance {x: 0, y: 0, z: 0} | set plane.out
+    , .{.{ "plane.n", @as(f64, 4) }});
+    defer fx3.deinit();
+    try expectRefusalNames(&.{ "distance", "number", "not record{x, y, z}" });
+}
+
+test "beat 4b: one PRNG family — `rand` and `shuffle` draw from the same generator" {
+    // Not three generators (ruled 2026-08-25). `noise` is a hash of lattice
+    // coordinates, which is a different job: a generator produces a sequence,
+    // a hash answers "what is the value AT this coordinate" and must answer
+    // the same way forever. Two mechanisms, two questions, no third.
+    //
+    // Asserted by construction: `rand`'s first draw on seed s must equal what
+    // xoshiro256++ seeded the same way produces, which is exactly what
+    // `shuffle` steps.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.trigger | rand seed 5 | set plane.out
+    , .{.{ "plane.trigger", true }});
+    defer fx.deinit();
+
+    var prng = std.Random.DefaultPrng.init(5);
+    try testing.expectEqual(prng.random().float(f64), slotNum(&fx, "programs.p.rand1.out.out").?);
+}
+
+
+// ---------------------------------------------------------------------------
+// Beat 4 close — the two ✓ rows §4 marked "re-probe at beat-4 close against a
+// noisy input". A ✓ means expressible; whether the one line is RIGHT is what
+// these assert. Now that `noise` exists, the noisy input can be the real
+// thing rather than a hand-written wobble.
+// ---------------------------------------------------------------------------
+
+test "beat 4 close: re-probe — dim the lamp as the fire dies, against noise" {
+    // The row scores ✓ at two lines. Driven by a real noisy reading, the naked
+    // version jitters and the smoothed version does not — so the ✓ holds only
+    // WITH the smoothing, which is what the second line is for. Asserted as
+    // the difference, not as "it works".
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 120ms as heat
+        \\heat | range 0.1 1 | set plane.raw
+        \\heat | ease 400ms | range 0.1 1 | set plane.lights.hearth.level
+    , .{});
+    defer fx.deinit();
+
+    var raw_swing: f64 = 0;
+    var eased_swing: f64 = 0;
+    var last_raw: ?f64 = null;
+    var last_eased: ?f64 = null;
+    var ns: u64 = 0;
+    while (ns < 3_000_000_000) : (ns += 16_000_000) { // ~60 fps
+        try fx.rt.tick(.{ .time_ns = ns });
+        const r = slotNum(&fx, "programs.p.range1.out.out").?;
+        const e = slotNum(&fx, "programs.p.range2.out.out").?;
+        if (last_raw) |p| raw_swing += @abs(r - p);
+        if (last_eased) |p| eased_swing += @abs(e - p);
+        last_raw = r;
+        last_eased = e;
+    }
+    // (The noise is a local name rather than a plane round-trip: a program may
+    // not write and subscribe to one path, and the cycle check says so. What
+    // is under test is noise rejection, not the plane.)
+    // The smoothed lamp travels a fraction of the distance the raw one does.
+    try testing.expect(raw_swing > 0.2); // there really was noise to reject
+    try testing.expect(eased_swing * 2 < raw_swing);
+}
+
+test "beat 4 close: re-probe — rate-limit a noisy sensor into a knob, against noise" {
+    // The row scores ✓ at one line with `sample`. What it promises is a WRITE
+    // RATE, not smoothness, so that is what gets measured: at most one change
+    // per period however fast the sensor moves.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 80ms as reading
+        \\reading | sample 200ms | set plane.ui.knob
+    , .{});
+    defer fx.deinit();
+
+    var changes: usize = 0;
+    var last: ?f64 = null;
+    var ns: u64 = 0;
+    while (ns <= 2_000_000_000) : (ns += 16_000_000) {
+        try fx.rt.tick(.{ .time_ns = ns });
+        const v = slotNum(&fx, "programs.p.sample1.out.out").?;
+        if (last) |p| {
+            if (v != p) changes += 1;
+        }
+        last = v;
+    }
+    // 2s at 200ms is ten periods; the sensor moved on all 126 frames.
+    try testing.expect(changes <= 11);
+    try testing.expect(changes >= 8); // …and it did keep up, rather than sticking
+}
+
+test "beat 4: the rest of §4's noise rows, each one line" {
+    // flicker a torch · let the grade drift over a minute · shake the camera
+    // on impact · flash a light on an event · fly the camera along the intro
+    // path. Each was "can't" before this beat.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 80ms | range 0.6 1 | set plane.lights.torch.level
+        \\noise 20s | range 0.9 1.1 | set plane.render.grade.exposure
+        \\noise 40ms seed 1 as sx
+        \\noise 40ms seed 2 as sy
+        \\noise 40ms seed 3 as sz
+        \\{x: sx, y: sy, z: sz} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake
+        \\pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level
+        \\clock | div 8 | range 0 1 | along [{x: 0, y: 2, z: 0}, {x: 5, y: 2, z: 1}, {x: 9, y: 3, z: 0}] | set plane.camera.pos
+    , .{});
+    defer fx.deinit();
+
+    try fx.rt.tick(.{ .time_ns = 500_000_000 });
+
+    // The torch flickers inside the band it was given.
+    const torch = slotNum(&fx, "programs.p.range1.out.out").?;
+    try testing.expect(torch >= 0.6 and torch <= 1);
+
+    // Three seeds make three independent shake axes — one seed would shake
+    // the camera along a diagonal, which is the bug this row is about.
+    //
+    // It costs FOUR lines, not the 2–3 §4 estimated, and the extra ones are
+    // `as` bindings: a record field value may be a literal, a path, a name, a
+    // record or an array — never an operator call. So a record built from
+    // three computed streams needs a name per stream. Scored honestly and
+    // raised as a fork rather than rounded down.
+    const shake = fx.rt.readSlot("programs.p.mul1.out.out").?;
+    const f = try recordFields(testing.allocator, shake);
+    defer freeFields(testing.allocator, f);
+    try testing.expectEqual(@as(usize, 3), f.len);
+    try testing.expect(f[0].v != f[1].v and f[1].v != f[2].v);
+    for (f) |axis| try testing.expect(@abs(axis.v) <= 0.1);
+
+    // The strobe is an envelope, not a rectangle: `pulse` makes the event and
+    // `ease up down` gives it an attack and a decay.
+    const strobe = slotNum(&fx, "programs.p.ease1.out.out").?;
+    try testing.expect(strobe > 0 and strobe < 1);
+
+    // The camera is somewhere along its path, as a position.
+    const pos = fx.rt.readSlot("programs.p.along1.out.out").?;
+    try testing.expectEqual(types.Tag.record, types.typeOfValue(pos));
 }

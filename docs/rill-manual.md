@@ -590,6 +590,56 @@ where you write down what you did.
 
 ---
 
+## 6f. Events, levels, noise and space
+
+```rill
+plane.input.key_l | toggle | set plane.lights.key.on
+plane.events.kill | tally | set plane.ui.kills
+plane.world.light | above 0.3 0.2 | set plane.lights.street.on
+noise 80ms | range 0.6 1 | set plane.lights.torch.level
+plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
+```
+
+| op | does |
+|---|---|
+| `pulse <period> [width <w>]` | a **value**: 1 for `width`, else 0, once per period. `width` defaults to a tenth |
+| `once` | pass the first value, then deaf until remount |
+| `toggle` | flip a boolean on each arrival |
+| `tally` | running count of arrivals, as a value |
+| `above <on> <off>` | boolean with **hysteresis**: true past `on`, false past `off` |
+| `noise <period> [octaves <n>] [seed <s>]` | smooth noise in 0..1 over fed time |
+| `rand [seed <s>]` | a fresh value in 0..1 per rousing |
+| `distance <a> <b>` · `within <a> <b> <r>` | over `record{x, y, z}` on both sides |
+
+**Levels emit at mount; crossings do not.** `above` publishes its level
+straight away, `toggle` its initial `false`, `tally` its `0` — a program
+that reads a level must have one to read on its first evaluation.
+`dropped_below`, `rose_above` and `edge` do the opposite and stay silent
+on their first observation, because a crossing nobody crossed is not an
+event.
+
+**`above` is what stops a threshold chattering.** `above 0.3 0.2` reads
+as "above 0.3, until below 0.2". A plain `< 0.3` on a noisy dusk reading
+switches the lights on and off every frame; the band does not.
+
+**`pulse` is a value and `every` is an occurrence.** One node, one kind.
+`pulse` is the rectangle you shape (`pulse 2s width 60ms | ease 10ms
+down 300ms` is a flash with an attack and a decay); `every` is the
+metronome you hang effects off.
+
+**Noise is seeded, and the seed is the decorrelator.** Same seed and
+period means the same stream, in every program and every replay — so two
+torches on one seed flicker together, and three shake axes on seeds 1, 2
+and 3 are independent. The default is 0, so the naive program is already
+deterministic. `noise 80ms` flickers; `noise 20s` drifts.
+
+**`rand` and `shuffle` share one generator; `noise` is a hash.** That is
+two mechanisms for two questions: a generator produces a *sequence*, and
+a hash answers "what is the value at this coordinate" the same way
+forever.
+
+---
+
 ## 7. Fields and the sigils
 
 Four sigils name four rows of the world:

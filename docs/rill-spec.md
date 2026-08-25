@@ -924,6 +924,8 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
 | over arrays | `map <body>`, `keep <pred>`, `reduce <body> [init v]` — each drives a SECTION BODY per element; §3.15, tier 2 beat 3a |
 | order & shape | `sort [by <body>] [desc]` (stable), `first`, `take <n> [from <i>]`, `transpose`, `shuffle [seed <s>]`, `along <knots>` — tier 2 beat 3b |
+| events & levels | `pulse` (value source), `once`, `toggle`, `tally`, `above <on> <off>` (hysteresis) — tier 2 beat 4a |
+| noise & space | `noise <period> [octaves] [seed]`, `rand [seed]`, `distance`, `within` — tier 2 beat 4b |
 | contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |
@@ -960,6 +962,29 @@ so mount-fatality cannot be acquired by being hard-coded somewhere; `evalNode` d
 behaviour and the audit is exhaustive both ways. The words reach `error_fn` *before* the
 mount unwinds — the ack carries the message, the error carries the verdict. After mount,
 a `fails_mount` operator's refusals are ordinary refusals.
+
+**Levels emit at tick 0; crossings baseline silently (ruled 2026-08-25, tier 2 beat 4).** A
+LEVEL operator publishes its answer on its first evaluation — `above` its hysteresis state
+(`in >= on` is true), `toggle` its initial `false`, `tally` its `0` — because a program that
+reads a level must have one to read at mount, and "nothing yet" is not a level. A CROSSING
+operator does the opposite: `dropped_below`, `rose_above` and `edge` record their first
+observation and emit nothing, because a crossing nobody crossed is not an event. The two
+rules are complementary, not inconsistent, and which one an operator follows is decided by
+what it publishes.
+
+**One node, one kind (same ruling).** `pulse` is a value source (1 for `width`, else 0, once
+per period); `every` is the occurrence source. An operator that both fired an occurrence and
+held a value would be two operators sharing a name, and nothing downstream could tell which
+one it was talking to.
+
+**One PRNG family (same ruling).** `rand` and `shuffle` draw from xoshiro256++; `noise` is a
+hash of lattice coordinates. Two mechanisms for two questions — a generator produces a
+sequence, a hash answers "what is the value at this coordinate" and must answer the same way
+forever — and no third. `noise` computes in f32 in a fixed order and widens exactly; its
+gates pin f32 bit patterns, not values, which is what makes "bit-identical across machines"
+checkable. Gradients are taken continuously from the hash rather than as ±1: two-valued
+gradients give a lattice cell only four possible shapes, so two seeds coincide one time in
+four and the seed stops decorrelating.
 
 **Threshold boundaries (corrected 2026-08-24).** `dropped_below t` fires crossing from ≥t to
 <t; `rose_above t` fires crossing from ≤t to >t. Each is strict on the comparison it names,

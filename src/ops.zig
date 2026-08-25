@@ -1453,6 +1453,317 @@ fn indexEval(comptime arr_port: usize, comptime idx_port: usize) fn (*EvalCtx) E
 }
 
 // ---------------------------------------------------------------------------
+// Noise, randomness, space (tier 2, beat 4b)
+//
+// **One PRNG family, not three** (ruled 2026-08-25). `rand` and `shuffle`
+// both draw from xoshiro256++; `noise` is a hash of lattice coordinates, which
+// is a different job — a generator produces a *sequence*, a hash answers "what
+// is the value AT this coordinate" and must answer the same way forever. Two
+// mechanisms because there are two questions, and no third.
+// ---------------------------------------------------------------------------
+
+/// The integer lattice hash. No `sin`-based hashes, ever: they are
+/// float-precision-dependent and differ between machines and optimisation
+/// levels, which is exactly the property noise must not have. This is
+/// splitmix64's finaliser over the mixed coordinate — integer in, integer
+/// out, bit-identical everywhere.
+fn latticeHash(cell: i64, seed: u64) u64 {
+    var x: u64 = @bitCast(cell);
+    x = x *% 0x9E3779B97F4A7C15;
+    x ^= seed *% 0xBF58476D1CE4E5B9;
+    x ^= x >> 30;
+    x = x *% 0xBF58476D1CE4E5B9;
+    x ^= x >> 27;
+    x = x *% 0x94D049BB133111EB;
+    x ^= x >> 31;
+    return x;
+}
+
+/// A lattice gradient in [-1, 1), from the hash's top 24 bits — the width an
+/// f32 mantissa holds exactly, so the division is lossless and the same
+/// everywhere.
+///
+/// Continuous, not ±1. The two-valued form is the textbook 1D gradient and it
+/// is wrong here: with two gradients a cell has only four possible shapes, so
+/// two seeds produce an *identical* cell one time in four and `seed` stops
+/// being the decorrelator §2.8 promises. Found by the gate that counts how
+/// often three seeds disagree — 32 samples in 109, where it should be nearly
+/// all of them.
+fn latticeGradient(cell: i64, seed: u64) f32 {
+    const h = latticeHash(cell, seed);
+    const unit: f32 = @as(f32, @floatFromInt(h >> 40)) / 16777216.0;
+    return unit * 2.0 - 1.0;
+}
+
+/// Perlin's quintic fade, 6t⁵ − 15t⁴ + 10t³ — zero first AND second derivative
+/// at both ends, which is what keeps the lattice invisible.
+fn fade(t: f32) f32 {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+/// One octave of 1D gradient noise at `t` lattice units, in [-0.5, 0.5].
+fn perlin1(t: f32, seed: u64) f32 {
+    const fl = @floor(t);
+    const i: i64 = @intFromFloat(fl);
+    const u = t - fl;
+    const g0 = latticeGradient(i, seed);
+    const g1 = latticeGradient(i + 1, seed);
+    const f = fade(u);
+    return (1.0 - f) * (g0 * u) + f * (g1 * (u - 1.0));
+}
+
+/// `noise <period> [octaves <n>] [seed <s>]` — smooth noise in 0..1 over fed
+/// time. Stateless: a pure function of (seed, period, octaves, t), so it is
+/// not a register and it replays for free.
+///
+/// **All arithmetic is f32 in a fixed order, then widened exactly.** The
+/// ledger's line — an expectation is faithful to the implementation's
+/// arithmetic or it is not an expectation — bites hardest here, so the gates
+/// pin f32 BIT PATTERNS rather than values. `@floatCast` from f32 to f64 is
+/// exact, so the widening adds nothing to check.
+///
+/// **The normalisation is fixed, not a knob.** One octave lands in
+/// [-0.5, 0.5]; `octaves` stacks halved periods at halved amplitude (gain ½,
+/// lacunarity 2), so the sum lands in ±½·Σgainᵏ. Dividing by 2·Σgainᵏ and
+/// adding ½ is the whole of it, and the divisor is decided by `octaves` alone.
+fn evalNoise(ctx: *EvalCtx) EvalError!Emit {
+    const d = try dur(ctx, 0);
+    const period = try periodOf(d);
+    const octaves: u32 = if (ctx.in[1] == null) 1 else blk: {
+        const f = try num(ctx, 1);
+        if (!std.math.isFinite(f) or f != @floor(f) or f < 1 or f > 8) {
+            return ctx.refuse("noise: 'octaves' is {d} — a whole number from 1 to 8", .{f});
+        }
+        break :blk @intFromFloat(f);
+    };
+    const seed: u64 = if (ctx.in[2] == null) 0 else blk: {
+        const f = try num(ctx, 2);
+        if (!std.math.isFinite(f) or f != @floor(f) or f < 0) {
+            return ctx.refuse("noise: 'seed' is {d} — a seed is a whole number from 0", .{f});
+        }
+        break :blk @intFromFloat(f);
+    };
+    const now = ctx.nowOn(d.frames);
+    var st = RegState.read(ctx);
+    if (!st.started) st = .{ .frames = d.frames, .at = now, .started = true };
+    try st.write(ctx);
+    try armNextTick(ctx, d.frames);
+
+    const t: f32 = @floatCast(elapsed(d.frames, st.at, now) / period);
+    var sum: f32 = 0;
+    var amp: f32 = 1;
+    var total: f32 = 0;
+    var freq: f32 = 1;
+    var k: u32 = 0;
+    while (k < octaves) : (k += 1) {
+        sum += amp * perlin1(t * freq, seed +% k);
+        total += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    const unit: f32 = 0.5 + sum / (2.0 * total);
+    // f32 → f64 is exact; the clamp is a guard on the arithmetic above, not a
+    // second opinion about the range.
+    return emitF64(ctx, @min(1.0, @max(0.0, @as(f64, @floatCast(unit)))));
+}
+
+/// `rand [seed <s>]` — white noise: a fresh value in 0..1 on every rousing.
+/// Same generator as `shuffle` (xoshiro256++), advanced by a draw counter in
+/// node state, so a replay of the same arrivals gives the same sequence.
+fn evalRand(ctx: *EvalCtx) EvalError!Emit {
+    _ = try raw(ctx, 0);
+    const seed: u64 = if (ctx.in[1] == null) 0 else blk: {
+        const f = try num(ctx, 1);
+        if (!std.math.isFinite(f) or f != @floor(f) or f < 0) {
+            return ctx.refuse("rand: 'seed' is {d} — a seed is a whole number from 0", .{f});
+        }
+        break :blk @intFromFloat(f);
+    };
+    const st = ctx.state.items;
+    const drawn: u64 = if (st.len >= 8) std.mem.readInt(u64, st[0..8], .little) else 0;
+    if (st.len >= 8 and !ctx.in_fresh[0]) return Emit.none;
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, drawn + 1, .little);
+    try ctx.setState(&buf);
+    // The draw counter is folded into the seed rather than the generator being
+    // carried across ticks: a PRNG's internal state is 32 bytes and a counter
+    // is 8, and re-seeding per draw makes a restore land on the same number
+    // the live program would have produced.
+    var prng = std.Random.DefaultPrng.init(seed +% drawn *% 0x9E3779B97F4A7C15);
+    return emitF64(ctx, prng.random().float(f64));
+}
+
+/// One axis of a position record, refusing by name. `record{x, y, z}` on both
+/// sides is the contract (ruled 2026-08-25) — the spatial pair does not guess
+/// at 2D, and a missing axis says which one.
+fn axis(ctx: *EvalCtx, port: usize, which: []const u8) EvalError![3]f64 {
+    const v = try raw(ctx, port);
+    if (types.typeOfValue(v) != Tag.record) {
+        return ctx.refuse("{s}: '{s}' is {s}, not record{{x, y, z}}", .{ ctx.op.name, which, describeTop(ctx, v) });
+    }
+    const m = struple.MapView.init(try innerOf(ctx, v));
+    var out: [3]f64 = undefined;
+    inline for (.{ "x", "y", "z" }, 0..) |name, i| {
+        var kp = struple.Packer.init(ctx.arena);
+        try kp.appendString(name);
+        const cell = (m.get(kp.bytes()) catch null) orelse
+            return ctx.refuse("{s}: '{s}' is {s} and has no '{s}' — a position is record{{x, y, z}}", .{ ctx.op.name, which, describeTop(ctx, v), name });
+        out[i] = types.asNumber(cell) orelse
+            return ctx.refuse("{s}: '{s}.{s}' is {s}, not a number", .{ ctx.op.name, which, name, describeTop(ctx, cell) });
+    }
+    return out;
+}
+
+fn separation(ctx: *EvalCtx) EvalError!f64 {
+    const a = try axis(ctx, 0, ctx.portName(0));
+    const b = try axis(ctx, 1, ctx.portName(1));
+    const dx = a[0] - b[0];
+    const dy = a[1] - b[1];
+    const dz = a[2] - b[2];
+    return @sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+fn evalDistance(ctx: *EvalCtx) EvalError!Emit {
+    return emitF64(ctx, try separation(ctx));
+}
+
+/// `within <b> <r>` — the question people actually ask, and the one that keeps
+/// a `distance | < r` chain from being written with the comparison backwards.
+fn evalWithin(ctx: *EvalCtx) EvalError!Emit {
+    const d = try separation(ctx);
+    const r = try num(ctx, 2);
+    try ctx.out[0].appendBool(d <= r);
+    return Emit.first;
+}
+
+// ---------------------------------------------------------------------------
+// Events and levels (tier 2, beat 4a)
+//
+// The pin that shapes this family: **levels emit at tick 0, crossings baseline
+// silently.** `above` publishes its level at mount, `toggle` its initial
+// `false`, `tally` its `0` — because a program that reads a level must have
+// one to read on its first evaluation, and "nothing yet" is not a level. The
+// crossing detectors (`dropped_below`, `rose_above`, `edge`) do the opposite
+// and stay silent on their first observation, because a crossing that nobody
+// crossed is not an event.
+// ---------------------------------------------------------------------------
+
+/// `pulse <period> [width <w>]` — a VALUE source: 1 while inside the pulse,
+/// 0 otherwise, once per period (ruled 2026-08-25). `every` remains the
+/// occurrence source. One node, one kind: an operator that emitted an
+/// occurrence AND held a value would be two operators sharing a name, and
+/// nothing downstream could tell which one it was talking to.
+///
+/// `width` defaults to a tenth of the period — a flash, not a square wave
+/// (`lfo square` is the square wave). Fixed, like `octaves`' gain and
+/// lacunarity: a default that is a number rather than a knob.
+fn evalPulse(ctx: *EvalCtx) EvalError!Emit {
+    const d = try dur(ctx, 0);
+    const period = try periodOf(d);
+    const width = if (ctx.in[1] == null) period / 10.0 else blk: {
+        const w = try dur(ctx, 1);
+        if (w.frames != d.frames) {
+            return ctx.refuse("pulse: 'period' and 'width' are on different lanes — a frame width cannot measure a real-time period", .{});
+        }
+        break :blk try periodOf(w);
+    };
+    const now = ctx.nowOn(d.frames);
+    var st = RegState.read(ctx);
+    if (!st.started) st = .{ .frames = d.frames, .at = now, .started = true };
+    try st.write(ctx);
+    try armNextTick(ctx, d.frames);
+    const t = elapsed(d.frames, st.at, now);
+    const phase = t - @floor(t / period) * period;
+    return emitF64(ctx, if (phase < width) 1 else 0);
+}
+
+/// `once` — pass the first value and then go deaf until remount.
+///
+/// Unpiped at the head of a statement it is **§3.8's rule and no new one**:
+/// the value binds port 0 and is both rousing and payload, so `once 1 | ramp
+/// 2s` fires at tick 0 and never again — a literal source is written at mount
+/// and nothing ever marks the node afterwards. Piped, it passes the first
+/// arrival. The state is what makes "never again" true even when something
+/// downstream ticks and drags the node along.
+fn evalOnce(ctx: *EvalCtx) EvalError!Emit {
+    if (ctx.state.items.len > 0 and ctx.state.items[0] == 1) return Emit.none;
+    try ctx.setState(&.{1});
+    try splice(ctx, 0, try raw(ctx, 0));
+    return Emit.first;
+}
+
+/// `toggle` — flip a boolean on each arrival. Emits its initial `false` at
+/// tick 0 (the level pin) and flips from the NEXT arrival on, so the value at
+/// mount is not silently consumed as the first press.
+fn evalToggle(ctx: *EvalCtx) EvalError!Emit {
+    _ = try raw(ctx, 0); // require an input; a toggle with no switch is nothing
+    const st = ctx.state.items;
+    if (st.len == 0) {
+        try ctx.setState(&.{0});
+        try ctx.out[0].appendBool(false);
+        return Emit.first;
+    }
+    if (!ctx.in_fresh[0]) return Emit.none;
+    const next = st[0] == 0;
+    try ctx.setState(&.{@intFromBool(next)});
+    try ctx.out[0].appendBool(next);
+    return Emit.first;
+}
+
+/// `tally` — running count of arrivals, as a value. Emits `0` at tick 0 (the
+/// level pin) and counts from the next arrival on.
+///
+/// It does NOT survive remount, and that falls out rather than being enforced:
+/// the count lives in node state, and a remount is a fresh parse and a fresh
+/// mount with no state to inherit. A dump/restore DOES carry it, which is the
+/// difference between restarting a program and resuming one.
+fn evalTally(ctx: *EvalCtx) EvalError!Emit {
+    _ = try raw(ctx, 0);
+    const st = ctx.state.items;
+    if (st.len < 8) {
+        var buf: [8]u8 = undefined;
+        std.mem.writeInt(u64, &buf, 0, .little);
+        try ctx.setState(&buf);
+        return emitF64(ctx, 0);
+    }
+    if (!ctx.in_fresh[0]) return Emit.none;
+    const n = std.mem.readInt(u64, st[0..8], .little) + 1;
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, n, .little);
+    try ctx.setState(&buf);
+    return emitF64(ctx, @floatFromInt(n));
+}
+
+/// `above <on> <off>` — a boolean with hysteresis: true once the input rises
+/// past `on`, false once it drops past `off`. `above 0.3 0.2` reads as "above
+/// 0.3, until below 0.2".
+///
+/// This is the operator §4's "night falls → lights on" row needed. A strict
+/// comparator scored ✓ at one line *and chattered at dusk* — the light
+/// switching on and off across the threshold every frame — which is the
+/// finding that put a correctness column on the list.
+///
+/// It emits its LEVEL at mount: `in >= on` is true, anything else false. A
+/// level with no value on its first evaluation is not a level, and the
+/// threshold band makes the mount answer a real choice rather than a
+/// crossing's silent baseline.
+fn evalAbove(ctx: *EvalCtx) EvalError!Emit {
+    const v = try num(ctx, 0);
+    const on = try num(ctx, 1);
+    const off = try num(ctx, 2);
+    if (off > on) {
+        return ctx.refuse("above: 'off' ({d}) is above 'on' ({d}) — hysteresis needs the release below the trip", .{ off, on });
+    }
+    const st = ctx.state.items;
+    const was = st.len > 0 and st[0] == 1;
+    const now = if (st.len == 0) v >= on else if (was) v > off else v >= on;
+    if (st.len > 0 and now == was) return Emit.none;
+    try ctx.setState(&.{@intFromBool(now)});
+    try ctx.out[0].appendBool(now);
+    return Emit.first;
+}
+
+// ---------------------------------------------------------------------------
 // Over arrays — `map`, `keep`, `reduce` (tier 2, beat 3a)
 //
 // All three drive a SECTION BODY: an operator with ports left open, called
@@ -2361,6 +2672,17 @@ const CORE = [_]registry.OpDef{
     .{ .name = "array", .variadic = true, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Array construction [ a, b, c ] — a live tuple with positions instead of names.", .eval = evalArray },
     .{ .name = "nth", .inputs = &.{ p.in("in", Tag.array), p.in("i", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The i-th element, 0-based — `window 5s | nth 0`. Out of range is an error, never a clamp.", .eval = indexEval(0, 1) },
     .{ .name = "choose", .inputs = &.{ p.in("i", Tag.number), p.in("of", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "`nth` with the index piped — `plane.time.band | choose [0.2, 1, 0.6, 0.05]`. Pick one of these.", .eval = indexEval(1, 0) },
+    // tier 2, beat 4b — noise, randomness, space.
+    .{ .name = "noise", .inputs = &.{ p.in("period", Tag.duration), p.kwOpt("octaves", Tag.number), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "Smooth noise in 0..1 over fed time — `noise 80ms` flickers, `noise 20s` drifts. Stateless, seeded (default 0), bit-identical across machines.", .eval = evalNoise },
+    .{ .name = "rand", .inputs = &.{ p.occ("in", Tag.any), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .help = "White: a fresh value in 0..1 per rousing — `plane.trigger | rand | mul 4 | floor`. Same generator as `shuffle`; seed defaults to 0.", .eval = evalRand },
+    .{ .name = "distance", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Distance between two positions — both record{x, y, z}; a missing axis is named.", .eval = evalDistance },
+    .{ .name = "within", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record), p.in("r", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Is a within r of b? Both record{x, y, z}.", .eval = evalWithin },
+    // tier 2, beat 4a — events and levels.
+    .{ .name = "pulse", .inputs = &.{ p.in("period", Tag.duration), p.kwOpt("width", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "Value source: 1 for `width`, else 0, once per period — `pulse 1s [width 100ms]`. Width defaults to a tenth of the period. `every` is the occurrence source.", .eval = evalPulse },
+    .{ .name = "once", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Pass the first value, then deaf until remount — `once 1 | ramp 2s` fires at mount; piped, it passes the first arrival.", .eval = evalOnce },
+    .{ .name = "toggle", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Flip a boolean on each arrival. Emits its initial false at mount and flips from the next arrival on.", .eval = evalToggle },
+    .{ .name = "tally", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .help = "Running count of arrivals, as a value. Emits 0 at mount; does not survive remount (remount is restart).", .eval = evalTally },
+    .{ .name = "above", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis — `above 0.3 0.2` is \"above 0.3, until below 0.2\". Emits its level at mount; this is what stops a threshold chattering.", .eval = evalAbove },
     // tier 2, beat 3a — over arrays, driving a section body per element.
     // `.reads` rather than `.pure`: a body may hold BOUND ports of its own
     // (`keep (> plane.threshold)`), so the answer is not a function of this

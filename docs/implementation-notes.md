@@ -694,6 +694,92 @@ Built: `sort`, `first`, `take`, `transpose`, `shuffle`, `along`.
   Catmull-Rom basis, `first` going silent, flags unrecognised, and `sort`
   accepting a positional section.
 
+## Tier 2, beat 4 — events, levels, noise, space (2026-08-25)
+
+Built: `pulse`, `once`, `toggle`, `tally`, `above` (4a); `noise`, `rand`,
+`distance`, `within` (4b). Closes the campaign.
+
+- **Levels emit at tick 0; crossings baseline silently** (Chris's pin,
+  and the line that shapes the whole family). `above` publishes its
+  hysteresis state at mount, `toggle` its initial `false`, `tally` its
+  `0`. `dropped_below`/`rose_above`/`edge` keep their silent first
+  observation. The two rules are complementary, not inconsistent: what an
+  operator publishes decides which it follows.
+
+- **One node, one kind.** `pulse` is a VALUE source, `every` the
+  occurrence source. Asserted **from the registry** rather than through
+  behaviour, so a later edit to either declaration fails in rill instead
+  of in a host a quarter later.
+
+- **`once` needed no new rule, and §3.8 is why.** Unpiped at a statement
+  head, `once 1` binds the literal to port 0 — rousing and payload
+  together, exactly as `cast` does — so it is written at mount, fires at
+  tick 0, and nothing ever marks the node again. Piped, it passes the
+  first arrival. The `fired` bit in state is what makes "never again"
+  true even when something downstream drags the node along.
+
+- **The fade-in row never needed `once` at all.** `clock | div 2 |
+  range 0 1` is one line and correct, because `range` clamps. What it
+  costs is a frame forever, which is precisely what the ticks badge
+  exists to show. The stopping spelling — `once 1 | ramp 2s` — does NOT
+  work: `ramp` baselines at its first target, so it jumps to 1 rather
+  than fading to it. Pinned by a gate as a fact, and raised as a fork
+  (`ramp … from 0`) rather than papered over.
+
+- **`above` closed the correctness column's founding row.** "Night falls
+  → lights on" scored ✓ at one line *and* chattered at dusk, which is
+  what put the column on §4 in the first place. The gate drives the exact
+  oscillation where a strict comparator and a hysteresis band disagree
+  and counts flips on both: six against zero.
+
+- **One PRNG family, not three.** `rand` and `shuffle` draw from
+  xoshiro256++; `noise` is a lattice hash. A generator produces a
+  sequence; a hash answers "what is the value AT this coordinate" and
+  must answer the same way forever. `rand` folds its draw counter into
+  the seed rather than carrying 32 bytes of generator state across ticks,
+  so a restore lands on the number the live program would have produced.
+
+- **`noise` is f32 in a fixed order, widened exactly, pinned by BIT
+  PATTERN.** Fifteen f32 words across three declarations and five fed
+  times. The mutation that computes in f64 and widens back is
+  indistinguishable by value at most points and dies instantly against
+  the patterns — which is the ledger's "a float64 oracle for f32 code is
+  prose in numeric clothing", made operational.
+
+- **A gate found a design bug in the noise, not just an implementation
+  one.** The textbook 1D Perlin gradient is ±1, which gives a lattice
+  cell four possible shapes — so two seeds produce an *identical* cell
+  one time in four, and `seed` stops being the decorrelator §2.8
+  promises. The gate that counts how often three seeds disagree said 32
+  of 109. Gradients now come continuously from the hash's top 24 bits
+  (the width an f32 mantissa holds exactly, so the division is lossless
+  and identical everywhere): 108 of 109, and the one that matches is fed
+  time zero, a lattice point where 1D gradient noise is zero for every
+  seed by construction. **A range check and a smoothness check both
+  passed the broken version.** What caught it was a gate on the property
+  the docs actually claimed.
+
+- **A second finding, scored not hidden: a record field cannot be an
+  operator call.** `{x: noise 40ms seed 1, …}` does not parse — a field
+  takes a literal, path, name, record or array. So the camera-shake row
+  costs four lines against a target of 2–3, three of them `as` bindings.
+  Raised as a fork; CC's lean is to leave it, because making it work
+  needs the comma to become significant inside an argument list.
+
+- **The two re-probe rows held.** With `noise` built they could finally be
+  driven by real noise. *Dim the lamp* holds at 2 lines **and only at 2**
+  — the naked reading jitters, the smoothing line is what makes the ✓
+  true, and the gate asserts the difference rather than "it works".
+  *Rate-limit a noisy sensor* holds at 1: ten changes over ten periods
+  while the sensor moved on all 126 frames.
+
+- **Gates: 31 new (245 → 276), Debug and ReleaseFast. Mutations: 14/14
+  bitten** — `pulse` as an occurrence, its width default, `once` passing
+  everything, `toggle` eating the mount value, `tally` silent at mount,
+  `above` losing hysteresis, `above` silent at mount, ±1 gradients, f64
+  arithmetic, no fade curve, `rand` not advancing, `rand` ignoring its
+  seed, `distance` never looking for z, and `within` comparing backwards.
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no

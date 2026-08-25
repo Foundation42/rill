@@ -561,28 +561,28 @@ besides.
 | ask | today | target | needs |
 |---|---|---|---|
 | breathe the exposure between 0.5 and 1.5 over 4s | ~~9 lines, 2 programs, a seed~~ **1 ✓** | 1 | ~~`lfo`, `range`~~ **landed, beat 1a** |
-| flash a light on an event (attack, decay — not a rectangle) | ~4, and a rectangle | 1 | `pulse` + `ease up down` (`ease` landed; `pulse` is beat 4) |
+| flash a light on an event (attack, decay — not a rectangle) | ~~~4, and a rectangle~~ **1 ✓** | 1 | ~~`pulse` + `ease up down`~~ **landed, beat 4** |
 | VU meter on a field reading | ~~can't~~ **1 ✓** | 1 | ~~`abs \| ease 20ms down 400ms`~~ **landed, beat 1a** |
-| fade the exposure in over 2s on mount | can't (no `once`) | 1 | `once` (beat 4); `ramp` landed |
+| fade the exposure in over 2s on mount | ~~can't~~ **1 ✓, and it ticks forever** | 1 | `clock \| div 2 \| range 0 1` — it never needed `once`. The STOPPING spelling needs `ramp from`; see the fork in §8 |
 | ease the camera exposure toward a target | ~~can't~~ **1 ✓** | 1 | ~~`ease`~~ **landed, beat 1a** |
 | show elapsed time on the HUD | ~~can't~~ **1 ✓** | 1 | ~~`clock`~~ **landed, beat 1a** |
 | alarm when a raider is closing fast, not merely near | ~~invented sensor field~~ **1 ✓** | 1 | ~~`diff`~~ **landed, beat 1a** |
 | charge a mechanism while a lever is held, capped | ~~2 programs (`inc` + reader)~~ **1 ✓** | 1 | ~~`integrate`~~ **landed, beat 1a** |
-| dim the lamp as the fire dies | 2 | 2 | ✓ (fields) — re-probe at beat-4 close against a noisy input |
+| dim the lamp as the fire dies | 2 | 2 | ✓ (fields) — **re-probed at beat-4 close against real `noise`: holds, and only WITH the smoothing line.** The naked reading jitters |
 | pulse a light with the beat | ~4, and wrong if tempo is live | 1 | `beat`, or `lfo square` for a fixed tempo (`lfo` landed) |
-| toggle a light on a keypress | ~3 | 1 | `toggle` (beat 4) |
-| count kills | 2 programs (`inc` + reader) | 1 | `tally` (beat 4) |
-| alarm when a raider is within 10m of the gate | needs `distance` | 1 | `within` (beat 4) |
-| night falls → lights on | 1 line, **and it chatters at dusk** | 1 | `above` (beat 4) — strict crossings switch on and off across the threshold |
+| toggle a light on a keypress | ~~~3~~ **1 ✓** | 1 | ~~`toggle`~~ **landed, beat 4** |
+| count kills | ~~2 programs (`inc` + reader)~~ **1 ✓** | 1 | ~~`tally`~~ **landed, beat 4** |
+| alarm when a raider is within 10m of the gate | ~~needs `distance`~~ **1 ✓** | 1 | ~~`within`~~ **landed, beat 4** |
+| night falls → lights on | ~~1 line, and it chatters at dusk~~ **1 ✓, and gated NOT to chatter** | 1 | ~~`above`~~ **landed, beat 4** — the row that put a correctness column on this list |
 | cooldown-guarded order | 1 | 1 | ✓ |
 | swing a light back and forth | ~~~8~~ **1 ✓** | 1 | ~~`lfo tri`, `range`~~ **landed, beat 1a** |
 | follow: keep a light 2m above the player | ~~~3~~ **1 ✓** | 1–2 | ~~record math~~ **landed, beat 1b** |
-| rate-limit a noisy sensor into a knob | 1 | 1 | ✓ (`sample`) — re-probe at beat-4 close against a noisy input |
-| flicker a torch | can't (no noise) | 1 | `noise`, `range` (beat 4) |
-| shake the camera on impact, 300ms | can't | 2–3 | `noise` ×3 seeds, `hold` (landed), record math |
-| let the grade drift slowly over a minute | can't | 1 | `noise 20s`, `range` (beat 4) |
-| pick a random idle animation per trigger | can't | 1 | `rand`, `floor` (beat 4) |
-| fly the camera along the intro path over 8s, once | host verb only | 1 | `once`, `along` (`ramp` landed) |
+| rate-limit a noisy sensor into a knob | 1 | 1 | ✓ (`sample`) — **re-probed at beat-4 close against real `noise`: holds.** It promises a write RATE, not smoothness, and delivers one |
+| flicker a torch | ~~can't~~ **1 ✓** | 1 | ~~`noise`, `range`~~ **landed, beat 4** |
+| shake the camera on impact, 300ms | ~~can't~~ **4** | 2–3 | landed, beat 4 — the extra lines are `as` bindings: a record field cannot be an operator call. See the fork in §8 |
+| let the grade drift slowly over a minute | ~~can't~~ **1 ✓** | 1 | ~~`noise 20s`, `range`~~ **landed, beat 4** |
+| pick a random idle animation per trigger | ~~can't~~ **1 ✓** | 1 | ~~`rand`, `floor`~~ **landed, beat 4** |
+| fly the camera along the intro path over 8s, once | ~~host verb only~~ **1 ✓** | 1 | `clock \| div 8 \| range 0 1 \| along […]` — `range` clamps, so it finishes and stays finished |
 | slide a light along its rail as the door opens | ~~can't~~ **1 ✓** | 1 | ~~`along`~~ **landed, beat 3b** |
 | ease the exposure in with a custom curve | can't | 1 | `shape bezier` (`shape`'s five named curves landed; `bezier` is the curves beat) |
 | reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` (own beat) |
@@ -604,6 +604,25 @@ missing support and the list says where.
 **Beat 1a's score: eight rows cleared, one row added and cleared, one
 row re-scored honestly downward.** The rows that moved from "can't" to
 one line are the register family's whole argument.
+
+**Beat 4's score: eleven rows cleared, one cleared over its target, and
+the two re-probe rows held.** With `noise` built, the two rows marked
+"re-probe at beat-4 close against a noisy input" could finally be driven
+by real noise rather than a hand-written wobble:
+
+- *dim the lamp as the fire dies* — **holds at 2, and only at 2.** The
+  naked reading jitters visibly; the smoothing line is what makes the ✓
+  true, which is exactly what the second line was always for. Gated as
+  the difference between the two, not as "it works".
+- *rate-limit a noisy sensor into a knob* — **holds at 1.** It promises a
+  write RATE and delivers one: ten changes over ten periods while the
+  sensor moved on all 126 frames.
+
+**And the correctness column closed one of its own.** "Night falls →
+lights on" was the row that put the column there — ✓ at one line *and*
+chattering at dusk. `above` fixes it, and the gate drives the exact
+oscillation where a strict comparator and a hysteresis band disagree:
+six flips against zero.
 
 **Beat 3b's score: four rows cleared, and one finished that beat 2a
 half-cleared.** "Nearest hostile" first landed at *two* lines — the sort
@@ -896,8 +915,42 @@ the tags beat.
    by accident. The gate now uses forty elements and two keys, which is
    past the fallback. **A gate that passes because of the library
    underneath is watching nothing** — the ledger's newest line.
-9. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
-   `once`, `toggle`, `tally`, `above`, `distance`/`within`/`toward`.
+9. **Beat 4 — noise, events, spatial. ✅ BUILT 2026-08-25.** `pulse`,
+   `once`, `toggle`, `tally`, `above` (4a); `noise`, `rand`, `distance`,
+   `within` (4b). `toward` stays cut — §4 has no row.
+
+   **Levels emit at tick 0, crossings baseline silently** (Chris's pin).
+   `above` publishes its level at mount, `toggle` its initial `false`,
+   `tally` its `0`; the crossing detectors keep their silent first
+   observation. A program that reads a level must have one on its first
+   evaluation, and "nothing yet" is not a level.
+
+   **One node, one kind.** `pulse` is a VALUE source (1 for `width`, else
+   0, per period); `every` remains the occurrence source. An operator
+   that both fired an occurrence and held a value would be two operators
+   sharing a name, and nothing downstream could tell which it was talking
+   to. Asserted from the registry, so a later edit to either declaration
+   fails in rill rather than in a host.
+
+   **One PRNG family, not three.** `rand` and `shuffle` both draw from
+   xoshiro256++; `noise` is a hash of lattice coordinates, which is a
+   different job — a generator produces a *sequence*, a hash answers
+   "what is the value AT this coordinate" and must answer the same way
+   forever. Two mechanisms because there are two questions.
+
+   **`noise` is f32 throughout, widened exactly, and pinned by BIT
+   PATTERN.** Fifteen f32 words across three declarations and five fed
+   times. A float64 oracle would have passed the f64 mutation; the bit
+   patterns did not.
+
+   **The gradients are continuous, and a gate is why.** The textbook 1D
+   Perlin gradient is ±1, which gives a cell only four possible shapes —
+   so two seeds produce an *identical* cell one time in four and `seed`
+   stops being the decorrelator §2.8 promises. The gate that counts how
+   often three seeds disagree found it: 32 samples in 109. With gradients
+   taken continuously from the hash's top 24 bits it is 108 in 109, and
+   the one that matches is fed time zero, a lattice point where 1D
+   gradient noise is zero for every seed by construction.
 10. **Deferred to their own beats:** tracks as a tenant (with D),
    `beat` (needs tempo on the plane), `walk`, `spring`, `smooth`
    (needs the window-with-times shape), `group by`.
@@ -905,7 +958,25 @@ the tags beat.
 Each beat lands its before/after pairs in the idioms book as gates
 (§5.9), and the simple-things list is re-scored at each close.
 
-**Word count, honestly.** The sections propose **44**, not 43 — the §6
+**Word count at tier-2 close, honestly.** The registry went from 49 core
+operators to **97**: 48 added across the campaign. Against the recon's
+scoring:
+
+| category | count | what |
+|---|---|---|
+| **admitted** | **24** | `lfo` `ease` `ramp` `hold` `diff` `integrate` `range` `shape` `choose` `first` `expect` `match` `sort` `take` `along` `pulse` `once` `toggle` `tally` `above` `noise` `rand` `distance` `within` |
+| substrate | 5 | `clock` `frame` `wave` `nth` `array` — §4's own category, each admitted by ruling rather than by a row |
+| listed, then rowed | 5 | `map` `reduce` `keep` `transpose` `shuffle` — the rows went in **before** the words, per §7's instruction |
+| math completions | 14 | `sin cos tan atan2 sqrt pow exp log mod ceil sign fract` `pi` `tau` — a family completed, not new vocabulary |
+| cut, and stayed cut | 9 | `norm` `either` `rate` `slew` `toward` `len` `last` `without`, `zip`/`unzip`→`transpose` |
+| admitted, not built | 1 | `smooth` — deferred to its own beat (needs the window-with-times shape) |
+
+**The admitted set is exactly 24, which is what the recon predicted.**
+The honest reading of "~30 words" is 24 admitted + 5 substrate = 29
+names a person must learn, with the math completions being a family
+they already knew half of. Nothing was admitted on prose.
+
+**Word count as originally proposed.** The sections propose **44**, not 43 — the §6
 pin adds `wave`, which appears in no table above (recon §3b). The recon
 scored every one against §4: **24 admitted** (a live row), **10 listed**
 (argued in prose, no row), **9 cut**, and `zip`+`unzip` → `transpose`
@@ -949,6 +1020,28 @@ host, or the manual rather than the operator table:
   for free; everyone else gets a second explanation.
 - **Tempo on the plane.** `beat` needs the host to publish tempo as
   data. That's the music stack's job and it's small.
+- **FORK — `ramp` cannot start a mount fade** (raised 2026-08-25, beat
+  4). `ramp` baselines at its FIRST target, so `once 1 | ramp 2s` jumps
+  to 1 rather than fading to it. The fade-in row is met instead by
+  `clock | div 2 | range 0 1`, which is one line and correct — and which
+  **ticks every frame forever**, because `clock` does. The stopping
+  spelling wants a start value: `ramp 2s from 0`, a keyword port on the
+  ratified pattern. CC's lean is to add it, because "animate once and
+  then cost nothing" is the whole argument for the register family and
+  this is the one row where it is unavailable. **Not decided.** Pinned by
+  a gate either way, so the day it changes, the gate says so.
+
+- **FORK — a record field cannot be an operator call** (raised
+  2026-08-25, beat 4). A record literal's field takes a literal, a path,
+  a name, a record or an array — never an opcall. So a record built from
+  three computed streams costs three `as` bindings, which is why the
+  camera-shake row lands at four lines against a target of 2–3. CC's lean
+  is to leave it: `{x: noise 40ms seed 1, …}` needs the parser to know
+  where the operator's arguments stop and the next field begins, and the
+  comma would have to become significant inside an argument list. The
+  `as` lines are three names that a reader can see. **Not decided** —
+  recorded because the row is scored against it.
+
 - **`| .field` — RULED 2026-08-25** (raised and settled the same day).
   `| .field` is the taught spelling for a field read mid-chain, sugar for
   `project`; **`project` is substrate — registered, never taught**, the

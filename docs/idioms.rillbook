@@ -72,6 +72,13 @@
    "source": "plane.signals.horn | set plane.lights.alarm.level 1\nplane.signals.horn | delay 200ms | set plane.lights.alarm.level 0"
   },
   {
+   "name": "flash-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level"
+  },
+  {
    "name": "toggle-ask",
    "mode": "query",
    "markdown": true,
@@ -93,6 +100,13 @@
    "source": "plane.ui.lamp.presses | div 2 as halved\nhalved | floor | mul 2 as even\nplane.ui.lamp.presses | sub even | = 1 | set plane.lights.lamp.on"
   },
   {
+   "name": "toggle-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_l | toggle | set plane.lights.key.on"
+  },
+  {
    "name": "count-kills-ask",
    "mode": "query",
    "markdown": true,
@@ -105,6 +119,13 @@
    "markdown": false,
    "collapsed": false,
    "source": "plane.events.kill | inc plane.score.kills 1"
+  },
+  {
+   "name": "count-kills-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.kill | tally | set plane.ui.kills"
   },
   {
    "name": "night-falls-ask",
@@ -121,6 +142,13 @@
    "source": "plane.sensors.sky.light | dropped_below 0.3 | set plane.lights.court.on true"
   },
   {
+   "name": "night-falls-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.world.light | above 0.3 0.2 | set plane.lights.street.on"
+  },
+  {
    "name": "fade-in-ask",
    "mode": "query",
    "markdown": true,
@@ -133,6 +161,20 @@
    "markdown": false,
    "collapsed": false,
    "source": "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure"
+  },
+  {
+   "name": "fade-in-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — one line, and the cost is visible\n\n```rill\nclock | div 2 | range 0 1 | set plane.render.grade.exposure\n```\n\n`range` **clamps**, so a clock scaled into 0..1 is a fade that finishes\nand stays finished. It never needed `once`.\n\nThe cost is real and the row says so: this chain re-evaluates every frame\nforever, because `clock` does — the ticks badge will show it. The\nstopping spelling would be `once 1 | ramp 2s`, and it does not work:\n`ramp` baselines at its FIRST target, so it starts at 1 rather than\nfading to it. That gap is a fork (`ramp from`), not something to fake."
+  },
+  {
+   "name": "fade-in-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "clock | div 2 | range 0 1 | set plane.render.grade.exposure"
   },
   {
    "name": "ease-toward-ask",
@@ -282,11 +324,25 @@
    "source": "## Flicker a torch\n\n§4: *can't (no noise) → 1*, needing `noise` and `range`. Beat 4. No before\ncell — a deterministic flicker cannot be built from the current set at all."
   },
   {
+   "name": "flicker-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "noise 80ms | range 0.6 1 | set plane.lights.torch.level"
+  },
+  {
    "name": "drift-ask",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
    "source": "## Let the grade drift slowly over a minute\n\n§4: *can't → 1*, needing `noise 20s` and `range`. Beat 4."
+  },
+  {
+   "name": "drift-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "noise 20s | range 0.9 1.1 | set plane.render.grade.exposure"
   },
   {
    "name": "shake-ask",
@@ -296,11 +352,25 @@
    "source": "## Shake the camera on impact, 300ms\n\n§4: *can't → 2–3*, needing `noise` on three seeds, `hold`, and record math.\n`hold` landed in beat 1a; `noise` is beat 4 and record math is beat 1b, so\nthe row does not move yet. Recorded rather than quietly skipped."
   },
   {
+   "name": "shake-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "noise 40ms seed 1 as sx\nnoise 40ms seed 2 as sy\nnoise 40ms seed 3 as sz\n{x: sx, y: sy, z: sz} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake"
+  },
+  {
    "name": "random-idle-ask",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
    "source": "## Pick a random idle animation per trigger\n\n§4: *can't → 1*, needing `rand` and `floor`. Beat 4."
+  },
+  {
+   "name": "random-idle-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.idle | rand | mul 4 | floor | choose [\"a\", \"b\", \"c\", \"d\"] | set plane.anim.idle"
   },
   {
    "name": "nearest-hostile-ask",
@@ -567,6 +637,13 @@
    "markdown": true,
    "collapsed": false,
    "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
+  },
+  {
+   "name": "levels-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Levels and crossings\n\n**Levels emit at tick 0. Crossings baseline silently.**\n\n`above` publishes its level at mount, `toggle` its initial `false`,\n`tally` its `0` — because a program that reads a level must have one to\nread on its first evaluation, and \"nothing yet\" is not a level.\n`dropped_below`, `rose_above` and `edge` do the opposite: they record\ntheir first observation and say nothing, because a crossing nobody\ncrossed is not an event.\n\n**`above` is the row that put a correctness column on the list.** \"Night\nfalls → lights on\" scored ✓ at one line *and* flipped the street lights\non and off every frame at dusk, because a strict comparator has no memory\nof which side it was on. `above 0.3 0.2` reads as \"above 0.3, until below\n0.2\", and the gate drives the exact wobble where the two disagree: six\nflips against zero.\n\n**`pulse` is a value and `every` is an occurrence.** One node, one kind.\n`pulse` is the rectangle you shape — `pulse 2s width 60ms | ease 10ms\ndown 300ms` is a flash with an attack and a decay, which is what the\n\"not a rectangle\" row asked for.\n\n**Seeds are the decorrelator.** `noise` and `rand` and `shuffle` all seed\nfrom 0 by default, so the naive program is deterministic and anyone who\nwants independence says so. Three shake axes on seeds 1, 2, 3 are\nindependent; two torches on one seed flicker together."
   }
  ]
 }
