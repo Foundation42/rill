@@ -2590,3 +2590,73 @@ test "the manuals parse: every printed example compiles" {
     try testing.expectEqual(@as(usize, 23), human);
     try testing.expectEqual(@as(usize, 2), agent);
 }
+
+// ---------------------------------------------------------------------------
+// tail_all (2026-08-25): the rest of the INPUT, verbatim — found by
+// rillbook's first drive. The line-tail stopped at the first newline, so a
+// multi-line `rill remount` source lost every line past its first (they
+// parsed as stray statements of the WRAPPER), and a source whose first line
+// was a comment left the tail empty. The engine's own remount tests never
+// saw it: they enqueue the source directly, bypassing the console parse —
+// the wire-format lesson, again.
+// ---------------------------------------------------------------------------
+
+fn tailAllRegistry(gpa: std.mem.Allocator) !rill.Registry {
+    var reg = try rill.Registry.init(gpa);
+    errdefer reg.deinit();
+    try rill.registerCore(&reg);
+    const host = struct {
+        var ports = [_]registry.Port{
+            .{ .name = "name", .ty = types.Tag.string },
+            .{ .name = "source", .ty = types.Tag.string, .tail = true, .tail_all = true },
+        };
+        var outs = [_]registry.Port{.{ .name = "out", .ty = types.Tag.string }};
+    };
+    _ = try reg.register(.{ .name = "remount", .inputs = &host.ports, .outputs = &host.outs, .help = "stub", .eval = echoTailEval });
+    return reg;
+}
+
+test "tail_all: the whole rest of the input, comments and newlines and pipes included" {
+    var reg = try tailAllRegistry(testing.allocator);
+    defer reg.deinit();
+    // The screenshot, as a gate: a comment-led multi-line source after the
+    // fixed prefix. The tail carries all of it, verbatim.
+    const src =
+        \\remount cell-1 // a cell is one rill program
+        \\// a second comment line
+        \\plane.render.grade.exposure | mul 2
+    ;
+    var prog = try parseOk(testing.allocator, &reg, src);
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "remount1").?);
+    const captured = types.asString(prog.slot(n.inputs[1]).source.literal).?;
+    try testing.expect(std.mem.startsWith(u8, captured, "// a cell is one rill program"));
+    try testing.expect(std.mem.indexOf(u8, captured, "\n// a second comment line\n") != null);
+    try testing.expect(std.mem.endsWith(u8, captured, "plane.render.grade.exposure | mul 2"));
+    // ONE node: nothing after the prefix leaked into the wrapper program.
+    try testing.expectEqual(@as(usize, 1), prog.nodes.items.len);
+}
+
+test "tail_all: a quoted fixed-prefix arg keeps its quotes out of the capture" {
+    var reg = try tailAllRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "remount \"keep defence\" plane.a | mul 2");
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "remount1").?);
+    try testing.expectEqualStrings("keep defence", types.asString(prog.slot(n.inputs[0]).source.literal).?);
+    try testing.expectEqualStrings("plane.a | mul 2", types.asString(prog.slot(n.inputs[1]).source.literal).?);
+}
+
+test "tail_all: registration keeps the closed shape — tail_all implies tail, last input only" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    const nop = struct {
+        fn f(_: *rill.EvalCtx) registry.EvalError!registry.Emit {
+            return registry.Emit.none;
+        }
+    }.f;
+    const no_tail = [_]registry.Port{.{ .name = "s", .ty = types.Tag.string, .tail_all = true }};
+    try testing.expectError(error.BadTailPort, reg.register(.{ .name = "a", .inputs = &no_tail, .help = "", .eval = nop }));
+    const not_last = [_]registry.Port{ .{ .name = "s", .ty = types.Tag.string, .tail = true, .tail_all = true }, .{ .name = "b", .ty = types.Tag.number } };
+    try testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_last, .help = "", .eval = nop }));
+}

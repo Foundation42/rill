@@ -1398,6 +1398,36 @@ const Parser = struct {
             try args.append(self.a(), try self.parseArgValue(target));
         }
 
+        const tail_port = def.inputs[def.inputs.len - 1];
+
+        // tail_all: the rest of the INPUT, verbatim to EOF — newlines and
+        // comments included, because the text is somebody else's whole
+        // program (`rill remount`, a notebook document). Capture starts at
+        // the character after the last consumed token, NOT at the next
+        // token's offset: a source whose first line is a comment has no
+        // token before its newline, and slicing from the newline is exactly
+        // what made a comment-led cell unmountable (rillbook's first drive).
+        if (tail_port.tail_all) {
+            var from: usize = self.src.len;
+            if (self.pos > 0) {
+                const prev = self.toks[self.pos - 1];
+                // A string token's off sits on its opening quote and its text
+                // is the raw span between quotes: raw end = off + 1 + len + 1.
+                from = prev.off + prev.text.len + @as(usize, if (self.src.len > prev.off and self.src[prev.off] == '"') 2 else 0);
+            }
+            while (self.peek().kind != .eof) _ = self.next(); // the tail owns everything
+            const text_all = std.mem.trim(u8, self.src[@min(from, self.src.len)..], " \t\r\n");
+            if (text_all.len == 0) {
+                if (tail_port.optional) return;
+                return self.fail(op_tok, "'{s}' expects text for its tail port '{s}'", .{ def.name, tail_port.name });
+            }
+            var pk_all = struple.Packer.init(self.a());
+            pk_all.appendString(text_all) catch return error.OutOfMemory;
+            const bytes_all = pk_all.toOwnedSlice() catch return error.OutOfMemory;
+            try args.append(self.a(), .{ .kind = .literal, .source = .{ .literal = bytes_all }, .ty = types.Tag.string, .tok = op_tok });
+            return;
+        }
+
         const start_tok = self.peek();
         var text: []const u8 = "";
         if (start_tok.kind != .newline and start_tok.kind != .eof) {
@@ -1405,7 +1435,6 @@ const Parser = struct {
             text = std.mem.trim(u8, self.src[start_tok.off..self.peek().off], " \t\r");
         }
 
-        const tail_port = def.inputs[def.inputs.len - 1];
         if (text.len == 0) {
             if (tail_port.optional) return; // unbound ⇒ .none, the op sees null
             return self.fail(op_tok, "'{s}' expects text for its tail port '{s}'", .{ def.name, tail_port.name });

@@ -31,6 +31,14 @@ pub const Port = struct {
     /// literal bound here. Last input port only — `register` enforces the
     /// closed shape. A locator is freeform text, not structure.
     tail: bool = false,
+    /// The tail captures the rest of the INPUT, not the line — newlines,
+    /// comments and all, verbatim to EOF (2026-08-25; rillbook's first
+    /// drive found `rill remount`'s multi-line contract had never crossed
+    /// the console: the line-tail stopped at the first newline and a
+    /// comment-led source left it empty). Only meaningful with `tail`;
+    /// `register` enforces the pairing. A tail_all statement is necessarily
+    /// the program's last.
+    tail_all: bool = false,
     /// Non-empty on a string port: the closed value set a bound literal must
     /// belong to, checked at parse ("wire time"). This is the console's enum
     /// argument made enforceable — the same list the browser tab-completes
@@ -301,8 +309,9 @@ pub const Registry = struct {
         if (def.inputs.len > 0) {
             const last = def.inputs[def.inputs.len - 1];
             if (last.tail and (last.ty != types.Tag.string or def.variadic)) return error.BadTailPort;
+            if (last.tail_all and !last.tail) return error.BadTailPort;
             for (def.inputs[0 .. def.inputs.len - 1]) |p| {
-                if (p.tail) return error.BadTailPort;
+                if (p.tail or p.tail_all) return error.BadTailPort;
                 if (last.tail and p.optional) return error.BadTailPort;
             }
         }
