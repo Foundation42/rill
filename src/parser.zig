@@ -179,14 +179,14 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         // `-` opens a name when it does NOT open a negative number — the
         // console's unbind sentinel (`light arche l1 -`) is a word, and
         // rill has no infix minus (subtraction is the `sub` word).
-        // `$`, `@` and `#` open a name when a name follows: `$alarm`, `@tom`
-        // and `#garrison` are one token each, sigil included (rill-casts.md
-        // §3, ironwood R6; `#` since T3 — comments are `//`, so the tag
-        // sigil collides with nothing). Sigils are name-LEAD only — a lone
-        // `$`/`@`/`#` stays an inert raw token, and `^` stays inert entirely
-        // until archetypes are sayable.
+        // All four sigils open a name when a name follows: `$alarm`, `@tom`,
+        // `#garrison`, `^raider` are one token each, sigil included
+        // (rill-casts.md §3, ironwood R6; `#` since T3, `^` since T5 — the
+        // derive grammar names a population archetype, and the console rides
+        // this tokenizer). Sigils are name-LEAD only — a lone sigil stays an
+        // inert raw token.
         if (isNameStart(c) or
-            ((c == '$' or c == '@' or c == '#') and i + 1 < src.len and isNameStart(src[i + 1])) or
+            ((c == '$' or c == '@' or c == '#' or c == '^') and i + 1 < src.len and isNameStart(src[i + 1])) or
             (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1]))))
         {
             const start = i;
@@ -507,7 +507,7 @@ const Parser = struct {
         const def_tok = self.next(); // "def"
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected operator name after 'def'", .{});
-        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — an operator cannot wear it", .{name_tok.text});
+        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#' or name_tok.text[0] == '^') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — an operator cannot wear it", .{name_tok.text});
         if (self.defs.contains(name_tok.text) or self.reg.find(name_tok.text) != null) {
             return self.fail(name_tok, "'{s}' is already defined", .{name_tok.text});
         }
@@ -518,7 +518,7 @@ const Parser = struct {
             const pt = self.next();
             if (pt.kind == .rparen) break;
             if (pt.kind != .name) return self.fail(pt, "expected port name in def signature", .{});
-            if (pt.text[0] == '$' or pt.text[0] == '@' or pt.text[0] == '#') return self.fail(pt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — a port cannot wear it", .{pt.text});
+            if (pt.text[0] == '$' or pt.text[0] == '@' or pt.text[0] == '#' or pt.text[0] == '^') return self.fail(pt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — a port cannot wear it", .{pt.text});
             var ty: types.TypeId = types.Tag.any;
             if (self.peek().kind == .colon) {
                 _ = self.next();
@@ -618,7 +618,7 @@ const Parser = struct {
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected alias name after 'as'", .{});
         if (isReservedWord(name_tok.text)) return self.fail(name_tok, "'{s}' is reserved", .{name_tok.text});
-        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — an alias cannot wear it", .{name_tok.text});
+        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#' or name_tok.text[0] == '^') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — an alias cannot wear it", .{name_tok.text});
         if (self.aliases.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' is already bound", .{name_tok.text});
         if (self.program_target.names.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' collides with a stream name", .{name_tok.text});
         if (self.reg.find(name_tok.text) != null or self.defs.contains(name_tok.text)) {
@@ -662,7 +662,7 @@ const Parser = struct {
                 const nt = self.next();
                 if (nt.kind != .name) return self.fail(nt, "expected name after 'as'", .{});
                 if (isReservedWord(nt.text)) return self.fail(nt, "'{s}' is reserved", .{nt.text});
-                if (nt.text[0] == '$' or nt.text[0] == '@' or nt.text[0] == '#') return self.fail(nt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition) — a stream cannot wear it", .{nt.text});
+                if (nt.text[0] == '$' or nt.text[0] == '@' or nt.text[0] == '#' or nt.text[0] == '^') return self.fail(nt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — a stream cannot wear it", .{nt.text});
                 if (target.names.contains(nt.text)) return self.fail(nt, "name '{s}' is already bound (names are single-assignment)", .{nt.text});
                 if (self.aliases.contains(nt.text)) return self.fail(nt, "name '{s}' shadows a use alias", .{nt.text});
                 if (self.reg.find(nt.text) != null or self.defs.contains(nt.text)) {
@@ -874,6 +874,12 @@ const Parser = struct {
                     // unregistered (the host refuses the mount and says so)
                     // or a bare subject, which only `tag`/`untag` take.
                     return self.fail(t, "'{s}' is an entity reference — read a field ('{s}.pos'), or make it a tag subject: 'X | tag {s} #garrison'", .{ t.text, t.text, t.text });
+                }
+                if (t.text[0] == '^') {
+                    // Archetypes are engine-owned and read-only (R6): the
+                    // sigil is sayable so the console's derive grammar can
+                    // name a population, but no rill expression reads one.
+                    return self.fail(t, "'{s}' names an archetype — engine-owned, read-only; today only `derive set` takes one", .{t.text});
                 }
                 if (t.text[0] == '#') {
                     // A condition is written through the membership sinks and
@@ -1386,6 +1392,9 @@ const Parser = struct {
                 }
                 if (arg.text.len > 1 and arg.text[0] == '@') {
                     return self.fail(arg.tok, "'{s}' is an entity subject — only tag/untag take one; a field read is '{s}.pos' (folded at mount)", .{ arg.text, arg.text });
+                }
+                if (arg.text.len > 1 and arg.text[0] == '^') {
+                    return self.fail(arg.tok, "'{s}' names an archetype — engine-owned; today only `derive set` takes one", .{arg.text});
                 }
                 return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             }

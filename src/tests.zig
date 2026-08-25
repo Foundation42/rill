@@ -2935,3 +2935,9 @@ test "and/or/not: the conjunction idiom's missing words" {
     try testing.expectEqual(true, types.asBool(fx.mock.store.get("plane.either").?).?);
     try testing.expectEqual(false, types.asBool(fx.mock.store.get("plane.lit").?).?);
 }
+
+test "^: the archetype sigil lexes one token, guarded — engine-owned, never an expression" {
+    try expectParseError("^raider | set plane.x", "engine-owned");
+    try expectParseError("plane.x | mul 2 as ^x", "cannot wear");
+    try expectParseError("def ^d(x) = x | mul 2", "cannot wear");
+}
