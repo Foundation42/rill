@@ -2835,3 +2835,73 @@ test "tag: a host with no tag row fails the node, counted — never a silent dro
     try testing.expectEqual(@as(usize, 0), mock.tag_writes.items.len);
     try testing.expectEqual(@as(u64, 1), rt.error_count[nodeIdOf(&prog, "tag1").?]);
 }
+
+// ---------------------------------------------------------------------------
+// T4 — cast coupling (`to #tag`) and the cast list
+// ---------------------------------------------------------------------------
+
+test "cast: `to #tag` rides the deposit; unbound it is empty — the uncoupled cast" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\cast $dread 0.6 radius 9 at plane.p to #garrison
+        \\cast $torch 0.8 radius 12 at plane.p
+    , .{
+        .{ "plane.p", @as(i64, 1) },
+    });
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 2), fx.mock.casts.items.len);
+    try testing.expectEqualStrings("#garrison", fx.mock.casts.items[0].to);
+    try testing.expectEqualStrings("", fx.mock.casts.items[1].to);
+}
+
+test "cast: the program's cast list names every channel — the grant policy's other half" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.x | cast $alarm 1 radius 5 at plane.p
+        \\plane.y | cast $dread 1 radius 5 at plane.p to #hostile
+    );
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 2), prog.casts.items.len);
+    try testing.expectEqualStrings("$alarm", prog.casts.items[0].channel);
+    try testing.expectEqualStrings("$dread", prog.casts.items[1].channel);
+    // …and none of them leaked into the WRITE list: a field has no read
+    // side, so the cycle check must stay blind to casts.
+    try testing.expectEqual(@as(usize, 0), prog.writes.items.len);
+}
+
+test "cast: the cast list survives dump/load — restore composes it the same way" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.x | cast $alarm 1 radius 5 at plane.p to #hostile", .{});
+    defer fx.deinit();
+    const bytes = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(bytes);
+    var reg2 = try hostRegistry(testing.allocator);
+    defer reg2.deinit();
+    var prog2 = try rill.loadProgram(testing.allocator, &reg2, bytes);
+    defer prog2.deinit();
+    try testing.expectEqual(@as(usize, 1), prog2.casts.items.len);
+    try testing.expectEqualStrings("$alarm", prog2.casts.items[0].channel);
+    const n = prog2.node(nodeIdOf(&prog2, "cast1").?);
+    try testing.expectEqualStrings("#hostile", n.statics[2].condition);
+}
+
+test "cast: `to` refuses a sigil-less word, and an optional static must be kw" {
+    try expectParseError("plane.x | cast $f 1 radius 2 at plane.p to garrison", "'#'-sigil");
+    // The registry refuses a positional optional static at registration —
+    // a maybe-there positional would shift every static after it.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    const noopEval = struct {
+        fn f(_: *rill.registry.EvalCtx) rill.registry.EvalError!rill.registry.Emit {
+            return rill.registry.Emit.none;
+        }
+    }.f;
+    try testing.expectError(error.BadStatic, reg.register(.{
+        .name = "badopt",
+        .statics = &.{.{ .name = "maybe", .kind = .word, .optional = true }},
+        .help = "",
+        .eval = noopEval,
+    }));
+}

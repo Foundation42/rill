@@ -1207,7 +1207,16 @@ const Parser = struct {
                         break;
                     }
                 }
-                if (picked == null) return self.fail(op_tok, "'{s}' needs '{s} <value>'", .{ op_name, sd.name });
+                if (picked == null) {
+                    // An optional kw static unbound is legal: it fills with
+                    // its kind's EMPTY value, which every consumer treats as
+                    // absent (`cast` with no `to` is the uncoupled cast).
+                    if (sd.optional) {
+                        statics[i] = emptyStatic(sd.kind);
+                        continue;
+                    }
+                    return self.fail(op_tok, "'{s}' needs '{s} <value>'", .{ op_name, sd.name });
+                }
             } else {
                 while (pos_cursor < args.items.len and (consumed[pos_cursor] or args.items[pos_cursor].kw.len > 0)) pos_cursor += 1;
                 if (pos_cursor >= args.items.len) return self.fail(op_tok, "'{s}' needs a {s} argument '{s}'", .{ op_name, @tagName(sd.kind), sd.name });
@@ -1242,7 +1251,7 @@ const Parser = struct {
                 },
                 .condition => blk: {
                     if (arg.kind != .word or arg.text.len < 2 or arg.text[0] != '#') {
-                        return self.fail(arg.tok, "'{s}' expects a tag for '{s}' — a '#'-sigil name: {s} @tom #garrison", .{ op_name, sd.name, op_name });
+                        return self.fail(arg.tok, "'{s}' expects a tag for '{s}' — a '#'-sigil name (#garrison)", .{ op_name, sd.name });
                     }
                     break :blk .{ .condition = try self.a().dupe(u8, arg.text) };
                 },
@@ -1401,6 +1410,17 @@ const Parser = struct {
             if (std.mem.eql(u8, p.name, name)) return i;
         }
         return null;
+    }
+
+    fn emptyStatic(kind: registry.StaticKind) registry.StaticVal {
+        return switch (kind) {
+            .path => .{ .path = "" },
+            .word => .{ .word = "" },
+            .literal => .{ .literal = "" },
+            .channel => .{ .channel = "" },
+            .subject => .{ .subject = "" },
+            .condition => .{ .condition = "" },
+        };
     }
 
     fn opHasKeywords(def: *const registry.OpDef) bool {

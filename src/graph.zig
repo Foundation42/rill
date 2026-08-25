@@ -69,6 +69,16 @@ pub const WriteTarget = struct {
     node: NodeId,
 };
 
+/// One cast's channel, remembered per node (T4 / fork C extension): casts
+/// never enter the write list — a field has no read side, so the cycle
+/// check must not see them — but they ARE effects, and the host's grant
+/// policy needs to see every effect a program will have at mount. A
+/// separate list keeps both truths.
+pub const CastTarget = struct {
+    channel: []const u8,
+    node: NodeId,
+};
+
 /// A non-fatal parse diagnostic. rill errors loudly by default — a warning is
 /// reserved for text that is *well-formed and probably not what was meant*,
 /// where refusing it would be the parser overruling the author. The first one
@@ -96,6 +106,9 @@ pub const Program = struct {
     names: std.StringArrayHashMapUnmanaged(SlotId) = .empty,
     subs: std.ArrayListUnmanaged(Sub) = .empty,
     writes: std.ArrayListUnmanaged(WriteTarget) = .empty,
+    /// Channels this program casts into, per node — the grant policy's
+    /// other half (see `CastTarget`). Populated by `registerWrites`.
+    casts: std.ArrayListUnmanaged(CastTarget) = .empty,
     /// Non-fatal parse diagnostics, in source order. Arena-owned like the rest.
     warnings: std.ArrayListUnmanaged(Warning) = .empty,
     /// The LAST top-level statement's value, if it has one — what a one-shot
@@ -197,7 +210,10 @@ pub const Program = struct {
         for (statics) |sv| switch (sv) {
             .path => |wp| try self.writes.append(self.a(), .{ .path = wp, .node = node_id }),
             .subject => |s| subject = s,
-            .condition => |c| condition = c,
+            // An optional condition fills empty when unbound (`cast` with no
+            // `to`) — empty is absent, never a member key.
+            .condition => |c| condition = if (c.len > 0) c else null,
+            .channel => |ch| try self.casts.append(self.a(), .{ .channel = ch, .node = node_id }),
             else => {},
         };
         if (subject != null and condition != null) {

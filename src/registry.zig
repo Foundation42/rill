@@ -77,6 +77,12 @@ pub const StaticDecl = struct {
     kind: StaticKind,
     /// Keyword-introduced in source text (`radius 12`), same rule as Port.kw.
     kw: bool = false,
+    /// Unbound is legal: the static fills with its kind's EMPTY value
+    /// (`""`), which every consumer must treat as "absent". First customer:
+    /// `cast … [to #tag]` — an uncoupled cast is the common case, and a
+    /// grammar that demanded `to` on every cast would make the coupling
+    /// mandatory to say nothing.
+    optional: bool = false,
 };
 
 pub const StaticVal = union(StaticKind) {
@@ -275,7 +281,7 @@ pub const OpDef = struct {
 
 pub const OpId = u32;
 
-pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, ReservedName } || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName } || std.mem.Allocator.Error;
 
 /// Words the *syntax* claims, which therefore may not name an operator or an
 /// `as`/`use` binding. The list lives here because the registry owns the
@@ -342,6 +348,12 @@ pub const Registry = struct {
         // could never be satisfied by a literal and would gate nothing.
         for (def.inputs) |p| {
             if (p.one_of.len > 0 and p.ty != types.Tag.string) return error.BadEnumPort;
+        }
+        // An optional static must be keyword-introduced: a positional
+        // maybe-there argument binds greedily, and every static after it
+        // would shift by whether it was said.
+        for (def.statics) |sd| {
+            if (sd.optional and !sd.kw) return error.BadStatic;
         }
         const id: OpId = @intCast(self.ops.items.len);
         try self.ops.append(self.gpa, def);

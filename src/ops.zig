@@ -681,6 +681,9 @@ fn evalCast(ctx: *EvalCtx) EvalError!Emit {
         .pos = pos,
         .radius = radius,
         .decay = decay,
+        // Coupling (T4): empty = uncoupled. A `to #tag` scopes ENTITY
+        // perception host-side; posts hear everything regardless.
+        .to = ctx.statics[2].condition,
     });
     return Emit.none;
 }
@@ -829,7 +832,7 @@ const CORE = [_]registry.OpDef{
     // for the cycle check to miss. `at`/`decay` are keyword ports: the word
     // disambiguates what a positional grammar cannot (`cast $alarm 30` —
     // payload or radius?).
-    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true } }, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>]`; piped, the input is the rousing.", .class = .effect, .eval = evalCast },
+    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true }, .{ .name = "to", .kind = .condition, .kw = true, .optional = true } }, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>] [to <#tag>]`; piped, the input is the rousing; `to` couples delivery to a tag's members (posts hear everything).", .class = .effect, .eval = evalCast },
     // The membership sinks share `inc`'s port shape — the rousing carries no
     // payload (a set operation takes nothing from the stream) — and compose
     // their one write-list entry from the subject/condition pair

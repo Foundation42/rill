@@ -100,6 +100,12 @@ pub const Cast = struct {
     /// default. Per-deposit runtime physics (the §5 reversal): a decay RILL
     /// would read the path it writes, and §4.4 refuses exactly that.
     decay: ?types.Duration,
+    /// Coupling (`to #tag`, ironwood R6 T4): empty = uncoupled, absorbed by
+    /// whoever is there. Non-empty scopes ENTITY perception — an entity-bound
+    /// ear hears this deposit only while its entity carries the tag — while a
+    /// POST hears everything: coupling governs entities, not the operator's
+    /// instruments. Sigil included, like every name that crosses here.
+    to: []const u8 = "",
 };
 
 /// A delta the host pushes into the evaluator between ticks. `seq` is the
@@ -158,7 +164,7 @@ pub const MockPlane = struct {
     tag_writes: std.ArrayListUnmanaged(TagRec) = .empty,
 
     pub const Write = struct { path: []u8, value: []u8, kind: DeltaKind = .value };
-    pub const CastRec = struct { channel: []u8, amplitude: f64, pos: []u8, radius: f64, decay: ?types.Duration };
+    pub const CastRec = struct { channel: []u8, amplitude: f64, pos: []u8, radius: f64, decay: ?types.Duration, to: []u8 = &.{} };
     pub const TagRec = struct { subject: []u8, tag: []u8, adding: bool };
 
     pub fn init(gpa: std.mem.Allocator) MockPlane {
@@ -182,6 +188,7 @@ pub const MockPlane = struct {
         for (self.casts.items) |c| {
             self.gpa.free(c.channel);
             self.gpa.free(c.pos);
+            if (c.to.len > 0) self.gpa.free(c.to);
         }
         self.casts.deinit(self.gpa);
         for (self.tag_writes.items) |t| {
@@ -267,12 +274,15 @@ pub const MockPlane = struct {
         errdefer self.gpa.free(channel);
         const pos = try self.gpa.dupe(u8, c.pos);
         errdefer self.gpa.free(pos);
+        const to: []u8 = if (c.to.len > 0) try self.gpa.dupe(u8, c.to) else &.{};
+        errdefer if (to.len > 0) self.gpa.free(to);
         try self.casts.append(self.gpa, .{
             .channel = channel,
             .amplitude = c.amplitude,
             .pos = pos,
             .radius = c.radius,
             .decay = c.decay,
+            .to = to,
         });
     }
 
