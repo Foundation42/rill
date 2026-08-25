@@ -2595,6 +2595,19 @@ const p = struct {
     fn kwOpt(n: []const u8, ty: types.TypeId) registry.Port {
         return .{ .name = n, .ty = ty, .optional = true, .kw = true };
     }
+    /// A **broadcasting** number/boolean port: it accepts a record or an array
+    /// as well, because the operator it belongs to is elementwise (beat 1b).
+    ///
+    /// This is opt-in per port, and that is the point (found at tier-2 close
+    /// by a no-priors reviewer). Beat 1b widened `accepts` GLOBALLY so that
+    /// `mul {x: 1}` would wire, which quietly removed wire-time typing from
+    /// every number port in the language — `choose`'s index, `take`'s count,
+    /// `above`'s thresholds, `within`'s radius all began accepting an array
+    /// and refusing at runtime instead. A manual example shipped with exactly
+    /// that mistake and the manual gate could not see it, because it parsed.
+    fn bc(n: []const u8, ty: types.TypeId) registry.Port {
+        return .{ .name = n, .ty = ty, .broadcasts = true };
+    }
     /// A closed-value-set string port: a bare word coerces and its membership
     /// is checked at PARSE, so `lfo sqare 4s` is a wire-time error naming the
     /// list, not a BadValue three seconds into the animation.
@@ -2607,9 +2620,9 @@ const CORE = [_]registry.OpDef{
     // flow
     .{ .name = "select", .inputs = &.{ p.in("cond", Tag.boolean), p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "cond ? a : b — all branches exist; one is chosen per tick.", .eval = evalSelect },
     .{ .name = "lerp", .inputs = &.{ p.in("t", Tag.number), p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a + (b - a) * t, t PIPED — `s | lerp 0.5 1.5` is s, lerped between 0.5 and 1.5.", .eval = evalLerp },
-    .{ .name = "and", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = boolOp(fAnd) },
-    .{ .name = "or", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean or.", .eval = boolOp(fOr) },
-    .{ .name = "not", .inputs = &.{p.in("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean not.", .eval = unBool() },
+    .{ .name = "and", .inputs = &.{ p.bc("a", Tag.boolean), p.bc("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = boolOp(fAnd) },
+    .{ .name = "or", .inputs = &.{ p.bc("a", Tag.boolean), p.bc("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean or.", .eval = boolOp(fOr) },
+    .{ .name = "not", .inputs = &.{p.bc("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Boolean not.", .eval = unBool() },
     .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
     .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .routes = .anywhere, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
     .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
@@ -2661,39 +2674,39 @@ const CORE = [_]registry.OpDef{
     // mismatch check is the authority on kinds either way, and beat 2's
     // `expect`/`match` are how an author pins a shape at a boundary.
     // math
-    .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a + b.", .eval = binMath(fAdd) },
-    .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a - b.", .eval = binMath(fSub) },
-    .{ .name = "mul", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a * b.", .eval = binMath(fMul) },
-    .{ .name = "div", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a / b (IEEE; division by zero yields ±inf).", .eval = binMath(fDiv) },
-    .{ .name = "min", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The smaller of a and b.", .eval = binMath(fMin) },
-    .{ .name = "max", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The larger of a and b.", .eval = binMath(fMax) },
+    .{ .name = "add", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a + b.", .eval = binMath(fAdd) },
+    .{ .name = "sub", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a - b.", .eval = binMath(fSub) },
+    .{ .name = "mul", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a * b.", .eval = binMath(fMul) },
+    .{ .name = "div", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a / b (IEEE; division by zero yields ±inf).", .eval = binMath(fDiv) },
+    .{ .name = "min", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The smaller of a and b.", .eval = binMath(fMin) },
+    .{ .name = "max", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The larger of a and b.", .eval = binMath(fMax) },
     .{ .name = "clamp", .inputs = &.{ p.in("in", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Clamp `in` to [lo, hi].", .eval = evalClamp },
-    .{ .name = "abs", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Absolute value.", .eval = unMath(fAbs) },
-    .{ .name = "floor", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round toward −inf.", .eval = unMath(fFloor) },
-    .{ .name = "round", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round to nearest.", .eval = unMath(fRound) },
+    .{ .name = "abs", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Absolute value.", .eval = unMath(fAbs) },
+    .{ .name = "floor", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round toward −inf.", .eval = unMath(fFloor) },
+    .{ .name = "round", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round to nearest.", .eval = unMath(fRound) },
     // math completions (beat 1b) — every one broadcasts, being minted by the
     // same helpers as `add`.
-    .{ .name = "sin", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Sine, radians.", .eval = unMath(fSin) },
-    .{ .name = "cos", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Cosine, radians.", .eval = unMath(fCos) },
-    .{ .name = "tan", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Tangent, radians.", .eval = unMath(fTan) },
-    .{ .name = "sqrt", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Square root (IEEE; a negative yields nan).", .eval = unMath(fSqrt) },
-    .{ .name = "exp", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "e to the input.", .eval = unMath(fExp) },
-    .{ .name = "log", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Natural log (IEEE; zero yields -inf, a negative yields nan).", .eval = unMath(fLog) },
-    .{ .name = "ceil", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round toward +inf — `floor`'s missing mirror.", .eval = unMath(fCeil) },
-    .{ .name = "sign", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "-1, 0 or 1 (nan stays nan).", .eval = unMath(fSign) },
-    .{ .name = "fract", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Fractional part, always in [0, 1) — `fract -0.25` is 0.75.", .eval = unMath(fFract) },
-    .{ .name = "pow", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a to the power b — `x | pow 2` is x squared.", .eval = binMath(fPow) },
-    .{ .name = "mod", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Floored modulo: the sign follows the divisor, so `-90 | mod 360` is 270.", .eval = binMath(fMod) },
+    .{ .name = "sin", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Sine, radians.", .eval = unMath(fSin) },
+    .{ .name = "cos", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Cosine, radians.", .eval = unMath(fCos) },
+    .{ .name = "tan", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Tangent, radians.", .eval = unMath(fTan) },
+    .{ .name = "sqrt", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Square root (IEEE; a negative yields nan).", .eval = unMath(fSqrt) },
+    .{ .name = "exp", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "e to the input.", .eval = unMath(fExp) },
+    .{ .name = "log", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Natural log (IEEE; zero yields -inf, a negative yields nan).", .eval = unMath(fLog) },
+    .{ .name = "ceil", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Round toward +inf — `floor`'s missing mirror.", .eval = unMath(fCeil) },
+    .{ .name = "sign", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "-1, 0 or 1 (nan stays nan).", .eval = unMath(fSign) },
+    .{ .name = "fract", .inputs = &.{p.bc("in", Tag.number)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Fractional part, always in [0, 1) — `fract -0.25` is 0.75.", .eval = unMath(fFract) },
+    .{ .name = "pow", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a to the power b — `x | pow 2` is x squared.", .eval = binMath(fPow) },
+    .{ .name = "mod", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Floored modulo: the sign follows the divisor, so `-90 | mod 360` is 270.", .eval = binMath(fMod) },
     .{ .name = "atan2", .inputs = &.{ p.in("y", Tag.number), p.in("x", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Angle of (x, y) in radians, y PIPED — `dy | atan2 dx`.", .eval = binMath(fAtan2) },
     .{ .name = "pi", .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "3.14159… — emitted once at mount.", .eval = constant(std.math.pi) },
     .{ .name = "tau", .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "2*pi — a whole turn, emitted once at mount.", .eval = constant(std.math.tau) },
     // comparators
     .{ .name = "=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Equality (numeric across int/float; byte-wise otherwise).", .eval = evalEq },
     .{ .name = "!=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Inequality.", .eval = evalNe },
-    .{ .name = "<", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a < b.", .eval = cmpOp(fLt) },
-    .{ .name = "<=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a <= b.", .eval = cmpOp(fLe) },
-    .{ .name = ">", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a > b.", .eval = cmpOp(fGt) },
-    .{ .name = ">=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a >= b.", .eval = cmpOp(fGe) },
+    .{ .name = "<", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a < b.", .eval = cmpOp(fLt) },
+    .{ .name = "<=", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a <= b.", .eval = cmpOp(fLe) },
+    .{ .name = ">", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a > b.", .eval = cmpOp(fGt) },
+    .{ .name = ">=", .inputs = &.{ p.bc("a", Tag.number), p.bc("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a >= b.", .eval = cmpOp(fGe) },
     // tier 2, beat 2 — arrays. The literal is the missing half of a value kind
     // that already existed: `window` emits an array and `stats` consumes one.
     .{ .name = "array", .variadic = true, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Array construction [ a, b, c ] — a live tuple with positions instead of names.", .eval = evalArray },

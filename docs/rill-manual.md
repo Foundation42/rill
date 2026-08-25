@@ -222,6 +222,7 @@ in steps.
 | when you think… | write… | because… |
 |---|---|---|
 | "if X, do A" | `X \| <crossing or comparator> \| A` | conditions flow; the threshold *is* the if |
+| "if X and Y" / "if not X" | `\| and`, `\| or`, `\| not` | boolean algebra is three ordinary operators, and they broadcast like the rest of the math |
 | "when X, and Y holds" | the conjunction idiom, below | name the condition as a stream, gate with `where`; a block can't open a source |
 | "is it dark?" vs "did it get dark?" | `< 0.25` vs `dropped_below 0.25` | a comparator is a state; a crossing is an event, fired once on the way through |
 | "do A, then continue to B" | `X \| also { A } \| B` | side effects branch; the last effect is the main sink |
@@ -361,6 +362,10 @@ plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load
 plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact
 ```
 
+`and`, `or` and `not` are ordinary operators too, and they broadcast the
+same way — so `not` turns a condition over wherever you need the other
+sense, and `[true, false] | not` is `[false, true]`.
+
 Mismatches **refuse** rather than guess. Two records must have the same
 field set; two arrays must be the same length; a record and an array
 together have no elementwise meaning. Each refusal names both sides, the
@@ -419,7 +424,7 @@ of something that existed rather than a new thing.
 
 ```rill
 plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure
-[{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] | choose plane.stage.leg | set plane.lights.key.pos
+plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] | set plane.lights.key.pos
 plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample
 ```
 
@@ -600,7 +605,7 @@ where you write down what you did.
 ```rill
 plane.input.key_l | toggle | set plane.lights.key.on
 plane.events.kill | tally | set plane.ui.kills
-plane.world.light | above 0.3 0.2 | set plane.lights.street.on
+plane.world.light | above 0.3 0.2 | not | set plane.lights.street.on
 noise 80ms | range 0.6 1 | set plane.lights.torch.level
 plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
 ```
@@ -626,6 +631,12 @@ event.
 **`above` is what stops a threshold chattering.** `above 0.3 0.2` reads
 as "above 0.3, until below 0.2". A plain `< 0.3` on a noisy dusk reading
 switches the lights on and off every frame; the band does not.
+
+**It says ABOVE, so read it aloud before you wire it.** Street lights
+come on when it gets *dark*, so the sense has to be turned over: `above
+0.3 0.2 | not`. Written without the `not` it is a perfectly good
+hysteresis band that lights the street at noon — and that is exactly how
+it was printed here until a reader trying to use it said so.
 
 **`pulse` is a value and `every` is an occurrence.** One node, one kind.
 `pulse` is the rectangle you shape (`pulse 2s width 60ms | ease 10ms
@@ -911,7 +922,7 @@ once 1 | ramp 2s from 0 | set plane.render.grade.exposure
 **The threshold that does not chatter** — a noisy reading into a switch:
 
 ```rill
-plane.world.light | above 0.3 0.2 | set plane.lights.street.on
+plane.world.light | above 0.3 0.2 | not | set plane.lights.street.on
 ```
 
 **The nearest threat** — a list into one answer:

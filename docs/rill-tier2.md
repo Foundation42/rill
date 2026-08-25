@@ -590,8 +590,13 @@ that asserts behaviour, and the three rows that carried a known
 wrongness or an unverified read have each been settled:
 
 - *night falls → lights on* — the row that put this column here. `above`
-  fixes it, and the gate drives the exact oscillation where a strict
-  comparator and a hysteresis band disagree: **six flips against zero**.
+  fixes the chatter, and the gate drives the exact oscillation where a
+  strict comparator and a hysteresis band disagree: **six flips against
+  zero**. It also shipped **inverted** — `above 0.3 0.2` turns the lights
+  on in daylight, and the gate asserted that while measuring the chatter
+  correctly. Found at close by a no-priors reader; the sense is `| not`,
+  and the gate now drives the manual's own recipe text and asserts the
+  row's claim rather than the operator's mechanics.
 - *dim the lamp as the fire dies* — re-probed at beat-4 close against
   real `noise`. Holds at 2 lines **and only at 2**: the naked reading
   jitters, and the gate asserts the difference the smoothing line makes
@@ -600,6 +605,18 @@ wrongness or an unverified read have each been settled:
   Holds at 1. It promises a write RATE, not smoothness, and delivers
   one: ten changes over ten periods while the sensor moved on all 126
   frames.
+
+**The ergonomics re-probe, at close.** A reader who had never seen rill
+was given the human manual and these asks *in prose*, and wrote 29 of 31
+in one line — the campaign's claim, checked from outside it. They also
+found three things nobody inside had: the inverted threshold recipe
+above, a printed example that parsed and could never run (which traced
+to beat 1b having widened `types.accepts` globally, removing wire-time
+typing from every number port — now opt-in per port), and that
+`and`/`or`/`not` were taught in the agent manual and nowhere in the human
+one. The two asks that cost them more than one line are recorded in §8:
+there is no way to kick an envelope from an event, and `first` errors on
+empty where a contact list is empty most of the time.
 
 **Final score: 35 rows. 31 at one line ✓, 1 at its two-line target ✓,
 and 3 not cleared** — each blocked on something recorded above with its
@@ -1109,6 +1126,31 @@ host, or the manual rather than the operator table:
   different positions: a field never takes a section, and `map`/`keep`/
   `where` always do — gated in one program. The camera-shake row went
   from four lines to **one**, under its 2–3 target.
+
+- **FORK — no way to kick an envelope from an event** (raised at close by
+  the ergonomics re-probe). "Flash a light on a hit" and "shake the camera
+  on impact" are most of a week's game-feel work, and rill has three
+  near-misses and no hit: `pulse` decays but is **periodic**; `ease`
+  decays but **follows its input**, and an occurrence carrying 1 gives it
+  a target of 1 with nothing to pull it back; `ramp … from` has a start
+  but only for the **first** tween. The reviewer's answer was two
+  programs, an invented gate path and a 60 ms magic number whose only job
+  is giving `ease` something to fall from. §6a's "thinking in rill" table
+  has a row for *make it breathe* and none for *kick this and let it
+  fall*. Candidate spellings: `envelope <attack> <decay>` on an
+  occurrence, or `ramp <over> to <v>` so a trigger names its destination.
+  **Not decided.**
+
+- **FORK — `first` errors on empty, and the flagship list recipe walks
+  into it** (same source). §11's nearest-threat recipe is
+  `contacts | sort by (.distance) | first | .id | set …`, and a contact
+  list is empty most of the time; §9's error budget then unmounts the
+  program whole. The forgiving spelling that exists is `take 1 | map
+  (.id)`, which publishes `[]` or `["id"]` — a different shape, so every
+  consumer changes too. `first` was gated on erroring for a principled
+  reason (it promises ONE value), and that reason is still right; what is
+  missing is the spelling for "the nearest, if there is one".
+  **Not decided.**
 
 - **`| .field` — RULED 2026-08-25** (raised and settled the same day).
   `| .field` is the taught spelling for a field read mid-chain, sugar for

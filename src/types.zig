@@ -99,8 +99,17 @@ pub const TypeTable = struct {
 /// not quieter. `expect`/`match` (beat 2) are the author's way back to a
 /// mount-time answer.
 pub fn accepts(port_ty: TypeId, value_ty: TypeId) bool {
+    return acceptsPort(port_ty, value_ty, false);
+}
+
+/// `broadcasts` says the port is elementwise (`registry.Port.broadcasts`), and
+/// only then does a `number` or `boolean` port take a container. Without it,
+/// `[1, 2] | choose plane.i` is a WIRE-TIME error naming the port instead of a
+/// runtime refusal three seconds into the animation — which is what the wire
+/// gate exists for, and what beat 1b's global widening quietly gave away.
+pub fn acceptsPort(port_ty: TypeId, value_ty: TypeId, broadcasts: bool) bool {
     if (port_ty == Tag.any or value_ty == Tag.any or port_ty == value_ty) return true;
-    if (port_ty == Tag.number or port_ty == Tag.boolean) {
+    if (broadcasts and (port_ty == Tag.number or port_ty == Tag.boolean)) {
         return value_ty == Tag.record or value_ty == Tag.array;
     }
     return false;

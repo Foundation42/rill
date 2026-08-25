@@ -821,6 +821,72 @@ Built: `pulse`, `once`, `toggle`, `tally`, `above` (4a); `noise`, `rand`,
   *coverage* gate can fail by over-reporting as easily as under — the
   first is merely noisy, the second is the dangerous one.
 
+## The ergonomics re-probe — what a no-priors reader found (2026-08-25)
+
+The last close-out item: hand the human manual and the §4 asks *in prose*
+to a reader who has never seen rill, and compare their line counts with
+ours. They wrote 29 of 31 asks in one line, which is the campaign's
+claim holding up. They also found three things nobody inside had.
+
+- **The flagship threshold recipe was INVERTED.** `plane.world.light |
+  above 0.3 0.2 | set plane.lights.street.on` turns the street lights on
+  **in daylight**. It shipped in §6f, in §11 captioned "a noisy reading
+  into a switch", and in the idioms book — and the beat-4 gate *passed*
+  it, because the gate drove the chatter property (six flips against
+  zero, correctly) while naming its output slot `plane.lights.street.on`
+  and asserting it TRUE at 0.9. The hysteresis was right and the sense
+  was upside down, in four places at once. Fixed with `| not`; the gate
+  now asserts the row's actual claim — lights OFF in daylight, ON past
+  the release, still on inside the band, off past the trip.
+
+  **New ledger line: a gate that watches the operator is not watching the
+  row.** "Does `above` hold its state across the band" and "do the street
+  lights come on at night" are different questions, and the beat gate
+  only asked the first. The row is the customer; the operator is the
+  implementation.
+
+- **The gate could not have caught it, and now can.** The manual gate
+  proves every printed example PARSES, which was never the problem here.
+  So the gate for a recipe whose *correctness* matters now drives the
+  manual's own text (`manualRecipe(heading)`) instead of its own copy —
+  edit the recipe back and the gate fails. Mutation U3 survived until
+  this landed and bites now. This is applied where sense matters, not
+  everywhere: a general "mount every example" gate needs a plausible
+  seed per subscribed path, and seeding them all with a number produced
+  eight false refusals against one true one.
+
+- **A manual example that parsed and could never run.** `[{…}, {…}] |
+  choose plane.stage.leg` pipes the ARRAY into `choose`'s index port. The
+  root cause was ours, not the example's: **beat 1b widened
+  `types.accepts` GLOBALLY** so `mul {x: 1}` would wire — and that
+  removed wire-time typing from *every* number and boolean port in the
+  language. `choose`'s index, `take`'s count, `above`'s thresholds,
+  `within`'s radius, `noise`'s octaves and seed all silently accepted an
+  array and refused at runtime instead.
+
+  Fixed structurally: `Port.broadcasts` is opt-in, set by the 27 rows
+  whose eval is minted by `binMath`/`unMath`/`cmpOp`/`boolOp`/`unBool`,
+  and `types.acceptsPort` consults it. The bad example now fails at
+  parse — and it failed in the idioms book too, on the first run after
+  the change, which is the wire gate doing the job it was built for.
+
+- **`and`/`or`/`not` were in the agent manual and nowhere in the human
+  one.** The parity gate covers the agent manual (it is a reference and
+  promises to list the vocabulary); the human manual is prose and is
+  gated the other way. That leaves exactly this gap, and it is why the
+  reader could not turn the threshold over: they went looking for
+  `below`, `not`, `invert`, `!` and found none of them.
+
+**Findings recorded, not built** (each is real, none is a bug in
+something that shipped): there is no way to kick an envelope from an
+event — `pulse` is periodic, `ease` follows its input, and `ramp … from`
+seeds only the first tween, so "flash on hit" costs two programs and an
+invented gate path; `first` errors on empty and §11's nearest-threat
+recipe walks into it every time the gate is quiet; `select`'s branch
+order is inferable only from a variable name in §10; `stats` on an empty
+array is unspecified where `reduce` is settled; and the human manual has
+no alphabetical operator index, so a reader builds one by reading prose.
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no
@@ -850,6 +916,15 @@ A refusal message is built from the thing being refused, so the message
 must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
+
+**Addendum, 2026-08-25 (tier-2 close): a gate that watches the operator
+is not watching the row.** The beat-4 street-light gate drove the exact
+oscillation where a hysteresis band and a strict comparator disagree, and
+counted flips correctly — while asserting that the street lights were ON
+at light level 0.9. "Does `above` hold its state across the band" and "do
+the lights come on at night" are different questions, and only the second
+one is the customer. Where a recipe's *sense* is the claim, drive the
+manual's own text so the gate and the documentation cannot drift apart.
 
 **Addendum, 2026-08-25 (beat 4), ratified: gate the property the doc
 claims, not the implementation's incidental ones.** `noise` promised that

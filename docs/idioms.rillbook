@@ -146,7 +146,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.world.light | above 0.3 0.2 | set plane.lights.street.on"
+   "source": "plane.world.light | above 0.3 0.2 | not | set plane.lights.street.on"
   },
   {
    "name": "fade-in-ask",
@@ -426,7 +426,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "[{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | choose plane.stage.leg | set plane.lights.key.pos"
+   "source": "plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
   },
   {
    "name": "three-points-note",

@@ -50,6 +50,18 @@ pub const Port = struct {
     /// is the payload or the radius, and a grammar that guesses is worse than
     /// one that asks. The colon-kwarg spelling (`at: …`) still works too.
     kw: bool = false,
+    /// This port is **elementwise**: it accepts a record or an array where its
+    /// declared type is `number` or `boolean`, and the operator broadcasts over
+    /// the container (beat 1b).
+    ///
+    /// Opt-in per port, and that is the whole point. Beat 1b widened
+    /// `types.accepts` globally so `mul {x: 1}` would wire, which removed
+    /// wire-time typing from EVERY number port in the language: `choose`'s
+    /// index, `take`'s count, `above`'s thresholds and `within`'s radius all
+    /// silently accepted an array and refused at runtime instead. Found at
+    /// tier-2 close, by a reviewer reading the manual with no priors, from a
+    /// printed example that parsed and could never run.
+    broadcasts: bool = false,
 };
 
 /// Static (non-stream) parameters an operator consumes at parse time:

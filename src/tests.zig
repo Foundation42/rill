@@ -5830,22 +5830,45 @@ test "beat 4a: `tally` survives RESTORE and not REMOUNT" {
     try testing.expectEqual(@as(f64, 0), slotNum(&fx3, "programs.p.tally1.out.out").?);
 }
 
-test "beat 4a: night falls → lights on, and it does NOT chatter at dusk" {
-    // The row that put a correctness column on §4: a strict comparator scored
-    // ✓ at one line *and* flipped the light on and off across the threshold
-    // every frame. "A rather than B": this gate drives the exact oscillation
-    // where the two disagree and asserts the disagreement at every step.
+/// The ```rill block that follows `heading` in a manual. Gates that assert a
+/// recipe's CORRECTNESS drive the manual's own text through this, rather than
+/// their own copy of it — because the manual gate only ever proved the
+/// examples PARSE, and a recipe can parse and still be backwards. It was, for
+/// the flagship threshold recipe, until a reader trying to use it said so.
+fn manualRecipe(heading: []const u8) []const u8 {
+    const doc = @embedFile("rill-manual.md");
+    const at = std.mem.indexOf(u8, doc, heading) orelse @panic("manual heading not found");
+    const rest = doc[at..];
+    const open = std.mem.indexOf(u8, rest, "```rill\n") orelse @panic("no rill block after the heading");
+    const body = rest[open + "```rill\n".len ..];
+    const close = std.mem.indexOf(u8, body, "```") orelse @panic("unterminated block after the heading");
+    return body[0..close];
+}
+
+test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
+    // The row that put a correctness column on §4, gated on BOTH of its
+    // claims. The first version of this gate watched only the second one — it
+    // drove the oscillation, counted flips, and named the output slot
+    // `plane.lights.street.on` while asserting it was TRUE in daylight. The
+    // hysteresis was right and the sense was upside down, in the manual, in
+    // the recipe, in the idioms book and here. A reader trying to use the
+    // recipe found it; the gate could not, because it never asked what the
+    // row actually says. The row says NIGHT falls, so the lights come ON.
+    // Driven from the MANUAL'S OWN TEXT, not a copy of it. Editing the recipe
+    // back to its inverted form fails here, which is the whole point: the
+    // manual gate proves an example parses, and parsing was never the problem.
+    const recipe = manualRecipe("**The threshold that does not chatter**");
+    const src = try std.fmt.allocPrint(testing.allocator, "{s}plane.world.light | < 0.3 | set plane.strict\n", .{recipe});
+    defer testing.allocator.free(src);
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        \\plane.world.light | above 0.3 0.2 | set plane.lights.street.on
-        \\plane.world.light | < 0.3 | set plane.strict
-    , .{.{ "plane.world.light", @as(f64, 0.5) }});
+    try mountFixture(testing.allocator, &fx, src, .{.{ "plane.world.light", @as(f64, 0.5) }});
     defer fx.deinit();
 
-    const hyst = "programs.p.above1.out.out";
+    const hyst = "programs.p.not1.out.out";
     const strict = "programs.p.lt1.out.out";
-    // Bright: above the trip, so "night" is false either way.
-    try testing.expect(types.asBool(fx.rt.readSlot(hyst).?).?);
+    // Broad daylight: the street lights are OFF. This is the assertion the
+    // first version of this gate had backwards.
+    try testing.expect(!types.asBool(fx.rt.readSlot(hyst).?).?);
     try testing.expect(!types.asBool(fx.rt.readSlot(strict).?).?);
 
     // Dusk, wobbling either side of 0.3 — the sensor noise that caused this.
@@ -5868,10 +5891,41 @@ test "beat 4a: night falls → lights on, and it does NOT chatter at dusk" {
     try testing.expectEqual(@as(usize, 6), flips_strict);
     try testing.expectEqual(@as(usize, 0), flips_hyst);
 
-    // …and it still releases when night actually falls past the release point.
+    // …and night actually falling turns them ON.
     try feedValue(&fx.rt, testing.allocator, "plane.world.light", @as(f64, 0.15));
     try fx.rt.tick(.{});
+    try testing.expect(types.asBool(fx.rt.readSlot(hyst).?).?);
+    // …and dawn turns them off again, past the trip and not before.
+    try feedValue(&fx.rt, testing.allocator, "plane.world.light", @as(f64, 0.25));
+    try fx.rt.tick(.{});
+    try testing.expect(types.asBool(fx.rt.readSlot(hyst).?).?); // still night, inside the band
+    try feedValue(&fx.rt, testing.allocator, "plane.world.light", @as(f64, 0.35));
+    try fx.rt.tick(.{});
     try testing.expect(!types.asBool(fx.rt.readSlot(hyst).?).?);
+}
+
+test "the wire gate: a container only reaches a port that says it broadcasts" {
+    // Beat 1b widened `accepts` globally so `mul {x: 1}` would wire, and that
+    // quietly removed wire-time typing from EVERY number port in the language.
+    // A manual example shipped piping an array into `choose`'s index; it
+    // parsed, and refused three seconds into the animation instead. Opt-in per
+    // port puts the error back where the wire gate can see it.
+    try expectParseError("[1, 2] | choose plane.i | set plane.out", "expected number, got array");
+    try expectParseError("plane.v | above [1] 0.2 | set plane.out", "expected number, got array");
+    try expectParseError("plane.xs | take [3] | set plane.out", "expected number, got array");
+
+    // …and the elementwise operators are unchanged: that is the whole reason
+    // the widening existed, so both halves run here.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[1, 2, 3] | mul 2 | set plane.a
+        \\plane.pos | add {x: 0, y: 2, z: 0} | set plane.b
+        \\[true, false] | not | set plane.c
+    , .{.{ "plane.pos", .{ .x = @as(f64, 1), .y = @as(f64, 1), .z = @as(f64, 1) } }});
+    defer fx.deinit();
+    const c = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.not1.out.out").?);
+    defer testing.allocator.free(c);
+    try testing.expectEqualSlices(bool, &.{ false, true }, c);
 }
 
 test "beat 4a: `above` emits its LEVEL at mount, both ways" {
@@ -6508,3 +6562,5 @@ test "manual parity: every core operator is named in the agent manual, or is sub
         return error.TestUnexpectedResult;
     }
 }
+
+

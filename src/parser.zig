@@ -1568,7 +1568,7 @@ const Parser = struct {
                 return self.fail(op_tok, "port '{s}' of '{s}' is not bound", .{ port.name, op_name });
             };
             const val_ty = if (arg.kind == .section) self.sourceTy(target, arg.source) else arg.ty;
-            if (!types.accepts(port.ty, val_ty)) {
+            if (!types.acceptsPort(port.ty, val_ty, port.broadcasts)) {
                 if (port.ty == types.Tag.duration and val_ty == types.Tag.number) {
                     // §2.2: `sample 5` is a wire-time type error, with the fix named.
                     return self.fail(arg.tok, "'{s}' port '{s}' takes a duration — write it with a unit: 5s, 250ms, 3f", .{ op_name, port.name });
