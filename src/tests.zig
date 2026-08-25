@@ -66,16 +66,16 @@ fn hostRegistry(gpa: std.mem.Allocator) !rill.Registry {
     host.out_mesh = .{.{ .name = "out", .ty = mesh }};
     host.ports_mesh_num = .{ .{ .name = "m", .ty = mesh }, .{ .name = "amount", .ty = types.Tag.number } };
     host.ports_mesh_mesh = .{ .{ .name = "a", .ty = mesh }, .{ .name = "b", .ty = mesh } };
-    _ = try reg.register(.{ .name = "cube", .inputs = &host.ports_cube, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
-    _ = try reg.register(.{ .name = "bevel", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
-    _ = try reg.register(.{ .name = "rot", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
-    _ = try reg.register(.{ .name = "shell", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
-    _ = try reg.register(.{ .name = "boolean subtract", .inputs = &host.ports_mesh_mesh, .outputs = &host.out_mesh, .help = "stub", .eval = stubEval });
-    _ = try reg.register(.{ .name = "sound play", .inputs = &host.ports_tail, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
-    _ = try reg.register(.{ .name = "emitter drop", .inputs = &host.ports_gain_tail, .statics = &host.statics_emitter, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
-    _ = try reg.register(.{ .name = "say", .inputs = &host.ports_tail_opt, .outputs = &host.out_str, .help = "stub", .eval = echoTailEval });
-    _ = try reg.register(.{ .name = "volume set", .inputs = &host.ports_vol_set, .outputs = &host.out_str, .help = "stub", .class = .effect, .eval = stubEval });
-    _ = try reg.register(.{ .name = "emitter mode", .inputs = &host.ports_emitter_mode, .outputs = &host.out_str, .help = "stub", .class = .effect, .eval = stubEval });
+    _ = try reg.register(.{ .name = "cube", .inputs = &host.ports_cube, .outputs = &host.out_mesh, .help = "stub", .routes = .anywhere, .eval = stubEval });
+    _ = try reg.register(.{ .name = "bevel", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .routes = .anywhere, .eval = stubEval });
+    _ = try reg.register(.{ .name = "rot", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .routes = .anywhere, .eval = stubEval });
+    _ = try reg.register(.{ .name = "shell", .inputs = &host.ports_mesh_num, .outputs = &host.out_mesh, .help = "stub", .routes = .anywhere, .eval = stubEval });
+    _ = try reg.register(.{ .name = "boolean subtract", .inputs = &host.ports_mesh_mesh, .outputs = &host.out_mesh, .help = "stub", .routes = .anywhere, .eval = stubEval });
+    _ = try reg.register(.{ .name = "sound play", .inputs = &host.ports_tail, .outputs = &host.out_str, .help = "stub", .routes = .anywhere, .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "emitter drop", .inputs = &host.ports_gain_tail, .statics = &host.statics_emitter, .outputs = &host.out_str, .help = "stub", .routes = .anywhere, .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "say", .inputs = &host.ports_tail_opt, .outputs = &host.out_str, .help = "stub", .routes = .anywhere, .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "volume set", .inputs = &host.ports_vol_set, .outputs = &host.out_str, .help = "stub", .class = .effect, .routes = .anywhere, .eval = stubEval });
+    _ = try reg.register(.{ .name = "emitter mode", .inputs = &host.ports_emitter_mode, .outputs = &host.out_str, .help = "stub", .class = .effect, .routes = .anywhere, .eval = stubEval });
     return reg;
 }
 
@@ -852,7 +852,7 @@ test "host context is live at tick 0 — one-shot command programs depend on it"
     defer reg.deinit();
     try rill.registerCore(&reg);
     const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
-    _ = try reg.register(.{ .name = "poke", .inputs = &in_num, .help = "stub", .class = .effect, .eval = pokeEval });
+    _ = try reg.register(.{ .name = "poke", .inputs = &in_num, .help = "stub", .class = .effect, .routes = .anywhere, .eval = pokeEval });
 
     var mock = rill.MockPlane.init(testing.allocator);
     defer mock.deinit();
@@ -1277,8 +1277,8 @@ test "OpClass: a reads op with a path static is not a writer; effect is" {
     try rill.registerCore(&reg);
     const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
     const path_static = [_]registry.StaticDecl{.{ .name = "path", .kind = .path }};
-    _ = try reg.register(.{ .name = "probeat", .inputs = &in_num, .statics = &path_static, .help = "stub", .class = .reads, .eval = nop });
-    _ = try reg.register(.{ .name = "pokeat", .inputs = &in_num, .statics = &path_static, .help = "stub", .class = .effect, .eval = nop });
+    _ = try reg.register(.{ .name = "probeat", .inputs = &in_num, .statics = &path_static, .help = "stub", .class = .reads, .routes = .anywhere, .eval = nop });
+    _ = try reg.register(.{ .name = "pokeat", .inputs = &in_num, .statics = &path_static, .help = "stub", .class = .effect, .routes = .anywhere, .eval = nop });
 
     // the reader names the very path the program subscribes to: no write, no cycle
     var diag = rill.Diag{};
@@ -1386,7 +1386,7 @@ test "error hook: a failing op reports node, op, tick and a stable input digest"
     defer reg.deinit();
     try rill.registerCore(&reg);
     const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
-    _ = try reg.register(.{ .name = "boom", .inputs = &in_num, .help = "stub", .class = .effect, .eval = boom });
+    _ = try reg.register(.{ .name = "boom", .inputs = &in_num, .help = "stub", .class = .effect, .routes = .anywhere, .eval = boom });
 
     var mock = rill.MockPlane.init(testing.allocator);
     defer mock.deinit();
@@ -1673,12 +1673,12 @@ test "registry: a reserved word cannot name an operator" {
             return registry.Emit.none;
         }
     }.eval;
-    try testing.expectError(error.ReservedName, reg.register(.{ .name = "also", .help = "", .eval = noop }));
-    try testing.expectError(error.ReservedName, reg.register(.{ .name = "as", .help = "", .eval = noop }));
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "also", .help = "", .routes = .anywhere, .eval = noop }));
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "as", .help = "", .routes = .anywhere, .eval = noop }));
     // Whole words only: a two-word host row is checked word by word, because
     // the parser's two-word lookup never sees the halves on their own.
-    try testing.expectError(error.ReservedName, reg.register(.{ .name = "light as", .help = "", .eval = noop }));
-    _ = try reg.register(.{ .name = "alsorun", .help = "", .eval = noop });
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "light as", .help = "", .routes = .anywhere, .eval = noop }));
+    _ = try reg.register(.{ .name = "alsorun", .help = "", .routes = .anywhere, .eval = noop });
 }
 
 // ---------------------------------------------------------------------------
@@ -2619,7 +2619,7 @@ fn tailAllRegistry(gpa: std.mem.Allocator) !rill.Registry {
         };
         var outs = [_]registry.Port{.{ .name = "out", .ty = types.Tag.string }};
     };
-    _ = try reg.register(.{ .name = "remount", .inputs = &host.ports, .outputs = &host.outs, .help = "stub", .eval = echoTailEval });
+    _ = try reg.register(.{ .name = "remount", .inputs = &host.ports, .outputs = &host.outs, .help = "stub", .routes = .anywhere, .eval = echoTailEval });
     return reg;
 }
 
@@ -2663,9 +2663,9 @@ test "tail_all: registration keeps the closed shape — tail_all implies tail, l
         }
     }.f;
     const no_tail = [_]registry.Port{.{ .name = "s", .ty = types.Tag.string, .tail_all = true }};
-    try testing.expectError(error.BadTailPort, reg.register(.{ .name = "a", .inputs = &no_tail, .help = "", .eval = nop }));
+    try testing.expectError(error.BadTailPort, reg.register(.{ .name = "a", .inputs = &no_tail, .help = "", .routes = .anywhere, .eval = nop }));
     const not_last = [_]registry.Port{ .{ .name = "s", .ty = types.Tag.string, .tail = true, .tail_all = true }, .{ .name = "b", .ty = types.Tag.number } };
-    try testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_last, .help = "", .eval = nop }));
+    try testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_last, .help = "", .routes = .anywhere, .eval = nop }));
 }
 
 test "diagnostics: a path after a pipe names the forgotten `set`" {
@@ -2905,6 +2905,7 @@ test "cast: `to` refuses a sigil-less word, and an optional static must be kw" {
         .name = "badopt",
         .statics = &.{.{ .name = "maybe", .kind = .word, .optional = true }},
         .help = "",
+        .routes = .anywhere,
         .eval = noopEval,
     }));
 }

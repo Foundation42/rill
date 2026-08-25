@@ -775,58 +775,58 @@ const p = struct {
 
 const CORE = [_]registry.OpDef{
     // flow
-    .{ .name = "select", .inputs = &.{ p.in("cond", Tag.boolean), p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .help = "cond ? a : b — all branches exist; one is chosen per tick.", .eval = evalSelect },
-    .{ .name = "lerp", .inputs = &.{ p.in("t", Tag.number), p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a + (b - a) * t, t PIPED — `s | lerp 0.5 1.5` is s, lerped between 0.5 and 1.5.", .eval = evalLerp },
-    .{ .name = "and", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = evalAnd },
-    .{ .name = "or", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Boolean or.", .eval = evalOr },
-    .{ .name = "not", .inputs = &.{p.in("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Boolean not.", .eval = evalNot },
-    .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
-    .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
-    .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
-    .{ .name = "latch", .inputs = &.{ p.in("in", Tag.any), p.occ("trigger", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .help = "Sample-and-hold: emit the current `in` when `trigger` fires.", .class = .reads, .eval = evalLatch },
+    .{ .name = "select", .inputs = &.{ p.in("cond", Tag.boolean), p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "cond ? a : b — all branches exist; one is chosen per tick.", .eval = evalSelect },
+    .{ .name = "lerp", .inputs = &.{ p.in("t", Tag.number), p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a + (b - a) * t, t PIPED — `s | lerp 0.5 1.5` is s, lerped between 0.5 and 1.5.", .eval = evalLerp },
+    .{ .name = "and", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = evalAnd },
+    .{ .name = "or", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Boolean or.", .eval = evalOr },
+    .{ .name = "not", .inputs = &.{p.in("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Boolean not.", .eval = evalNot },
+    .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
+    .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .routes = .anywhere, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
+    .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
+    .{ .name = "latch", .inputs = &.{ p.in("in", Tag.any), p.occ("trigger", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Sample-and-hold: emit the current `in` when `trigger` fires.", .class = .reads, .eval = evalLatch },
     // events
-    .{ .name = "dropped_below", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .help = "Fire (with the value) when `in` crosses below threshold. First observation baselines silently.", .class = .reads, .eval = evalDroppedBelow },
-    .{ .name = "rose_above", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .help = "Fire (with the value) when `in` crosses above threshold. First observation baselines silently.", .class = .reads, .eval = evalRoseAbove },
-    .{ .name = "edge", .inputs = &.{p.in("in", Tag.boolean)}, .outputs = &.{p.occ("out", Tag.boolean)}, .help = "Fire on the false→true transition.", .class = .reads, .eval = evalEdge },
+    .{ .name = "dropped_below", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .routes = .anywhere, .help = "Fire (with the value) when `in` crosses below threshold. First observation baselines silently.", .class = .reads, .eval = evalDroppedBelow },
+    .{ .name = "rose_above", .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .routes = .anywhere, .help = "Fire (with the value) when `in` crosses above threshold. First observation baselines silently.", .class = .reads, .eval = evalRoseAbove },
+    .{ .name = "edge", .inputs = &.{p.in("in", Tag.boolean)}, .outputs = &.{p.occ("out", Tag.boolean)}, .routes = .anywhere, .help = "Fire on the false→true transition.", .class = .reads, .eval = evalEdge },
     // temporal — durations are 5s / 250ms / 2m / 3f literals; time is fed, never read
-    .{ .name = "sample", .inputs = &.{ p.in("in", Tag.any), p.in("period", Tag.duration) }, .outputs = &.{p.val("out", Tag.any)}, .help = "At most one emission per period, latest value wins — leading edge immediate, trailing edge via the wheel.", .class = .reads, .eval = evalSample },
-    .{ .name = "debounce", .inputs = &.{ p.occ("in", Tag.any), p.in("quiet", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass only after a quiet period; storms collapse to their last edge.", .class = .reads, .eval = evalDebounce },
-    .{ .name = "throttle", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "First occurrence passes, the rest are eaten for the window.", .class = .reads, .eval = evalRateGate },
-    .{ .name = "cooldown", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass one, then deaf for the window — triggered, now get out of the way.", .class = .reads, .eval = evalRateGate },
-    .{ .name = "window", .inputs = &.{ p.in("in", Tag.any), p.in("span", Tag.duration) }, .outputs = &.{p.val("out", Tag.array)}, .help = "Rolling buffer over fed time, emitted as an array; entries age out on schedule even when the input is quiet.", .class = .reads, .eval = evalWindow },
-    .{ .name = "stats", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.record)}, .help = "{max, mean, min, n, stddev} over a numeric array; empty in ⇒ zeros with n = 0.", .eval = evalStats },
-    .{ .name = "delay", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit each occurrence `by` later; same-tick maturities collapse to the newest.", .class = .reads, .eval = evalDelay },
-    .{ .name = "every", .inputs = &.{p.in("period", Tag.duration)}, .outputs = &.{p.occ("out", Tag.boolean)}, .help = "Occurrence source on a cadence: fires at mount, then once per period of fed time. `every 1f { cast … }` is the standing-caster idiom.", .class = .reads, .eval = evalEvery },
+    .{ .name = "sample", .inputs = &.{ p.in("in", Tag.any), p.in("period", Tag.duration) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "At most one emission per period, latest value wins — leading edge immediate, trailing edge via the wheel.", .class = .reads, .eval = evalSample },
+    .{ .name = "debounce", .inputs = &.{ p.occ("in", Tag.any), p.in("quiet", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Pass only after a quiet period; storms collapse to their last edge.", .class = .reads, .eval = evalDebounce },
+    .{ .name = "throttle", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "First occurrence passes, the rest are eaten for the window.", .class = .reads, .eval = evalRateGate },
+    .{ .name = "cooldown", .inputs = &.{ p.occ("in", Tag.any), p.in("window", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Pass one, then deaf for the window — triggered, now get out of the way.", .class = .reads, .eval = evalRateGate },
+    .{ .name = "window", .inputs = &.{ p.in("in", Tag.any), p.in("span", Tag.duration) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Rolling buffer over fed time, emitted as an array; entries age out on schedule even when the input is quiet.", .class = .reads, .eval = evalWindow },
+    .{ .name = "stats", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "{max, mean, min, n, stddev} over a numeric array; empty in ⇒ zeros with n = 0.", .eval = evalStats },
+    .{ .name = "delay", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Emit each occurrence `by` later; same-tick maturities collapse to the newest.", .class = .reads, .eval = evalDelay },
+    .{ .name = "every", .inputs = &.{p.in("period", Tag.duration)}, .outputs = &.{p.occ("out", Tag.boolean)}, .routes = .anywhere, .help = "Occurrence source on a cadence: fires at mount, then once per period of fed time. `every 1f { cast … }` is the standing-caster idiom.", .class = .reads, .eval = evalEvery },
     // `in` is optional on the gates: controls must latch even before the
     // stream first flows — a required port would silently discard an `off`
     // that fired ahead of the first occurrence (the all-inputs guard skips
     // nodes with a missing required input).
-    .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .class = .reads, .eval = gateEval(true) },
-    .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .class = .reads, .eval = gateEval(false) },
+    .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .class = .reads, .eval = gateEval(true) },
+    .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .class = .reads, .eval = gateEval(false) },
     // math
-    .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a + b.", .eval = binMath(fAdd) },
-    .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a - b.", .eval = binMath(fSub) },
-    .{ .name = "mul", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a * b.", .eval = binMath(fMul) },
-    .{ .name = "div", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a / b (IEEE; division by zero yields ±inf).", .eval = binMath(fDiv) },
-    .{ .name = "min", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "The smaller of a and b.", .eval = binMath(fMin) },
-    .{ .name = "max", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "The larger of a and b.", .eval = binMath(fMax) },
-    .{ .name = "clamp", .inputs = &.{ p.in("in", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "Clamp `in` to [lo, hi].", .eval = evalClamp },
-    .{ .name = "abs", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .help = "Absolute value.", .eval = unMath(fAbs) },
-    .{ .name = "floor", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .help = "Round toward −inf.", .eval = unMath(fFloor) },
-    .{ .name = "round", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .help = "Round to nearest.", .eval = unMath(fRound) },
+    .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a + b.", .eval = binMath(fAdd) },
+    .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a - b.", .eval = binMath(fSub) },
+    .{ .name = "mul", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a * b.", .eval = binMath(fMul) },
+    .{ .name = "div", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a / b (IEEE; division by zero yields ±inf).", .eval = binMath(fDiv) },
+    .{ .name = "min", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "The smaller of a and b.", .eval = binMath(fMin) },
+    .{ .name = "max", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "The larger of a and b.", .eval = binMath(fMax) },
+    .{ .name = "clamp", .inputs = &.{ p.in("in", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Clamp `in` to [lo, hi].", .eval = evalClamp },
+    .{ .name = "abs", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Absolute value.", .eval = unMath(fAbs) },
+    .{ .name = "floor", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Round toward −inf.", .eval = unMath(fFloor) },
+    .{ .name = "round", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Round to nearest.", .eval = unMath(fRound) },
     // comparators
-    .{ .name = "=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Equality (numeric across int/float; byte-wise otherwise).", .eval = evalEq },
-    .{ .name = "!=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Inequality.", .eval = evalNe },
-    .{ .name = "<", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "a < b.", .eval = cmpOp(fLt) },
-    .{ .name = "<=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "a <= b.", .eval = cmpOp(fLe) },
-    .{ .name = ">", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "a > b.", .eval = cmpOp(fGt) },
-    .{ .name = ">=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "a >= b.", .eval = cmpOp(fGe) },
+    .{ .name = "=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Equality (numeric across int/float; byte-wise otherwise).", .eval = evalEq },
+    .{ .name = "!=", .inputs = &.{ p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Inequality.", .eval = evalNe },
+    .{ .name = "<", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a < b.", .eval = cmpOp(fLt) },
+    .{ .name = "<=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a <= b.", .eval = cmpOp(fLe) },
+    .{ .name = ">", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a > b.", .eval = cmpOp(fGt) },
+    .{ .name = ">=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "a >= b.", .eval = cmpOp(fGe) },
     // records
-    .{ .name = "record", .variadic = true, .outputs = &.{p.val("out", Tag.record)}, .help = "Record construction { field: stream, … } — a live tuple with named fields.", .eval = evalRecord },
-    .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },
-    .{ .name = "merge", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .help = "Merge two records; b's fields win.", .eval = evalMerge },
+    .{ .name = "record", .variadic = true, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Record construction { field: stream, … } — a live tuple with named fields.", .eval = evalRecord },
+    .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },
+    .{ .name = "merge", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Merge two records; b's fields win.", .eval = evalMerge },
     // plane / util
-    .{ .name = "set", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write to a plane path — `set <path> [value]`; piped, the input is the rousing and `value` is what gets written.", .class = .effect, .eval = evalSink },
+    .{ .name = "set", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Write to a plane path — `set <path> [value]`; piped, the input is the rousing and `value` is what gets written.", .class = .effect, .eval = evalSink },
     // `notify` IS `set` — same ports, same write, same eval — and it is worth
     // saying that they diverged for exactly one day and came back. `notify`
     // grew the optional payload port first, because the pipe took its only
@@ -839,27 +839,27 @@ const CORE = [_]registry.OpDef{
     // write to a mailbox path already follows the mailbox's policy (append,
     // count, deliver every one), so `notify defense/alerts` says "this is a
     // sighting" where `set` would read as "this is the state".
-    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Write an occurrence to a plane path — `notify <path> [value]`; same write as `set`, states the intent.", .class = .effect, .eval = evalSink },
+    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Write an occurrence to a plane path — `notify <path> [value]`; same write as `set`, states the intent.", .class = .effect, .eval = evalSink },
     // The third write kind. `plane.x | add 1 | set plane.x` reads a path it
     // writes, so the cycle check rightly refuses it — which leaves counters
     // inexpressible. A blind delta reads nothing and passes legitimately.
-    .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },
+    .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },
     // The field sink. `channel` is a `.channel` static, not a `.path`, so a
     // cast never enters the write list — correctly: fields have no read side
     // inside rill (readings come from a standpoint, §9), so there is no loop
     // for the cycle check to miss. `at`/`decay` are keyword ports: the word
     // disambiguates what a positional grammar cannot (`cast $alarm 30` —
     // payload or radius?).
-    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true }, .{ .name = "to", .kind = .condition, .kw = true, .optional = true } }, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>] [to <#tag>]`; piped, the input is the rousing; `to` couples delivery to a tag's members (posts hear everything).", .class = .effect, .eval = evalCast },
+    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true }, .{ .name = "to", .kind = .condition, .kw = true, .optional = true } }, .routes = .main, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>] [to <#tag>]`; piped, the input is the rousing; `to` couples delivery to a tag's members (posts hear everything).", .class = .effect, .eval = evalCast },
     // The membership sinks share `inc`'s port shape — the rousing carries no
     // payload (a set operation takes nothing from the stream) — and compose
     // their one write-list entry from the subject/condition pair
     // (`Program.registerWrites`), which is how the cycle check refuses a
     // set-subscription while `joined`/`count` reads stay siblings.
-    .{ .name = "tag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .help = "Add `@subject` to a tag — `tag @tom #garrison`; idempotent (twice is once), one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalTag },
-    .{ .name = "untag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .help = "Remove `@subject` from a tag — `untag @tom #garrison`; idempotent, one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalUntag },
-    .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Emit a constant once at mount.", .eval = evalConst },
-    .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .class = .reads, .eval = evalTap },
+    .{ .name = "tag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .routes = .main, .help = "Add `@subject` to a tag — `tag @tom #garrison`; idempotent (twice is once), one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalTag },
+    .{ .name = "untag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .routes = .main, .help = "Remove `@subject` from a tag — `untag @tom #garrison`; idempotent, one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalUntag },
+    .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Emit a constant once at mount.", .eval = evalConst },
+    .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Debug passthrough: log the value to the host's log bus.", .class = .reads, .eval = evalTap },
 };
 
 /// Register the core set. Call once per registry, before parsing anything —

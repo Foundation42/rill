@@ -266,6 +266,18 @@ pub const OpClass = enum {
     }
 };
 
+/// Where an op's evaluation may run, DECLARED at registration — no default,
+/// so every op answers at birth (ruled 2026-08-25, the fourth time a
+/// predicate over this registry turned out to be a coverage surface: when it
+/// is one, the registry carries the answer and the predicate is derived).
+/// `.main` = the eval crosses into host state that lives on the host's
+/// serial thread (cast reads the channel rows; tag/untag read the entity
+/// registry and the tag row) — a host dispatching off-thread must route the
+/// whole program there. `.anywhere` = pure dataflow, or effects that reach
+/// the host through its own safe channel (`set` lands in a main-drained
+/// inbox).
+pub const Routing = enum { anywhere, main };
+
 pub const OpDef = struct {
     name: []const u8,
     inputs: []const Port = &.{},
@@ -273,6 +285,7 @@ pub const OpDef = struct {
     statics: []const StaticDecl = &.{},
     help: []const u8,
     class: OpClass = .pure,
+    routes: Routing,
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,
@@ -381,16 +394,16 @@ test "registry: tail ports keep their closed shape — last only, string, requir
     }.f;
     const str = types.Tag.string;
     const good = [_]Port{ .{ .name = "gain", .ty = types.Tag.number }, .{ .name = "locator", .ty = str, .tail = true } };
-    _ = try reg.register(.{ .name = "ok", .inputs = &good, .help = "", .eval = noopEval });
+    _ = try reg.register(.{ .name = "ok", .inputs = &good, .help = "", .routes = .anywhere, .eval = noopEval });
 
     const not_last = [_]Port{ .{ .name = "locator", .ty = str, .tail = true }, .{ .name = "gain", .ty = types.Tag.number } };
-    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "a", .inputs = &not_last, .help = "", .eval = noopEval }));
+    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "a", .inputs = &not_last, .help = "", .routes = .anywhere, .eval = noopEval }));
 
     const not_string = [_]Port{.{ .name = "locator", .ty = types.Tag.number, .tail = true }};
-    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_string, .help = "", .eval = noopEval }));
+    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "b", .inputs = &not_string, .help = "", .routes = .anywhere, .eval = noopEval }));
 
     const optional_prefix = [_]Port{ .{ .name = "gain", .ty = types.Tag.number, .optional = true }, .{ .name = "locator", .ty = str, .tail = true } };
-    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "c", .inputs = &optional_prefix, .help = "", .eval = noopEval }));
+    try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "c", .inputs = &optional_prefix, .help = "", .routes = .anywhere, .eval = noopEval }));
 }
 
 test "registry: register/find, duplicate rejected" {
@@ -401,7 +414,7 @@ test "registry: register/find, duplicate rejected" {
             return Emit.none;
         }
     }.f;
-    const id = try reg.register(.{ .name = "noop", .help = "does nothing", .eval = noopEval });
+    const id = try reg.register(.{ .name = "noop", .help = "does nothing", .routes = .anywhere, .eval = noopEval });
     try std.testing.expectEqual(id, reg.find("noop").?);
-    try std.testing.expectError(error.DuplicateOp, reg.register(.{ .name = "noop", .help = "", .eval = noopEval }));
+    try std.testing.expectError(error.DuplicateOp, reg.register(.{ .name = "noop", .help = "", .routes = .anywhere, .eval = noopEval }));
 }
