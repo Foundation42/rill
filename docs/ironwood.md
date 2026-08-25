@@ -503,6 +503,53 @@ members present (membership cannot drift the way a blind counter can); a
 rill granted `tags/squads/*` is refused at mount when it writes
 `tags/faction/*`, violation named. Deterministic under replay throughout.
 
+**T-campaign rulings (Chris, 2026-08-25 — the recon stamped, T1 cleared):**
+
+- **The subject of a tag write is explicit, always: `tag <@subject> <#tag>`**
+  — the sink shape unchanged (port 0 rouses; subject and tag are statics).
+  Subjects are `@`-refs ONLY: a string subject has no death, so nothing ever
+  cleans its tags — an orphan-tag factory, the §4.1 corpse wearing
+  membership. No `@self` until R4 (then parse-time sugar, the `use`
+  precedent). Rill's `tag` is one of THREE writers — spawn-stamps and
+  derived-tag maintainers are the others — and all three go through the one
+  membership write.
+- **Order: T1 store → T2 `@` registry → T3 rill surface → T4 ears-bind + F4
+  → T5 derived tags + F5.** The `tags/**` row lands first as
+  subject-agnostic store machinery, headless-gated; everything with a
+  SPELLING waits for `@`.
+- **Fork A (stamped + extended):** `@` v1 registers placed tenant instances
+  by an explicit act; `spawn` proper arrives with R4; `@camera` is
+  engine-registered. **Registry ids derive from LOG ORDER** (replay-stable,
+  never allocation), and **unregister is the entity's death certificate** —
+  the same shape as `rills/unmounted`: one host-owned occurrence mailbox,
+  declared before anything can register, reason on the transcript.
+- **Fork B:** one tag per call; the re-probe rules on the variadic spelling.
+- **Fork C:** the grant CHECK builds now (mount-time, over the write list);
+  authoring waits for the capabilities beat. **Default-all-granted is
+  `user/` only** — `agent/` and `pack/` mounts with no host-supplied grants
+  REFUSE AT MOUNT if they write anything. No grant by omission.
+- **Fork D:** writable `@` fields are their own beat, after T2.
+- **The cycle check reads tag paths on the NORMALISED form** (the ledger's
+  path rule), and the semantics fall out of the existing segment-prefix
+  test once the row's leaves are pinned: **member keys wear `@`
+  (`tags/garrison/@tom`); service leaves are bare words (`joined`, `left`,
+  `count`) — disjoint by construction, the sigil paying again.** So:
+  subscribing `tags/garrison` while writing membership under it is a prefix
+  cycle — REFUSED (reading the set you write is self-rousing). Subscribing
+  `tags/garrison/joined` (or `/count`) while writing members is sibling-
+  disjoint — ALLOWED; idempotence bounds it (a redundant write delivers no
+  occurrence, so the loop has no fuel). T1 builds to this.
+- **Sequential-in-order membership within a tick** (pinned at T1, named as
+  a mild sharpening of the table's "union adds minus removes"): writes
+  apply in evaluation order, each ACTUAL transition delivered once. The
+  order-independent set formula mattered for concurrent writers; our batch
+  is one deterministic order. If concurrent tag writers ever exist, the
+  formula is recorded here waiting.
+- **The wire lesson's structural home (Chris):** a gate that walks the verb
+  registry and round-trips one sample per verb through the ACTUAL wire
+  parser, so no verb can be tested by direct enqueue alone. Third time
+  paid; made the last.
+
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind
 `inc` tally in I5); the sally-port force is that same intersection; raiders
