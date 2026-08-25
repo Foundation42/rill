@@ -179,14 +179,14 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         // `-` opens a name when it does NOT open a negative number — the
         // console's unbind sentinel (`light arche l1 -`) is a word, and
         // rill has no infix minus (subtraction is the `sub` word).
-        // `$` opens a name when a name follows: `$alarm` is one token, a
-        // field-channel name wearing its sigil (rill-casts.md §3). The sigil
-        // is name-LEAD only — a lone `$` stays an inert raw token. (`#` is
-        // free for the tag beat now that comments are `//` — the collision
-        // was ruled out of existence 2026-08-25; until tags land, `#` is an
-        // inert raw token like the other unclaimed sigils.)
+        // `$` and `@` open a name when a name follows: `$alarm` and `@tom`
+        // are one token each, sigil included (rill-casts.md §3, ironwood R6).
+        // Sigils are name-LEAD only — a lone `$`/`@` stays an inert raw
+        // token. (`#` is free for the tag surface now that comments are `//`;
+        // until `tag`/`untag` land it stays an inert raw token, and `^`
+        // likewise until archetypes are sayable.)
         if (isNameStart(c) or
-            (c == '$' and i + 1 < src.len and isNameStart(src[i + 1])) or
+            ((c == '$' or c == '@') and i + 1 < src.len and isNameStart(src[i + 1])) or
             (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1]))))
         {
             const start = i;
@@ -507,7 +507,7 @@ const Parser = struct {
         const def_tok = self.next(); // "def"
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected operator name after 'def'", .{});
-        if (name_tok.text[0] == '$') return self.fail(name_tok, "'{s}': the '$' sigil names a field channel — an operator cannot wear it", .{name_tok.text});
+        if (name_tok.text[0] == '$' or name_tok.text[0] == '@') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity) — an operator cannot wear it", .{name_tok.text});
         if (self.defs.contains(name_tok.text) or self.reg.find(name_tok.text) != null) {
             return self.fail(name_tok, "'{s}' is already defined", .{name_tok.text});
         }
@@ -518,7 +518,7 @@ const Parser = struct {
             const pt = self.next();
             if (pt.kind == .rparen) break;
             if (pt.kind != .name) return self.fail(pt, "expected port name in def signature", .{});
-            if (pt.text[0] == '$') return self.fail(pt, "'{s}': the '$' sigil names a field channel — a port cannot wear it", .{pt.text});
+            if (pt.text[0] == '$' or pt.text[0] == '@') return self.fail(pt, "'{s}': a sigil names a store row (`$` field, `@` entity) — a port cannot wear it", .{pt.text});
             var ty: types.TypeId = types.Tag.any;
             if (self.peek().kind == .colon) {
                 _ = self.next();
@@ -618,7 +618,7 @@ const Parser = struct {
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected alias name after 'as'", .{});
         if (isReservedWord(name_tok.text)) return self.fail(name_tok, "'{s}' is reserved", .{name_tok.text});
-        if (name_tok.text[0] == '$') return self.fail(name_tok, "'{s}': the '$' sigil names a field channel — an alias cannot wear it", .{name_tok.text});
+        if (name_tok.text[0] == '$' or name_tok.text[0] == '@') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity) — an alias cannot wear it", .{name_tok.text});
         if (self.aliases.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' is already bound", .{name_tok.text});
         if (self.program_target.names.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' collides with a stream name", .{name_tok.text});
         if (self.reg.find(name_tok.text) != null or self.defs.contains(name_tok.text)) {
@@ -662,7 +662,7 @@ const Parser = struct {
                 const nt = self.next();
                 if (nt.kind != .name) return self.fail(nt, "expected name after 'as'", .{});
                 if (isReservedWord(nt.text)) return self.fail(nt, "'{s}' is reserved", .{nt.text});
-                if (nt.text[0] == '$') return self.fail(nt, "'{s}': the '$' sigil names a field channel — a stream cannot wear it", .{nt.text});
+                if (nt.text[0] == '$' or nt.text[0] == '@') return self.fail(nt, "'{s}': a sigil names a store row (`$` field, `@` entity) — a stream cannot wear it", .{nt.text});
                 if (target.names.contains(nt.text)) return self.fail(nt, "name '{s}' is already bound (names are single-assignment)", .{nt.text});
                 if (self.aliases.contains(nt.text)) return self.fail(nt, "name '{s}' shadows a use alias", .{nt.text});
                 if (self.reg.find(nt.text) != null or self.defs.contains(nt.text)) {
@@ -866,6 +866,14 @@ const Parser = struct {
                 if (self.aliases.contains(t.text)) {
                     const arg = try self.parsePlaneRef(target);
                     return .{ .outputs = try self.oneSource(arg.source) };
+                }
+                if (t.text[0] == '@') {
+                    // An `@name.field` read is folded to its id-keyed plane
+                    // path BEFORE the parse (mount-time binding, ironwood R6
+                    // T2 pin ③) — so an `@` that reaches the parser is either
+                    // unregistered (the host refuses the mount and says so)
+                    // or a bare subject, which only `tag`/`untag` will take.
+                    return self.fail(t, "'{s}' is an entity reference — read a field ('{s}.pos'), or use it as a tag subject once tag/untag land", .{ t.text, t.text });
                 }
                 if (t.text[0] == '$') {
                     // Stamped 2026-08-25: a field read always names its

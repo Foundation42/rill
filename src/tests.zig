@@ -2256,6 +2256,8 @@ test "cast: what refuses to parse, refuses loudly" {
     try expectParseError("$alarm | mul 2 | set plane.x", "standpoint");
     // The sigil belongs to channels alone.
     try expectParseError("plane.x | mul 2 as $x", "cannot wear");
+    try expectParseError("plane.x | mul 2 as @x", "cannot wear");
+    try expectParseError("@tom | mul 2 | set plane.x", "entity reference");
     try expectParseError("use plane.a as $s", "cannot wear");
     try expectParseError("def $d(x) = x | mul 2", "cannot wear");
 }
