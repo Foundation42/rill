@@ -180,9 +180,17 @@ find you:
 - **A branch begins with an operator** — its implicit source is the
   in-flowing value. A branch that started with a path or a literal
   would never be wired to anything and could never run, so it refuses.
+- **A block has no sources of its own.** A branch cannot open a new
+  subscription — it is fed the block's source and nothing else. "When
+  X, and Y holds" is not a block-within-a-block; it is the conjunction
+  idiom (§6a below).
 - **No `as` escapes a block.** Bind the stream before the block.
 - A branch that ends still holding a value gets a warning — end a
   branch with a sink, or drop the tail.
+- **The last effect is the main stream's sink.** "Effects branch off"
+  does not mean the main stream may never carry one — a chain of
+  side-branches whose tail just hangs has over-learned the lesson.
+  Branch the extras; end the stream in its sink.
 
 The same block can hang off a **statement head** — the source feeds
 every branch:
@@ -200,6 +208,64 @@ you want a pipeline, and the pipeline is the spelling.
 mount and then once per period of *fed time* (§6). It is how a standing
 effect stands: the brazier above deposits every frame, forever, and two
 lines of console can put it out (`rill unmount brazier`).
+
+---
+
+## 6a. Thinking in rill
+
+A rill is a **standing order, not a procedure**. You don't run it; you
+post it, and it holds until unmounted. Ask three questions of any line:
+**what rouses it** (when), **what flows** (what), **where does the wave
+end** (the sink). If you can't answer all three, you are still thinking
+in steps.
+
+| when you think… | write… | because… |
+|---|---|---|
+| "if X, do A" | `X \| <crossing or comparator> \| A` | conditions flow; the threshold *is* the if |
+| "when X, and Y holds" | the conjunction idiom, below | name the condition as a stream, gate with `where`; a block can't open a source |
+| "is it dark?" vs "did it get dark?" | `< 0.25` vs `dropped_below 0.25` | a comparator is a state; a crossing is an event, fired once on the way through |
+| "do A, then continue to B" | `X \| also { A } \| B` | side effects branch; the last effect is the main sink |
+| "do A then B" (ordered) | one pipeline, or two branches if independent | a block is fan-out; sequence is a pipe |
+| "count how many times" | `X \| inc plane.n 1` | a blind delta reads nothing, so it's the one write that can't cycle |
+| "remember that X happened" | subscribe to the occurrence that says so | a flag is lingering state standing in for an event; if the state is real, its owner publishes it |
+| "wait until X finishes" | the action's completion occurrence (R3); until then a labelled `delay` | rills express intent; the engine resolves the doing and *says* when it's done |
+| "every N seconds…" | `every Ns { … }` | the metronome; fires at mount, never bursts after a hitch |
+| "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
+| "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
+| "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
+| "make the gate close" | `set plane.keep.gate.drawbridge_target 1` | intent to an actuator target; physics is the engine's |
+| "this program does three things" | three programs, or one with named streams — never one file with sections | a program may not both write and subscribe to one path |
+
+(The table's middle column shows *shapes*; every fenced block in this
+manual is a parsed program, and the shapes' real spellings appear in
+the idiom below and the recipes.)
+
+**The conjunction idiom** — "when the watch sees someone, *and* it's
+dark, light the braziers." The block-shaped intuition (open a second
+subscription inside `also { }`) refuses at the branch head, and folded
+inside it is a second mistake: `dropped_below 0.25` as "is it dark" —
+a crossing standing in for a state, so the braziers would only light
+if dusk fell *after* the sighting. Name the condition as a stream;
+gate with `where`:
+
+```rill
+plane.environment.ambient_light | < 0.25 as dark
+plane.sensors.watchtower.visible_enemies | rose_above 0 as sighting
+sighting | cast $alarm 1.0 radius 500 at plane.sensors.watchtower.pos decay 10s
+sighting | where dark | set plane.keep.braziers.lit 1
+```
+
+Every rill program past the trivial needs this shape.
+
+**One file is one program.** Sections are comments, not boundaries: a
+file whose "section 3" writes a path its "section 1" subscribes to is
+refused whole, with the pair named (§4's rule). Three things = three
+programs, or one program with named streams.
+
+**Actions are pending.** The muster, the loose, the winch — things
+that take time and complete — get their vocabulary in R3 (an action
+with a completion occurrence). Until then a `delay` is a stand-in and
+should be labelled as one, as the worked example below does.
 
 ---
 
@@ -423,4 +489,38 @@ plane.programs.gate-guard.errors | inc plane.ops.gate_guard_errors 1
 
 ```rill
 plane.player.{health, mana} | set plane.ui.vitals
+```
+
+**The keep, in four programs** — the conjunction idiom, the terminal
+sink, the split rule, the seed rule, the R3 stand-in, and every sigil
+that exists, in thirteen lines. Four programs, not one file with
+sections; sensor names per `ironwood.md`; the sally program reads what
+the muster writes, so the value must be seeded (0) before it mounts.
+
+```rill
+// watchtower
+plane.environment.ambient_light | < 0.25 as dark
+plane.sensors.watchtower.visible_enemies | rose_above 0 as sighting
+sighting | cast $alarm 1.0 radius 500 at plane.sensors.watchtower.pos decay 10s
+sighting | where dark | set plane.keep.braziers.lit 1
+```
+
+```rill
+// gatehouse
+plane.sensors.gate.$alarm | rose_above 0.2
+  | also { set plane.keep.gate.portcullis_target 0 }
+  | set plane.keep.gate.drawbridge_target 1
+plane.sensors.gate.nearest_distance | dropped_below 50 | notify plane.keep.archers.loose
+```
+
+```rill
+// muster — `delay` stands in for the muster action until R3
+plane.sensors.courtyard.$alarm | rose_above 0.2 | delay 90s | set plane.keep.garrison.formed 1
+```
+
+```rill
+// sally port — its own program: it reads what muster writes
+// (seed plane.keep.garrison.formed 0 before mounting)
+plane.keep.garrison.formed | > 0.5 as wall_up
+plane.sensors.gate.nearest_velocity | dropped_below 0.1 | where wall_up | set plane.keep.sally_port.open_target 1
 ```

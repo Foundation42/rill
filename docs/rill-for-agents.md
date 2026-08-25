@@ -51,7 +51,14 @@ two lines; refer back to them.
 5. **Effects don't ride the stream.** A `set`/`notify`/`inc`/`cast` is
    a sink: the wave ends there, nothing flows through it.
    `x | set p | tap t` does not parse. Side effects branch off with
-   `also { … }`; the main stream carries values only.
+   `also { … }`; the main stream carries values only — and **the last
+   effect is the main stream's sink**: a chain of side-branches whose
+   tail just hangs has over-learned this lesson.
+
+<!-- candidate unlearn #7 (recorded, not promoted — awaits the
+     re-probe): a block has no sources of its own. A branch cannot
+     open a subscription; it is fed the block's source and nothing
+     else. Promote if the residue survives the correction round. -->
 6. **A block is a fan-out, not a body.** `every 1f { … }` is not a
    loop body. Statements in a block are parallel branches with no
    order between them, each fed the same source. Sequence is spelled
@@ -184,6 +191,9 @@ first, so `sound play` is one operator.
 | `x \| untag #a \| tag #b \| follow` | effect pipeline = imperative sequencing | one branch per effect, `also { }` each |
 | `every 1f { step1; step2 }` expecting order | a block is fan-out | pipeline the sequence, or accept parallel branches |
 | `plane.x \| add 1 \| set plane.x` | reads what it writes — cycle, refused | `<rousing> \| inc plane.x 1` |
+| one file, three commented "sections" | one file is ONE program; a section writing a path another subscribes to refuses the whole file | three programs (a program may not both write and subscribe to one path, even unconnected) |
+| `also { plane.y \| … }` | a branch can't open a source — it is fed the block's source and nothing else | name the condition as a stream, gate with `where` (the conjunction idiom, §5a) |
+| `dropped_below t` as "is below t" | a crossing is an event, not a state — it fires once, on the way through | `< t` (a comparator is the state) |
 | `inc plane.n` (no `by`) | the amount would default silently | `inc plane.n 1` |
 | `$alarm \| rose_above 0.5 \| …` | a field read names its standpoint | `plane.sensors.gate.$alarm \| rose_above 0.5 \| …` |
 | `cast $alarm 30` for radius 30 | payload-or-radius is ambiguous | `cast $alarm radius 30 at <ref>` |
@@ -191,6 +201,29 @@ first, so `sound play` is one operator.
 | `x \| mul 2 { set plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { set plane.a }` |
 | `as $x` / `def $f(…)` | sigils name store rows, never streams/ops | pick an unsigiled name |
 | waiting for a path to vanish | absence is unobservable | subscribe to the occurrence that says so |
+
+---
+
+## 5a. The conjunction idiom
+
+"When X, and Y holds" — name the condition as a stream, gate with
+`where`. A block cannot open a source, and a crossing cannot stand in
+for a state (the braziers below would otherwise only light if dusk
+fell *after* the sighting):
+
+```rill
+plane.environment.ambient_light | < 0.25 as dark
+plane.sensors.watchtower.visible_enemies | rose_above 0 as sighting
+sighting | cast $alarm 1.0 radius 500 at plane.sensors.watchtower.pos decay 10s
+sighting | where dark | set plane.keep.braziers.lit 1
+```
+
+Every non-trivial program needs this shape.
+
+**Actions are pending (R3).** Things that take time and complete —
+muster, loose, winch — get a vocabulary of actions with completion
+occurrences in R3. Until then a `delay` standing in for one should be
+labelled as the stand-in it is.
 
 ---
 

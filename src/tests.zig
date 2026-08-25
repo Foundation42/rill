@@ -2587,8 +2587,8 @@ test "the manuals parse: every printed example compiles" {
     // Both ways, like the class table: a manual whose examples silently
     // stopped being collected would pass vacuously. Update on purpose when
     // examples are added or removed.
-    try testing.expectEqual(@as(usize, 23), human);
-    try testing.expectEqual(@as(usize, 2), agent);
+    try testing.expectEqual(@as(usize, 28), human);
+    try testing.expectEqual(@as(usize, 3), agent);
 }
 
 // ---------------------------------------------------------------------------
