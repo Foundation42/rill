@@ -1,10 +1,17 @@
 # rill tier 2 — stock operators, and how to find the next ones
 
-*Design input for CC's tier-2 recon. Shapes and pins ratified by Chris
-(§6); operator names in the sections marked bikeshed are the recon's to
-propose. Everything here was imagined from typical use, then partly
-probed by writing the breathing exposure; the method section (§5) is how
-the rest gets probed. Sequencing in §7.*
+*Design input for CC's tier-2 campaign, now partly built. Shapes and
+pins ratified by Chris (§6); the bikeshed names in §2.11 and §2.12 were
+proposed by the recon and ruled 2026-08-25 — they are recorded here as
+rulings, not questions. Everything here was imagined from typical use,
+then probed by building it; the method section (§5) is how the rest gets
+probed. Sequencing in §7.*
+
+**Status:** recon done (`docs/cc-recon-tier2.md`); **beat 1a BUILT
+2026-08-25** — `clock`, `frame`, `wave`, `lfo`, `ease`, `ramp`, `hold`,
+`diff`, `integrate`, `range`, `shape`. The founding example below is one
+line and gated. Named deviations and what beat 1a did not take are in
+`docs/implementation-notes.md`.
 
 ---
 
@@ -69,6 +76,16 @@ counter and seeds it. Two sources beside `every`:
 every tick, so anything downstream re-evaluates every tick — that is the
 cost of animation and it should be visible.
 
+**Built (beat 1a), with two things pinned by how it had to work.** The
+epoch lives in the operator's own state, baselined on its first eval, not
+on the Runtime — `restore` rebuilds from a dump *without* ticking and
+takes its `now` from the caller, so a runtime-held epoch would re-seed
+and `clock` would report zero at t=90s. And the cost is now a declared
+fact rather than a convention: `OpDef.ticks` says an operator may re-arm
+itself, the host lights the badge from it, and the node's live eval
+counter is shown beside it as the proof (§8). The flag says what could
+cost; the counter says what did.
+
 ### 2.2 Modulation sources
 
 | op | emits | notes |
@@ -102,9 +119,29 @@ plane; these chase it inside the operator.
 `plane.sensors.gate.nearest_distance | diff | dropped_below 0.1` is the
 honest spelling, and it's one word.
 
-All four re-arm per frame while converging and stop when |in − out| < ε
-(the same cull rule as field deposits — a converging op should not tick
-forever). ε is per-op with a sane default; not a user knob in v1.
+These re-arm per frame while converging and **stop**; ε is per-op with a
+sane default, not a user knob in v1.
+
+**ε is `ease`'s rule, and it is a stop rather than a snap** (ruled
+2026-08-25). An exponential never arrives, so `ease` goes quiet inside ε
+of its target and stays a hair short — snapping would make the last frame
+of every fade a visible step. `ramp` is the op with an **end**: its last
+frame emits the target *exactly*, then it stops. `diff` stops when the
+rate reaches zero; `integrate` stops at its clamp, so the bound that
+keeps the state from being a corpse is also the cutoff. Every one of
+them is gated on the eval counter going **flat** — ε that nothing watches
+is decoration.
+
+ε is relative above 1 and absolute below it (1e-4 either way), so a
+register on metres, one on an exposure and one on a value in the
+millions all stop.
+
+**`slew` is not admitted.** Its only §4 row ("rate-limit a noisy sensor
+into a knob") is already met by `sample`, and §7 lists it as a cut
+candidate because `ease` approximates it. That settles the read-aloud
+question §6 left open by making it moot: no customer, no word. If one
+appears the name is worth reopening — `slew` reads as jargon to anyone
+outside audio, which is admission rule 4's exact test.
 
 `spring <frequency> <damping>` belongs here eventually. Deferred until a
 scene wants overshoot.
@@ -113,15 +150,27 @@ scene wants overshoot.
 
 | op | maps | notes |
 |---|---|---|
-| `range <lo> <hi>` | 0..1 → lo..hi | the common lerp |
+| `range <lo> <hi>` | 0..1 → lo..hi, **clamping** | the exit from the unit interval |
 | `norm <lo> <hi>` | lo..hi → 0..1 | its inverse |
 | `remap <in_lo> <in_hi> <out_lo> <out_hi>` | interval → interval | when both ends aren't unit |
 | `wrap <lo> <hi>` | modular fold into an interval | angles, phases |
 | `shape <curve>` | 0..1 → 0..1 | `smooth`, `in`, `out`, `inout`, `linear` — or an authored curve track (Substance's Curve node), which makes it `along` for 1D |
 
 **`lerp` port order flips**: piped value is `t`. "s, lerped between 0.5
-and 1.5" is `s | lerp 0.5 1.5`. The current order (`a b t`) forced the
-breathing program to bind all three unpiped. Two days old, flip it now.
+and 1.5" is `s | lerp 0.5 1.5`. The old order (`a b t`) forced the
+breathing program to bind all three unpiped. *Landed 2026-08-25, while
+the corpus held zero callers.*
+
+**`range` and `lerp` are the same arithmetic, and the difference is the
+clamp.** Building beat 1a surfaced this: `range 0.5 1.5` and
+`lerp 0.5 1.5` compute `lo + (hi−lo)·t` identically, so `range` would be
+a second mechanism for one effect — which the ledger forbids — unless it
+means something `lerp` does not. It does, and the role names itself:
+`lfo`, `wave` and `shape` all *leave* the unit interval, and `range` is
+the **exit** from it. So `range` clamps its input to 0..1 and stays
+inside the interval it was given; `lerp` blends and extrapolates past its
+ends. Same ruling as `along` outside 0..1 — clamp, and `wrap 0 1` first
+if you meant to. Gated both ways.
 
 ### 2.5 Math
 
@@ -300,9 +349,11 @@ records — `[0, 2, 0]` does not coerce to `{x, y, z}`; one thing, one
 spelling. Whether a positional record shorthand for vectors is worth a
 literal of its own is an open pin.
 
-### 2.11 Over arrays — map, reduce, sort, filter *(bikeshed)*
+### 2.11 Over arrays — map, reduce, sort, filter *(names ruled)*
 
-Marked as bikeshed: the shape is clear, the words aren't settled.
+The shape was always clear; the words were settled 2026-08-25. The
+filter word is **`keep`**, a second word rather than `where` dispatched
+by kind — see the rule at the end of this section.
 
 **There is no new syntax.** rill already has bodies, and they are not
 blocks. A predicate section `(> 0)` is a partial application — an
@@ -322,7 +373,7 @@ is only for a def or a multi-step body.
 | op | emits | notes |
 |---|---|---|
 | `map <body>` | array | `map healthbar`, `map (clamp 0 1)` |
-| `where <pred>` | array | same word as the stream gate, dispatched by kind — "the window, where above 0" reads right either way; discuss |
+| `keep <pred>` | array | "the contacts, keep the armed ones" · "the window, keep above 0". A second word, ruled — see below |
 | `reduce <body> [init <v>]` | scalar | `reduce (add)`, `reduce (max)`; `stats` covers the common cases |
 | `sort [by <body>] [desc]` | array | `sort by (.distance)` |
 | `take <n> [from <i>]` | array | top-k after a sort, or a sub-array with `from`; `first`/`last` stay scalar |
@@ -346,10 +397,38 @@ pick one and their gates must assert *that* arithmetic.
 - Any-of over a set: `… | map (.armed) | reduce (or)`.
 
 Each of those is one line and none needs a word the language doesn't
-already have, except `map`, `reduce`, `sort`, `take`. Four words for the
-whole family, against the budget.
+already have, except `map`, `reduce`, `sort`, `take` and `keep`.
 
-### 2.12 Records — pick, omit, rename, spread, zip *(bikeshed)*
+**Why `keep` is a second word and not `where` again** (ruled
+2026-08-25). `where` today gates a *stream*: a boolean stream in,
+arrivals pass or die. An array `where` would take a *section* and filter
+*elements*. That is two independent questions — is the input an array,
+and is the argument a section or a stream — and the crossing case is
+real and must keep working:
+
+```
+window 10s | where plane.gate.open        // the window, while the gate is open
+window 10s | keep (> 0)                   // the readings above zero
+```
+
+The first is a stream gate on an array-valued stream. One word cannot
+serve both without guessing at the argument, and refusing the crossing
+case isn't available — people will write it. Rejected: `filter` (says
+*that* you are selecting, not *which side survives*); `only` (an adverb
+where a verb is wanted); `where` overloaded (the two-axis guess above).
+`keep`'s mirror `drop` exists if a customer ever wants it.
+
+**The rule this came from, which is the durable part** — recorded in
+`docs/implementation-notes.md` because it decided §2.12 too and will
+decide the next one:
+
+> Dispatching one word by input kind is honest when the decision has
+> **one axis** and the kinds are **disjoint**. It is a guess the moment
+> there are two axes, because then some input satisfies both readings
+> and the language has to pick — and "never pick a rule" is already the
+> ledger's line on `zip` lengths.
+
+### 2.12 Records — pick, omit, rename, spread, transpose *(names ruled)*
 
 Most of this exists. Against the JS/TS vocabulary people arrive with
 (destructuring with rename, spread, `Pick`/`Omit`):
@@ -361,25 +440,40 @@ Most of this exists. Against the JS/TS vocabulary people arrive with
 | pick | `plane.player.{health, mana}` — the sibling sugar | **paths only**; extend the same sugar to record streams: `vitals.{health, mana}` |
 | omit / rest | — | `without <fields>` |
 | pluck | — | free, if `.field` projects elementwise over an array of records (the broadcast pin): `contacts \| .distance` |
-| zip / unzip | — | see below |
+| transpose | — | see below |
 | shuffle | — | `shuffle [seed <s>]`, seeded like everything else |
 
-**`zip` and `unzip` are the AoS↔SoA transpose**, not "pairs from two
-arrays." `zip` takes a record of arrays and gives an array of records;
-`unzip` the reverse. That is what a window of records needs —
-`plane.player.{health, mana} \| window 10s \| unzip \| .health \| stats` —
-and it's what people mean when they reach for the word. Two arrays into
-pairs is `zip {a: xs, b: ys}`, the same op.
+**The AoS↔SoA transpose is one word: `transpose`** (ruled 2026-08-25,
+replacing the proposed `zip`/`unzip`). A record of arrays in gives an
+array of records; an array of records in gives a record of arrays. That
+is what a window of records needs —
+`plane.player.{health, mana} \| window 10s \| transpose \| .health \| stats`
+— and "two arrays into pairs" is `transpose {a: xs, b: ys}`, the same op.
+
+Here the dispatch **is** honest by the rule in §2.11: one axis (is the
+input a record or an array?), disjoint kinds. And because the operation
+is self-inverse, one word is not just honest but sufficient.
+
+Rejected: **`zip`/`unzip`** — admission rule 4's jargon collision, not an
+escape from it. Every language a reader arrives from defines `zip` as
+"two sequences into pairs", so redefining it teaches something false to
+everyone who already knows it, and costs *two* words to express one
+self-inverse operation. "It's what people mean when they reach for the
+word" is true of the shape and false of the word. Also rejected: `pivot`
+(spreadsheet jargon, implies aggregation) and `flip` (flips what?).
+`transpose` is technical but it is *the* word — no competing meaning, and
+a reader who doesn't know it learns one true thing instead of unlearning
+one false thing.
 
 `shuffle \| take 3` is "three at random, no repeats."
 
-**`zip` with mismatched lengths refuses.** Grasshopper picks a matching
-rule implicitly (longest, shortest, cross-reference) and it is the
-most-complained-about behaviour in the tool. Never pick a rule; error
+**`transpose` with mismatched lengths refuses.** Grasshopper picks a
+matching rule implicitly (longest, shortest, cross-reference) and it is
+the most-complained-about behaviour in the tool. Never pick a rule; error
 with both lengths named.
 
-Words added: `without`, `zip`, `unzip`, `shuffle`. The sugar extension
-and pluck cost none.
+Words added: `without`, `transpose`, `shuffle` — **one fewer than
+proposed.** The sugar extension and pluck cost none.
 
 ### 2.13 Contracts — `expect` and `match`
 
@@ -428,41 +522,65 @@ The ergonomic gate. Each ask must be expressible in **at most two lines**
 that the manual gate parses. Line count today vs. target; an operator's
 customer is named in the last column.
 
+**A ✓ means expressible, not correct.** (Ruled 2026-08-25, after the
+recon found "night falls → lights on" scored ✓ at one line *and*
+chattering at dusk — the row §2.6 argues `above` from.) The line count
+is what this table measures; whether the one line is *right* is what the
+gate that mounts it measures. A row is only finished when its cell is in
+the idioms book and its gate asserts the behaviour, not the length.
+Rows carrying a known wrongness say so in the "today" column.
+
+**Admitted as substrate.** Two operators (`clock`, `frame`) are admitted
+by ruling rather than by a row: they are what `lfo` and the registers are
+built from, and a language whose animation primitives are a magic box
+with no visible clock is worse than one word over budget. The category
+exists so admission rule 1 keeps its teeth rather than acquiring a
+silent exception. `clock` has since earned an honest row of its own
+besides.
+
 | ask | today | target | needs |
 |---|---|---|---|
-| breathe the exposure between 0.5 and 1.5 over 4s | 9 lines, 2 programs, a seed | 1 | `lfo`, `range` |
-| flash a light on an event (attack, decay — not a rectangle) | ~4, and a rectangle | 1 | `pulse \| ease up down` |
-| VU meter on a field reading | can't | 1 | `abs \| ease 20ms down 400ms` |
-| fade the exposure in over 2s on mount | can't (no register) | 1 | `once`, `ramp` |
-| ease the camera exposure toward a target | can't | 1 | `ease` |
-| dim the lamp as the fire dies | 2 | 2 | ✓ (fields) |
-| pulse a light with the beat | ~4, and wrong if tempo is live | 1 | `beat`, or `lfo square` for a fixed tempo |
-| toggle a light on a keypress | ~3 | 1 | `toggle` |
-| count kills | 2 programs (`inc` + reader) | 1 | `tally` |
-| alarm when a raider is within 10m of the gate | needs `distance` | 1 | `within` |
-| night falls → lights on | 1 | 1 | ✓ |
+| breathe the exposure between 0.5 and 1.5 over 4s | ~~9 lines, 2 programs, a seed~~ **1 ✓** | 1 | ~~`lfo`, `range`~~ **landed, beat 1a** |
+| flash a light on an event (attack, decay — not a rectangle) | ~4, and a rectangle | 1 | `pulse` + `ease up down` (`ease` landed; `pulse` is beat 4) |
+| VU meter on a field reading | ~~can't~~ **1 ✓** | 1 | ~~`abs \| ease 20ms down 400ms`~~ **landed, beat 1a** |
+| fade the exposure in over 2s on mount | can't (no `once`) | 1 | `once` (beat 4); `ramp` landed |
+| ease the camera exposure toward a target | ~~can't~~ **1 ✓** | 1 | ~~`ease`~~ **landed, beat 1a** |
+| show elapsed time on the HUD | ~~can't~~ **1 ✓** | 1 | ~~`clock`~~ **landed, beat 1a** |
+| alarm when a raider is closing fast, not merely near | ~~invented sensor field~~ **1 ✓** | 1 | ~~`diff`~~ **landed, beat 1a** |
+| charge a mechanism while a lever is held, capped | ~~2 programs (`inc` + reader)~~ **1 ✓** | 1 | ~~`integrate`~~ **landed, beat 1a** |
+| dim the lamp as the fire dies | 2 | 2 | ✓ (fields) — re-probe at beat-4 close against a noisy input |
+| pulse a light with the beat | ~4, and wrong if tempo is live | 1 | `beat`, or `lfo square` for a fixed tempo (`lfo` landed) |
+| toggle a light on a keypress | ~3 | 1 | `toggle` (beat 4) |
+| count kills | 2 programs (`inc` + reader) | 1 | `tally` (beat 4) |
+| alarm when a raider is within 10m of the gate | needs `distance` | 1 | `within` (beat 4) |
+| night falls → lights on | 1 line, **and it chatters at dusk** | 1 | `above` (beat 4) — strict crossings switch on and off across the threshold |
 | cooldown-guarded order | 1 | 1 | ✓ |
-| swing a light back and forth | ~8 | 1 | `lfo tri`, `range` |
-| follow: keep a light 2m above the player | ~3 | 1–2 | record math |
-| rate-limit a noisy sensor into a knob | 1 | 1 | ✓ (`sample`, `slew`) |
-| flicker a torch | can't (no noise) | 1 | `noise`, `range` |
-| shake the camera on impact, 300ms | can't | 2–3 | `noise` ×3 seeds, `hold`, record math |
-| let the grade drift slowly over a minute | can't | 1 | `noise 20s`, `range` |
-| pick a random idle animation per trigger | can't | 1 | `rand`, `floor` |
-| fly the camera along the intro path over 8s, once | host verb only | 1 | `once`, `ramp`, `along` |
-| slide a light along its rail as the door opens | can't | 1 | `along` (driven by state) |
-| ease the exposure in with a custom curve | can't | 1 | `shape bezier` |
-| reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` |
-| move a light through three points typed into a cell | host verb only | 1 | array literal, `along` |
-| pick an exposure by time-of-day band | `select` chain | 1 | array literal, `choose` |
-| nearest hostile from the contact list | invented sensor field | 1 | `sort by`, `first` |
-| top three threats | can't | 1 | `sort by`, `take` |
-| refuse a malformed contact list at the boundary | silent | 1 | `match` (runtime) |
-| pin the shape a program reads from the plane | silent | 1 | `expect` (mount) |
+| swing a light back and forth | ~~~8~~ **1 ✓** | 1 | ~~`lfo tri`, `range`~~ **landed, beat 1a** |
+| follow: keep a light 2m above the player | ~3 | 1–2 | record math (beat 1b) |
+| rate-limit a noisy sensor into a knob | 1 | 1 | ✓ (`sample`) — re-probe at beat-4 close against a noisy input |
+| flicker a torch | can't (no noise) | 1 | `noise`, `range` (beat 4) |
+| shake the camera on impact, 300ms | can't | 2–3 | `noise` ×3 seeds, `hold` (landed), record math |
+| let the grade drift slowly over a minute | can't | 1 | `noise 20s`, `range` (beat 4) |
+| pick a random idle animation per trigger | can't | 1 | `rand`, `floor` (beat 4) |
+| fly the camera along the intro path over 8s, once | host verb only | 1 | `once`, `along` (`ramp` landed) |
+| slide a light along its rail as the door opens | can't | 1 | `along` (beat 3) |
+| ease the exposure in with a custom curve | can't | 1 | `shape bezier` (`shape`'s five named curves landed; `bezier` is the curves beat) |
+| reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` (own beat) |
+| move a light through three points typed into a cell | host verb only | 1 | array literal, `along` (beats 2–3) |
+| pick an exposure by time-of-day band | `select` chain | 1 | array literal, `choose` (beat 2) |
+| nearest hostile from the contact list | invented sensor field | 1 | `sort by`, `first` (beat 3) |
+| top three threats | can't | 1 | `sort by`, `take` (beat 3) |
+| refuse a malformed contact list at the boundary | silent | 1 | `match` (beat 2) |
+| pin the shape a program reads from the plane | silent | 1 | `expect` (beat 2) |
 
-The list is a rillbook page — the idioms book — one cell per ask, every
-cell mounted against the tiltyard. When a new ask fails the two-line
-test, the language is missing support and the list says where.
+The list is a rillbook page — the idioms book, `docs/idioms.rillbook`,
+gated by `zig build test` — one cell per ask, every cell mounted against
+the tiltyard. When a new ask fails the two-line test, the language is
+missing support and the list says where.
+
+**Beat 1a's score: eight rows cleared, one row added and cleared, one
+row re-scored honestly downward.** The rows that moved from "can't" to
+one line are the register family's whole argument.
 
 ## 5. How to find pain points
 
@@ -541,9 +659,15 @@ ruling.
 - **Vector shorthand:** wait for the list to complain. The array literal
   is not the shorthand.
 
-Still marked bikeshed, deliberately: the *words* in §2.11 and §2.12
-(`where` dispatched by kind; `zip` as transpose vs `transpose`). The
-shapes there are ratified; the names are the recon's to propose.
+**Ruled 2026-08-25, closing the two the recon was asked to propose:**
+`keep` is a second word for filtering an array (not `where` dispatched by
+kind — two axes is a guess); `transpose` replaces `zip`/`unzip`, one word
+instead of two. The one-axis/disjoint-kinds rule behind both is in
+`docs/implementation-notes.md`. Also ruled: `OpDef.ticks` is defaulted
+plus audited rather than comptime-required, since a wrong answer shows a
+wrong badge rather than computing a wrong value; the ε pin applies to
+`ease`, not `ramp`; `clock`/`frame` keep their pin and §4 gains an
+"admitted as substrate" category so admission rule 1 keeps its teeth.
 
 Also ratified: §2.13's split — `expect` is the mount-time assert,
 `match` the runtime one — and the shape literal `{id: string, …}`.
@@ -567,37 +691,57 @@ the tags beat.
    a question to reopen; it's first because the register family and
    most of the "can't" rows in §4 sit on it, and the recon should build
    from a stated foundation.
-3. **Beat 1 — registers and time.** `clock`, `frame`, `lfo`/`wave`,
-   `ease` (with `up`/`down`), `ramp`, `hold`, `diff`, `integrate`,
-   `range`, `remap`, `shape`, the math completions. This beat alone
-   turns the breathing exposure into one line and clears the top of the
-   list.
-4. **Beat 2 — arrays.** The literal (a grammar change, additive: no
+3. **Beat 1a — registers and time. ✅ BUILT 2026-08-25.** `clock`,
+   `frame`, `wave`, `lfo`, `ease` (with `up`/`down`), `ramp`, `hold`,
+   `diff`, `integrate`, `range`, `shape`. Turned the breathing exposure
+   into one line and cleared eight rows off §4.
+4. **Beat 1b — the math completions, born broadcasting.** The split was
+   ruled 2026-08-25 on the recon's argument: every math word is minted by
+   ONE comptime helper (`binMath`/`unMath`), and the §2.5 broadcast pin
+   is a change to that helper, not to the words. Landing the words scalar
+   first and broadcasting afterwards would re-open every beat-1 math gate
+   to re-score it against records. So the math words land already
+   elementwise over records and arrays, **with** the loud both-sides-named
+   mismatch check, and `binMath` is touched once, ever. `expect`/`match`
+   stay in beat 2 — they are the author-side tools and are independent of
+   the engine check.
+5. **Beat 2 — arrays.** The literal (a grammar change, additive: no
    existing program changes meaning), `nth`/`len`/`first`/`last`/
    `choose`/`take`, broadcast over records and arrays with the loud
    mismatch check, and `expect`/`match`. Its arrival retires the agent
    manual's "no array/vec literals" line and the grammar note beneath
    it.
-5. **Beat 3 — over arrays and records.** `map`/`reduce`/`sort`/`take`,
-   `without`/`zip`/`unzip`/`shuffle`, `along` with inline knots. The
-   bikeshed names get settled here.
-6. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
+6. **Beat 3 — over arrays and records.** `map`/`reduce`/`sort`/`take`/
+   `keep`, `without`/`transpose`/`shuffle`, `along` with inline knots.
+   The names are already settled (§2.11, §2.12) — this beat builds them.
+7. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
    `once`, `toggle`, `tally`, `above`, `distance`/`within`/`toward`.
-7. **Deferred to their own beats:** tracks as a tenant (with D),
+8. **Deferred to their own beats:** tracks as a tenant (with D),
    `beat` (needs tempo on the plane), `walk`, `spring`, `smooth`
    (needs the window-with-times shape), `group by`.
 
 Each beat lands its before/after pairs in the idioms book as gates
 (§5.9), and the simple-things list is re-scored at each close.
 
-**Word count, honestly.** The sections propose 43 words (45 with the
-two candidates), against a budget of ~30. Admission is by customer and
-the budget applies at landing, so the recon marks each word's customer
-on the §4 list; words without one stay listed, not admitted. Obvious
-cut candidates if the count needs to come down: `norm` (`remap` covers
-it), `either` (two lines to one sink), `rate` (`window | len`), `slew`
-(`ease` approximates it), `toward` (record math once `normalize`
-exists), and `len`/`last` as words that are cheap but still words.
+**Word count, honestly.** The sections propose **44**, not 43 — the §6
+pin adds `wave`, which appears in no table above (recon §3b). The recon
+scored every one against §4: **24 admitted** (a live row), **10 listed**
+(argued in prose, no row), **9 cut**, and `zip`+`unzip` → `transpose`
+returns one. Landing only the admitted set puts tier 2 at ~24 words
+against a ~30 budget, with ten in reserve that admit themselves the day
+a row appears. The budget is comfortable *if rule 1 is actually
+applied*; the only way it blows is admitting the listed ten on the
+strength of the prose that argues them.
+
+Cut, confirmed by that scoring: `norm` (`remap` covers it), `either`
+(two lines to one sink), `rate` (`window | len`), `slew` (`ease`
+approximates it, and its row is already met), `toward` (record math once
+`normalize` exists), `len`/`last` (cheap but still words), `without`,
+and `zip`/`unzip` as separate words.
+
+Watch `map` and `reduce`: both have excellent customers in §2.11's own
+bullet list that never made it onto §4. Beat 3 adds those rows or drops
+the words; it does not land them on the prose.
 
 ## 8. Adjacent asks — not language, don't lose them
 

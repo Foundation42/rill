@@ -11,6 +11,36 @@ and is mine unless he says otherwise.*
 
 ---
 
+## Rulings — all seven forks closed, 2026-08-25
+
+Chris ruled every fork in §8 the day this landed. Recorded here so the
+note reads as history rather than as an open question; the rulings
+themselves live in `docs/rill-tier2-draft.md` §6 and
+`docs/implementation-notes.md`.
+
+1. **Beat 1a/1b split, broadcast in 1b — yes.** `binMath` is touched once.
+2. **`keep` — yes**, and the one-axis/disjoint-kinds rule that produced it
+   is recorded in the ledger, because it decided fork 3 too.
+3. **`transpose` — yes, strongly.** `zip`/`unzip` gone.
+4. **`clock`/`frame` — keep the pin**, add an "admitted as substrate"
+   category to §4, and add the row that was actually there: *show elapsed
+   time on the HUD*, `clock | set plane.ui.elapsed`, one line.
+5. **The `diff` and `integrate` rows — add them.**
+6. **`OpDef.ticks` — defaulted plus audited.** The flag means *may tick*;
+   the badge lights on it and the rillbook shows the live eval counter
+   beside it as the proof.
+7. **The idioms book stays in rill.**
+
+Two amendments to the pins in §7: **pin 6 applies to `ease`, not `ramp`**
+— `ramp` has an end and its last frame emits the target exactly — and
+**§4 gains a correctness note**: ✓ means expressible, the gate asserts
+correct. "Night falls" is re-scored as chattering; the other two ✓ rows
+flagged in §3(d) are to be probed at beat-4 close rather than trusted.
+
+**Beat 1a is built.** See the campaign notes for what landed.
+
+---
+
 ## 0. The foundation — op-internal state is legal, and it is the mechanism
 
 The brief's first item, confirmed structurally rather than asserted.

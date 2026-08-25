@@ -278,6 +278,27 @@ pub const OpClass = enum {
 /// inbox).
 pub const Routing = enum { anywhere, main };
 
+/// May this operator re-arm itself and evaluate again without any input
+/// changing? Declared at registration, `false` by default and audited
+/// exhaustively (the `class` pattern, not the `routes` one — this is a
+/// display fact, not a safety fact: getting it wrong shows a wrong badge,
+/// not a wrong answer).
+///
+/// The flag says **may tick**, never **is ticking**. A register only ticks
+/// while it is converging and stops at its cutoff; `clock` ticks as long as
+/// time is fed. So the flag alone would over-report, and it is deliberately
+/// only half the answer: the host lights the ticks-every-frame badge from
+/// this flag (a program contains a ticking node, or a node downstream of
+/// one — §8 of the tier-2 draft), and shows the node's LIVE eval counter
+/// beside it as the proof. The static flag says what could cost; the
+/// counter says what did. Ruled 2026-08-25.
+/// The badge is a per-program question — "does this cell cost every frame?"
+/// — and parse order is topological, so *contains* a ticking node already
+/// covers *downstream of* one: whatever the ticker emits re-evaluates the
+/// rest. The host derives it with the same one-line loop it uses for
+/// routing (Matryoshka's `routesToMain`), which is why there is a field
+/// here and no predicate.
+
 pub const OpDef = struct {
     name: []const u8,
     inputs: []const Port = &.{},
@@ -286,6 +307,9 @@ pub const OpDef = struct {
     help: []const u8,
     class: OpClass = .pure,
     routes: Routing,
+    /// May re-arm itself and evaluate with no input change — see `ticks`
+    /// above. Default false; the audit in tests.zig is exhaustive both ways.
+    ticks: bool = false,
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,

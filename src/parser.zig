@@ -1408,7 +1408,23 @@ const Parser = struct {
                 const ok = for (port.one_of) |v| {
                     if (std.mem.eql(u8, s, v)) break true;
                 } else false;
-                if (!ok) return self.fail(arg.tok, "'{s}' is not an allowed value for '{s}' port '{s}'", .{ s, op_name, port.name });
+                // Name the SET, not just the port. A closed value set whose
+                // refusal doesn't say what is in it makes the author guess,
+                // which is the one thing "loud, never a guess" forbids — and
+                // the list is right here, already the thing tab-complete
+                // offers. (Found 2026-08-25 by a tier-2 gate asserting the
+                // message; the check itself was correct and silent about the
+                // only fact that helps.)
+                if (!ok) {
+                    var buf: [192]u8 = undefined;
+                    var n: usize = 0;
+                    for (port.one_of, 0..) |v, i| {
+                        const sep = if (i == 0) "" else ", ";
+                        const piece = std.fmt.bufPrint(buf[n..], "{s}{s}", .{ sep, v }) catch break;
+                        n += piece.len;
+                    }
+                    return self.fail(arg.tok, "'{s}' is not an allowed value for '{s}' port '{s}' — expected one of: {s}", .{ s, op_name, port.name, buf[0..n] });
+                }
             }
         }
         return out;

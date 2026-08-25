@@ -251,6 +251,124 @@ rows seeded as `pure`. Harmless the day it was found (none of the five
 declares any argument, so none carries a path static, and no cache pass
 exists yet), which is exactly why it was worth fixing before it wasn't.
 
+## Tier 2, beat 1a — time as a value, and the registers (2026-08-25)
+
+Built: `clock`, `frame`, `wave`, `lfo`, `ease`, `ramp`, `hold`, `diff`,
+`integrate`, `range`, `shape`. Recon in `docs/cc-recon-tier2.md`; the
+campaign's rulings are in `docs/rill-tier2-draft.md` §6.
+
+- **Op-internal state is the sanctioned mechanism, confirmed
+  structurally.** `Program.findCycle` is a cross product over `writes` ×
+  `subs` — two lists of *plane paths* — and there is no third list, so a
+  register cannot close a cycle. Twelve of the forty-nine pre-existing
+  core ops already held state; these are the next customers, not a new
+  capability. Gated by executing both halves: the register mounts, the
+  same idea through the plane is still refused at parse naming both
+  sides.
+
+- **A source's epoch lives in its own state, baselined on first eval.**
+  Not on the Runtime. `restore` rebuilds from a dump *without* ticking
+  and takes `now` from `MountOpts`, so a runtime-held epoch would
+  re-seed and `clock` would report 0 at t=90s. Tick 0 evaluates every
+  node, so first-eval and mount coincide and the baseline is exact. The
+  restore-no-jump gate is Chris's named condition for the beat close.
+
+- **Per-frame re-arm is `wake(now + 1)` on the op's own lane** — the lane
+  its duration named, exactly as `every` picks it. No new primitive. A
+  tick where that lane didn't advance simply doesn't fire the entry
+  (`expireWheel` consumes only what is due), so a missed wake is free and
+  self-healing: the node fires on the first tick that actually moved,
+  which is the first tick its output could differ on.
+
+- **Every ticker stops, and the gate watches the eval counter go flat.**
+  `ease` stops inside ε; `ramp` at its end, emitting the target exactly;
+  `diff` when the rate reaches zero; `integrate` at its clamp — the bound
+  that keeps the state from being a corpse is also the cutoff. ε is
+  relative above 1 and absolute below (1e-4 either way) so a register on
+  metres, one on an exposure, and one on a value in the millions all
+  stop. **ε is a stop, not a snap** (ruled): an exponential never
+  arrives, and snapping would make the last frame of every fade a step.
+
+- **`ease` uses `1 − exp(−dt/τ)`, not a per-tick constant**, so the same
+  fade takes the same time at any frame rate — the answer must not depend
+  on how often the wheel happened to wake it.
+
+- **`lfo` is its own op, and shares `waveAt` with `wave`.** The §6 pin
+  says `lfo` is sugar over `clock | wave`; defs are program-local and
+  inlined, so there is no registry-level def to make that literally true.
+  The "one write path" that matters here is the *arithmetic*: one
+  function, called by both, gated bit-identical over a fed sequence for
+  every shape.
+
+- **`range` clamps; `lerp` extrapolates.** They are otherwise the same
+  arithmetic, which nearly made `range` a second mechanism for one
+  effect. The role that earns the word: `lfo`, `wave` and `shape` all
+  leave the unit interval and `range` is the *exit* from it, so it stays
+  inside the interval it was given. Same ruling as `along` outside 0..1.
+
+- **`diff` ticks while moving and stops at zero.** An op that only spoke
+  when its input spoke would report the last velocity of a raider who has
+  stopped, forever — the value slot suppresses identical bytes, so "no
+  arrival" and "not moving" are the same event upstream and must not be
+  the same answer here.
+
+- **`hold` does not tick at all.** Nothing needs to happen at the end of
+  its window; the next arrival simply finds it expired. It is the one
+  register with no wheel entry, and the ticks audit pins that.
+
+- **`integrate`'s clamp is a required keyword port**, not an option. Op
+  state rides in every dump, so an unbounded accumulator is a corpse that
+  gets *copied*. The bound is symmetric (±max).
+
+- **Shape and curve words are `one_of` string ports**, checked at parse.
+  A typo is a wire-time error, not a `BadValue` three seconds into an
+  animation.
+
+- **Named deviation — `shape bezier` is not in this beat.** The five
+  named curves (`linear`, `smooth`, `in`, `out`, `inout`) land; the
+  four-handle CSS form has a different arity and belongs with §2.9's
+  curves work. Its §4 row is unmoved and says so.
+
+- **Found by a gate, fixed here: a `one_of` refusal never named the
+  set.** The message said which port refused and not what it would have
+  accepted, which makes the author guess — the one thing "loud, never a
+  guess" forbids, and the list was already right there. It now reads
+  `… — expected one of: sine, tri, saw, square`. Pre-existing, from the
+  console-words push; a tier-2 gate asserting the message text is what
+  surfaced it.
+
+## Naming rules that are structural (2026-08-25)
+
+The ledger already holds one meta-rule — *when a predicate over a
+registry turns out to be a coverage surface, the registry carries the
+answer as a field and the predicate is derived* (`routes`, `class`,
+`ticks`). This is the second, and it decides words rather than fields:
+
+> **Dispatching one word by input kind is honest when the decision has
+> ONE AXIS and the kinds are DISJOINT. It is a guess the moment there
+> are two axes** — because then some input satisfies both readings and
+> the language has to pick, and "never pick a rule" is already the
+> ledger's line on mismatched lengths.
+
+It decided both of the tier-2 bikesheds at once, in opposite directions,
+which is the reason to keep it:
+
+- **`where` filtering an array: refused, `keep` admitted instead.** Two
+  axes (is the input an array; is the argument a section or a stream),
+  and the crossing case `window 10s | where plane.gate.open` — a stream
+  gate on an array-valued stream — is legitimate and must keep working.
+  One word can't serve both without guessing at the argument.
+- **`transpose` replacing `zip`/`unzip`: admitted.** One axis (record of
+  arrays, or array of records), disjoint kinds. And the operation is
+  self-inverse, so one word is not just honest but sufficient — two words
+  for one self-inverse operation is the waste the rule exposes.
+
+The corollary worth saying separately: a word that is already correct in
+every language your readers arrive from (`zip` = pairs) cannot be
+redefined cheaply. Redefinition teaches something false to everyone who
+already knows it, which is worse than teaching a technical word
+(`transpose`) to those who don't.
+
 ## Shape of the code
 
 | file | what |

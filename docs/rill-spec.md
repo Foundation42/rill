@@ -645,6 +645,40 @@ they feed both the budget hook and the debug view).
 
 ---
 
+### 4.8 Op-internal state and self-arming (v0.3, tier 2 beat 1a, 2026-08-25)
+
+**State inside an operator is legal, and it is the sanctioned mechanism.** §4.4's cycle check
+is a cross product over two lists of *plane paths* — the program's write list and its
+subscription list — and there is no third list, so an operator's own state cannot close a
+cycle by construction. This was already true of `window`, `debounce`, the gates and the
+threshold adapters; the register family (`ease`, `ramp`, `hold`, `diff`, `integrate`) is the
+next set of customers, not a new capability. A rill still may not chase a target *through the
+plane*; it chases it *inside the operator*.
+
+Three rules keep that from becoming the cycle ban wearing a hat:
+
+- **Every self-arming operator stops.** `ease` stops inside ε of its target *without snapping
+  to it* (an exponential never arrives, and a snap would put a visible step on the last
+  frame); `ramp` stops at its end, emitting the target **exactly**; `diff` stops when the rate
+  reaches zero; `integrate` stops at its clamp. ε is a per-op default, relative above 1 and
+  absolute below (1e-4), never a user knob. Every one is gated on the node's eval counter going
+  **flat** — an ε nothing watches is decoration.
+- **Unbounded state is refused, not discouraged.** Op state is serialized with the program, so
+  an unbounded accumulator is a corpse that gets *copied*. `integrate`'s clamp is a required
+  keyword port for that reason, and the bound doubles as the cutoff.
+- **The re-arm is `now + 1` on the operator's own lane** — the lane its duration named, as
+  `every` already picks it. No new primitive: a tick where that lane did not advance simply
+  does not fire the entry, so a missed wake is free and self-healing.
+
+**Epochs are per-program and live in op state.** `clock` and `frame` count from *mount*, which
+keeps them program-relative (two cells started a second apart do not share a phase) and
+replay-clean. The epoch is baselined on the operator's first eval — which is tick 0, since
+mount evaluates every node — and rides the dump, because `restore` rebuilds without ticking
+and takes its `now` from the caller: an epoch held on the runtime would re-seed and `clock`
+would report zero on a program restored at t=90s.
+
+---
+
 ## 5. The flat graph
 
 - One arena of nodes; one arena of slots. No nesting, no call stack, no scopes.
@@ -708,9 +742,12 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 
 | group | ops |
 |---|---|
-| flow | `select`, `lerp`, `where`, `partition`, `changed`, `latch` |
+| flow | `select`, `lerp`, `and`/`or`/`not`, `where`, `partition`, `changed`, `latch` |
 | events | `dropped_below`, `rose_above`, `edge` (value→occurrence adapters; each strict on its own comparison — see below) |
 | temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `every`, `arm`, `disarm` (§4.6; durations §3.12) |
+| movement | `clock`, `frame` (fed time as a value, since mount), `lfo`, `wave` (0..1 waveforms) — tier 2 beat 1a, §4.8 |
+| registers | `ease`, `ramp`, `hold`, `diff`, `integrate` (op-internal state chasing a target; §4.8) |
+| shaping | `range` (0..1 → interval, clamping), `shape` (0..1 → 0..1 easing curves) |
 | math | `add sub mul div min max clamp abs floor round`, comparators |
 | record | record construction `{…}`, projection `.field`, `merge` |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
@@ -727,6 +764,17 @@ silent), **stateful** (the threshold/edge adapters and the gates), and **fed tim
 Plus `tap`, whose entire purpose is the side effect and which was the `pure` that gave the
 audit away: a skipped tap is a debug instrument that lies. The classification is pinned by an
 exhaustive gate test, so a new op cannot inherit `pure` from the field default unnoticed.
+
+**Operator ticking (added 2026-08-25, tier 2).** Every core op also declares `ticks`: may it
+re-arm itself and evaluate again with *no input change*? `clock`, `frame` and `lfo` do for as
+long as time is fed; `ease`, `ramp`, `diff` and `integrate` do while converging; `hold`,
+`every` and everything pure do not (`every` re-arms on its *period*, which is not per-frame
+cost). It is defaulted `false` and audited exhaustively both ways rather than
+comptime-required like `routes`, because a wrong answer here shows a wrong badge rather than
+computing a wrong value. The flag says **may tick**, never **is ticking**: the host lights the
+ticks-every-frame badge from it and shows the node's live eval counter beside it as the proof.
+A structural gate also refuses `ticks` on a `pure` op — an operator that produces a new answer
+from no new input is exactly what `pure` says it cannot do.
 
 **Threshold boundaries (corrected 2026-08-24).** `dropped_below t` fires crossing from ≥t to
 <t; `rose_above t` fires crossing from ≤t to >t. Each is strict on the comparison it names,

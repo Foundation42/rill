@@ -2002,6 +2002,18 @@ test "every core op declares its class deliberately" {
         .{ .name = "every", .class = .reads }, // time — the metronome; occurrence source, never skippable
         .{ .name = "arm", .class = .reads }, // state
         .{ .name = "disarm", .class = .reads }, // state
+        // tier 2, beat 1a
+        .{ .name = "clock", .class = .reads }, // fed time
+        .{ .name = "frame", .class = .reads }, // fed time
+        .{ .name = "wave", .class = .pure }, // same t, same shape, same answer
+        .{ .name = "lfo", .class = .reads }, // fed time + its own epoch
+        .{ .name = "ease", .class = .reads }, // state
+        .{ .name = "ramp", .class = .reads }, // state
+        .{ .name = "hold", .class = .reads }, // state
+        .{ .name = "diff", .class = .reads }, // state
+        .{ .name = "integrate", .class = .reads }, // state
+        .{ .name = "range", .class = .pure },
+        .{ .name = "shape", .class = .pure },
         .{ .name = "add", .class = .pure },
         .{ .name = "sub", .class = .pure },
         .{ .name = "mul", .class = .pure },
@@ -2051,6 +2063,80 @@ test "every core op declares its class deliberately" {
     if (reg.ops.items.len != table.len) {
         std.debug.print("core set has {d} ops, the class table has {d} — classify the new one\n", .{ reg.ops.items.len, table.len });
         return error.TestUnexpectedResult;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The ticks audit (ruled 2026-08-25, tier-2 recon §7). `OpDef.ticks` says an
+// operator MAY re-arm itself and evaluate again with no input change. The host
+// lights the ticks-every-frame badge from it and shows the node's live eval
+// counter beside it as the proof — the flag says what could cost, the counter
+// says what did.
+//
+// Defaulted plus audited, like `class` and unlike `routes`, because a wrong
+// answer here shows a wrong badge rather than computing a wrong value. Both
+// ways, so a new self-arming op cannot inherit `false` and hide its cost.
+// ---------------------------------------------------------------------------
+
+test "every core op declares whether it may tick" {
+    const Expect = struct { name: []const u8, ticks: bool };
+    const table = [_]Expect{
+        .{ .name = "clock", .ticks = true }, // as long as time is fed
+        .{ .name = "frame", .ticks = true },
+        .{ .name = "lfo", .ticks = true },
+        .{ .name = "ease", .ticks = true }, // while converging
+        .{ .name = "ramp", .ticks = true }, // while tweening
+        .{ .name = "diff", .ticks = true }, // while moving
+        .{ .name = "integrate", .ticks = true }, // while the rate is non-zero
+        // `every` re-arms too, but on its PERIOD, not per tick — the badge is
+        // about per-frame cost, and a metronome at 30s is not that. It is the
+        // boundary case, so it is pinned here rather than left to be argued.
+        .{ .name = "every", .ticks = false },
+        // `hold` needs no wake at all: nothing happens at the end of its
+        // window, the next arrival simply finds it expired.
+        .{ .name = "hold", .ticks = false },
+        .{ .name = "wave", .ticks = false }, // pure shaper; ticks if its t does
+        .{ .name = "range", .ticks = false },
+        .{ .name = "shape", .ticks = false },
+    };
+
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    for (table) |e| {
+        const id = reg.find(e.name) orelse return error.TestUnexpectedResult;
+        if (reg.get(id).ticks != e.ticks) {
+            std.debug.print("'{s}': declared ticks={}, audit says {}\n", .{ e.name, reg.get(id).ticks, e.ticks });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // Exhaustive the other way: every op the registry says ticks is on the
+    // table above. A new self-arming op fails here until someone says so.
+    for (reg.ops.items) |def| {
+        if (!def.ticks) continue;
+        const listed = for (table) |e| {
+            if (std.mem.eql(u8, e.name, def.name)) break true;
+        } else false;
+        if (!listed) {
+            std.debug.print("'{s}' declares ticks=true and is not in the audit\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "a ticking op is never pure" {
+    // The structural half, needing no table: an op that re-arms itself
+    // produces a new answer with no new input, which is precisely what `pure`
+    // says it cannot do. Catches the contradiction mechanically.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    for (reg.ops.items) |def| {
+        if (def.ticks and def.class == .pure) {
+            std.debug.print("'{s}' may tick but declares .pure\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
     }
 }
 
@@ -2596,8 +2682,524 @@ test "the manuals parse: every printed example compiles" {
     // examples are added or removed.
     // 28 → 30 (2026-08-25): the tags-campaign parity pass added the
     // membership muster and the coupled cast to the human manual's §7.
-    try testing.expectEqual(@as(usize, 30), human);
-    try testing.expectEqual(@as(usize, 3), agent);
+    // 30 → 32, 3 → 4 (2026-08-25): tier-2 beat 1a added §6b (movement) to
+    // the human manual — the waveform trio and the register examples — and
+    // the register line to the agent manual's temporal row.
+    try testing.expectEqual(@as(usize, 32), human);
+    try testing.expectEqual(@as(usize, 4), agent);
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2, beat 1a — time as a value, waveforms, registers, shaping.
+//
+// The beat closes on ONE line doing what took two programs, a seeded counter
+// and seven lines of arithmetic. That gate is first. The two Chris named as
+// conditions of the close — the stop gate and the restore-no-jump gate —
+// follow it, because they are what keep "op-internal state is legal" (recon
+// §0) from quietly becoming "the cycle ban, routed around via the wheel."
+// ---------------------------------------------------------------------------
+
+const sec = std.time.ns_per_s;
+
+/// Drive a mounted program across `n` frames of `dt` nanoseconds, starting one
+/// step in (mount already ran tick 0 at t=0). Both lanes advance, because a
+/// host feeds both and a register that only works when one moves is a register
+/// with a hidden dependency.
+fn run(fx: *Fixture, dt: u64, n: usize) !void {
+    // Cumulative from wherever the runtime already is: fed time is
+    // non-decreasing by contract, so a helper that restarted at zero would
+    // be a TimeRegression, not a shorter test.
+    for (0..n) |_| {
+        try fx.rt.tick(.{ .time_ns = fx.rt.now.time_ns + dt, .frame = fx.rt.now.frame + 1 });
+    }
+}
+
+test "beat 1a: the breathing exposure is one line" {
+    // The founding example (tier-2 draft §0). Before: two programs, because a
+    // phase counter reads a path it writes and §4.4 refuses that; a seed,
+    // because tick 0 evaluates everything; and a triangle, because with no
+    // `sin` and no `wave` there was no sine to be had.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure", .{});
+    defer fx.deinit();
+
+    // One line, three nodes, one program, no seed: nothing is read from the
+    // plane at all, so there is nothing to exist before mount.
+    try testing.expectEqual(@as(usize, 3), fx.prog.nodeCount());
+
+    const out = "programs.p.range1.out.out";
+    // A sine that starts at its trough: phase 0 is 0, so the exposure opens
+    // at `lo` and the first breath is an inhale.
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, out).?, 1e-9);
+
+    // Quarter cycle in: halfway up.
+    try run(&fx, sec, 1);
+    try testing.expectApproxEqAbs(@as(f64, 1.0), slotNum(&fx, out).?, 1e-9);
+    // Half cycle: the top.
+    try run(&fx, sec, 1);
+    try testing.expectApproxEqAbs(@as(f64, 1.5), slotNum(&fx, out).?, 1e-9);
+    // Three quarters: back down through the middle.
+    try run(&fx, sec, 1);
+    try testing.expectApproxEqAbs(@as(f64, 1.0), slotNum(&fx, out).?, 1e-9);
+    // Full cycle: home, and the plane saw every step of it.
+    try run(&fx, sec, 1);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, out).?, 1e-9);
+    try testing.expectEqual(@as(f64, 0.5), types.asNumber(fx.mock.writes.items[fx.mock.writes.items.len - 1].value).?);
+
+    // And it never leaves the interval it was asked for.
+    for (fx.mock.writes.items) |w| {
+        const v = types.asNumber(w.value).?;
+        try testing.expect(v >= 0.5 and v <= 1.5);
+    }
+}
+
+test "beat 1a: a register STOPS — the eval counter goes flat inside epsilon" {
+    // The gate that makes the ε cutoff real. An `ease` that converged but kept
+    // re-arming would be a node dirty every frame forever — legal under §4.4
+    // and a corpse anyway. So: converge, then assert the counter does not move
+    // across a hundred more frames.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.target | ease 100ms | set plane.out",
+        .{.{ "plane.target", @as(f64, 1.0) }});
+    defer fx.deinit();
+
+    const node = nodeIdOf(&fx.prog, "ease1").?;
+    // Baselined at the input on mount: no swing from zero, no transient.
+    try testing.expectApproxEqAbs(@as(f64, 1.0), slotNum(&fx, "programs.p.ease1.out.out").?, 1e-12);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.target", @as(f64, 2.0));
+    try run(&fx, 16 * ms, 120); // ~2s at 60fps: twenty time constants
+    const settled = slotNum(&fx, "programs.p.ease1.out.out").?;
+    try testing.expect(@abs(2.0 - settled) <= 1e-4 * 2.0);
+
+    const before = fx.rt.eval_count[node];
+    try run(&fx, 16 * ms, 100);
+    try testing.expectEqual(before, fx.rt.eval_count[node]);
+
+    // Stopped, not deaf: a new target wakes it and it converges again.
+    try feedValue(&fx.rt, testing.allocator, "plane.target", @as(f64, 0.0));
+    try run(&fx, 16 * ms, 120);
+    try testing.expect(fx.rt.eval_count[node] > before);
+    try testing.expect(@abs(slotNum(&fx, "programs.p.ease1.out.out").?) <= 1e-4);
+}
+
+test "beat 1a: every self-arming register stops, not just ease" {
+    // The same property across the family, because "it stops" is the
+    // campaign's load-bearing claim and one op proving it is one op.
+    const Case = struct { src: []const u8, node: []const u8, seed: f64, then: f64 };
+    const cases = [_]Case{
+        .{ .src = "plane.v | ease 50ms | set plane.o", .node = "ease1", .seed = 0, .then = 1 },
+        .{ .src = "plane.v | ramp 200ms | set plane.o", .node = "ramp1", .seed = 0, .then = 1 },
+        // diff stops when the rate reaches zero: a value that stopped moving
+        // has velocity zero, and reporting the last velocity forever is the
+        // bug this op exists to avoid.
+        .{ .src = "plane.v | diff | set plane.o", .node = "diff1", .seed = 0, .then = 5 },
+        // integrate stops at its clamp — the bound is also the cutoff.
+        .{ .src = "plane.v | integrate max 1 | set plane.o", .node = "integrate1", .seed = 0, .then = 100 },
+    };
+    inline for (cases) |c| {
+        var fx: Fixture = undefined;
+        try mountFixture(testing.allocator, &fx, c.src, .{.{ "plane.v", c.seed }});
+        defer fx.deinit();
+        const node = nodeIdOf(&fx.prog, c.node).?;
+        try feedValue(&fx.rt, testing.allocator, "plane.v", c.then);
+        try run(&fx, 16 * ms, 200);
+        const before = fx.rt.eval_count[node];
+        try run(&fx, 16 * ms, 100);
+        if (before != fx.rt.eval_count[node]) {
+            std.debug.print("'{s}' never stopped: {d} → {d} evals over 100 idle frames\n", .{ c.node, before, fx.rt.eval_count[node] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "beat 1a: restore mid-animation does not jump" {
+    // The hazard the recon found by reading (§3h): `restore` rebuilds from a
+    // dump WITHOUT ticking and takes `now` from MountOpts, so an epoch held on
+    // the Runtime would be re-seeded and `clock` would report zero at t=90s.
+    // The epoch lives in op state instead, and this is what says so.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\clock | set plane.ui.elapsed
+        \\lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+    , .{});
+    defer fx.deinit();
+
+    try run(&fx, sec / 4, 10); // 2.5s in: mid-breath, past the peak
+    const elapsed_before = slotNum(&fx, "programs.p.clock1.out.out").?;
+    const wave_before = slotNum(&fx, "programs.p.range1.out.out").?;
+    try testing.expectApproxEqAbs(@as(f64, 2.5), elapsed_before, 1e-9);
+
+    const saved = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(saved);
+    var prog2 = try rill.loadProgram(testing.allocator, &fx.reg, saved);
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
+    defer rt2.deinit();
+    try rill.restoreState(&rt2, saved);
+
+    // Restored, the wires read exactly what they read when saved.
+    try testing.expectApproxEqAbs(elapsed_before, types.asNumber(rt2.readSlot("programs.p.clock1.out.out").?).?, 1e-12);
+    try testing.expectApproxEqAbs(wave_before, types.asNumber(rt2.readSlot("programs.p.range1.out.out").?).?, 1e-12);
+
+    // And it CONTINUES rather than restarting: one more quarter-second on
+    // both runtimes lands on the same value, still counting from the original
+    // mount. A runtime-held epoch would read 0.25 here instead of 2.75.
+    try rt2.tick(.{ .time_ns = sec * 11 / 4, .frame = 11 });
+    try run(&fx, sec / 4, 1);
+    try testing.expectApproxEqAbs(@as(f64, 2.75), types.asNumber(rt2.readSlot("programs.p.clock1.out.out").?).?, 1e-9);
+    try testing.expectEqualSlices(u8, fx.rt.readSlot("programs.p.range1.out.out").?, rt2.readSlot("programs.p.range1.out.out").?);
+}
+
+test "beat 1a: an animation replays bit-identically" {
+    // G2's shape, extended to a program that re-arms itself. Time is fed, so
+    // two runs over the same fed sequence must agree byte for byte — the
+    // wheel is the only subscription to time and it is in the dump.
+    var a: Fixture = undefined;
+    var b: Fixture = undefined;
+    const src =
+        \\lfo tri 1s | range 0 10 | set plane.a
+        \\plane.v | ease 40ms | set plane.b
+    ;
+    try mountFixture(testing.allocator, &a, src, .{.{ "plane.v", @as(f64, 0) }});
+    defer a.deinit();
+    try mountFixture(testing.allocator, &b, src, .{.{ "plane.v", @as(f64, 0) }});
+    defer b.deinit();
+
+    for (1..60) |i| {
+        if (i == 20) {
+            try feedValue(&a.rt, testing.allocator, "plane.v", @as(f64, 3));
+            try feedValue(&b.rt, testing.allocator, "plane.v", @as(f64, 3));
+        }
+        try a.rt.tick(.{ .time_ns = 16 * ms * i, .frame = @intCast(i) });
+        try b.rt.tick(.{ .time_ns = 16 * ms * i, .frame = @intCast(i) });
+        const da = try rill.dump(&a.rt, testing.allocator);
+        defer testing.allocator.free(da);
+        const db = try rill.dump(&b.rt, testing.allocator);
+        defer testing.allocator.free(db);
+        try testing.expectEqualSlices(u8, da, db);
+    }
+}
+
+test "beat 1a: `lfo` and `clock | wave` are the same waveform, bit for bit" {
+    // The pin that keeps `lfo` honest as sugar. It is its own op (a source
+    // that owns its epoch is one node, not two) but it calls the SAME
+    // `waveAt`, so the two spellings cannot drift. Bit-identical, not
+    // approximately equal — an epsilon here would hide exactly the drift the
+    // gate exists to catch.
+    inline for (.{ "sine", "tri", "saw", "square" }) |shape| {
+        var fx: Fixture = undefined;
+        try mountFixture(testing.allocator, &fx,
+            "lfo " ++ shape ++ " 3s | set plane.a\nclock | wave " ++ shape ++ " 3s | set plane.b", .{});
+        defer fx.deinit();
+        for (1..40) |i| {
+            try fx.rt.tick(.{ .time_ns = 100 * ms * i, .frame = @intCast(i) });
+            const x = fx.rt.readSlot("programs.p.lfo1.out.out").?;
+            const y = fx.rt.readSlot("programs.p.wave1.out.out").?;
+            try testing.expectEqualSlices(u8, x, y);
+        }
+    }
+}
+
+test "beat 1a: the waveforms are the waveforms" {
+    // Pinned at the phases everyone can check by hand, on the frame lane so
+    // the arithmetic is exact: a quarter of 4f is 1f.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\lfo sine 4f | set plane.sine
+        \\lfo tri 4f | set plane.tri
+        \\lfo saw 4f | set plane.saw
+        \\lfo square 4f | set plane.square
+    , .{});
+    defer fx.deinit();
+    const at = struct {
+        fn v(f: *Fixture, n: []const u8) f64 {
+            return slotNum(f, n).?;
+        }
+    };
+    const s = "programs.p.lfo1.out.out";
+    const t = "programs.p.lfo2.out.out";
+    const w = "programs.p.lfo3.out.out";
+    const q = "programs.p.lfo4.out.out";
+    // phase 0
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, s), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, t), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, w), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, q), 1e-12);
+    try run(&fx, 16 * ms, 1); // phase 1/4
+    try testing.expectApproxEqAbs(@as(f64, 0.5), at.v(&fx, s), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), at.v(&fx, t), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.25), at.v(&fx, w), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, q), 1e-12);
+    try run(&fx, 16 * ms, 1); // phase 1/2 — every shape at its own half-way
+    try testing.expectApproxEqAbs(@as(f64, 1), at.v(&fx, s), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 1), at.v(&fx, t), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), at.v(&fx, w), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 1), at.v(&fx, q), 1e-12);
+    try run(&fx, 16 * ms, 2); // phase 1 == phase 0: modular, and exactly so
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, s), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0), at.v(&fx, w), 1e-12);
+}
+
+test "beat 1a: `ramp` lands its target exactly, and retargets from where it is" {
+    // Chris's amendment to the ε pin: ε is `ease`'s rule. `ramp` has an END,
+    // so its last frame emits the target EXACTLY — a fade that stopped one ε
+    // short of full would be a visible band.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | ramp 100ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    defer fx.deinit();
+    const out = "programs.p.ramp1.out.out";
+
+    // The tween starts on the tick the new target ARRIVES (t=10ms here, not
+    // t=0) and that tick emits where it already is.
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1));
+    try run(&fx, 10 * ms, 1);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+    try run(&fx, 10 * ms, 5); // t=60ms: half of the span
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, out).?, 1e-9);
+    try run(&fx, 10 * ms, 5); // t=110ms: the end
+    try testing.expectEqual(@as(f64, 1.0), slotNum(&fx, out).?); // exactly, not 1.0 ± ε
+
+    // It stays there and stops: a landed ramp is not still tweening.
+    const node = nodeIdOf(&fx.prog, "ramp1").?;
+    const landed = fx.rt.eval_count[node];
+    try run(&fx, 10 * ms, 20);
+    try testing.expectEqual(landed, fx.rt.eval_count[node]);
+    try testing.expectEqual(@as(f64, 1.0), slotNum(&fx, out).?);
+}
+
+test "beat 1a: `ramp` interrupted mid-tween resumes from where it is" {
+    // The gate the first draft got wrong: it retargeted AFTER the tween had
+    // finished, where "where it is" and "the old target" are the same number,
+    // so it asserted nothing — a mutation swapping one for the other survived.
+    // Interrupting mid-flight is the case that distinguishes them.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | ramp 100ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    defer fx.deinit();
+    const out = "programs.p.ramp1.out.out";
+
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1));
+    try run(&fx, 10 * ms, 6); // t=60ms: half-way up, still climbing
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, out).?, 1e-9);
+
+    // Reverse it. The retarget tick has itself advanced 10ms, so the ramp is
+    // at 0.6 when it turns around — and 0.6 is what it must emit. A ramp that
+    // restarted from its OLD TARGET would jump to 1.0 here, which is the
+    // visible flick this gate exists to forbid.
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 0));
+    try run(&fx, 10 * ms, 1);
+    try testing.expectApproxEqAbs(@as(f64, 0.6), slotNum(&fx, out).?, 1e-9);
+
+    // From 0.6, half a span later, it is 0.6 - 0.3. (From 1.0 it would read
+    // 0.5 — the mutation's answer, and a tenth of a unit of visible lie.)
+    try run(&fx, 10 * ms, 5);
+    try testing.expectApproxEqAbs(@as(f64, 0.3), slotNum(&fx, out).?, 1e-9);
+    try run(&fx, 10 * ms, 5);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+}
+
+test "beat 1a: `ease` stops inside epsilon and never snaps" {
+    // The other half of the amendment: an exponential never arrives, so the
+    // honest end is "close enough, and quiet". If it snapped, the last frame
+    // of every fade would be a step.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | ease 20ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    defer fx.deinit();
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1));
+    try run(&fx, 8 * ms, 60);
+    const settled = slotNum(&fx, "programs.p.ease1.out.out").?;
+    try testing.expect(settled < 1.0); // never actually arrives…
+    try testing.expect(1.0 - settled <= 1e-4); // …but stops indistinguishably close
+}
+
+test "beat 1a: `ease up down` is the envelope follower" {
+    // `abs | ease 20ms down 400ms` — fast attack, slow release, which is three
+    // CHOPs and Max's `slide` in two keyword ports. Asserting the ASYMMETRY is
+    // the point: rise and fall over the same interval must not match.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | abs | ease 20ms down 400ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    defer fx.deinit();
+    const out = "programs.p.ease1.out.out";
+
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1));
+    try run(&fx, 16 * ms, 4); // 64ms of attack at tau=20ms: nearly there
+    const attacked = slotNum(&fx, out).?;
+    try testing.expect(attacked > 0.9);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 0));
+    try run(&fx, 16 * ms, 4); // the same 64ms of release at tau=400ms
+    const released = slotNum(&fx, out).?;
+    try testing.expect(released > 0.8); // barely moved — that is the follower
+}
+
+test "beat 1a: `hold` ignores the storm, and does not tick" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | hold 100ms | set plane.o", .{.{ "plane.v", @as(f64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.hold1.out.out";
+    const node = nodeIdOf(&fx.prog, "hold1").?;
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+
+    // Inside the window every change is ignored — and gone.
+    for (1..5) |i| {
+        try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, @floatFromInt(i + 1)));
+        try fx.rt.tick(.{ .time_ns = 20 * ms * i, .frame = @intCast(i) });
+        try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+    }
+    // Past it, the next arrival takes.
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 9));
+    try run(&fx, 200 * ms, 1);
+    try testing.expectEqual(@as(f64, 9), slotNum(&fx, out).?);
+
+    // It never armed the wheel: idle frames cost it nothing.
+    const before = fx.rt.eval_count[node];
+    try run(&fx, 16 * ms, 50);
+    try testing.expectEqual(before, fx.rt.eval_count[node]);
+}
+
+test "beat 1a: `diff` baselines silently, then reports the rate" {
+    // The op the keep wanted: `nearest_distance | diff` is velocity, and the
+    // probe reviewer invented a sensor field because nothing derived it.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.d | diff | set plane.o", .{.{ "plane.d", @as(f64, 100) }});
+    defer fx.deinit();
+    const out = "programs.p.diff1.out.out";
+
+    // First observation: no rate exists yet, and dt is zero — the arithmetic
+    // forces the silence the idiom already wanted.
+    try testing.expect(fx.rt.readSlot(out) == null);
+
+    // 10 metres closer over half a second: -20 m/s.
+    try feedValue(&fx.rt, testing.allocator, "plane.d", @as(f64, 90));
+    try run(&fx, sec / 2, 1);
+    try testing.expectApproxEqAbs(@as(f64, -20), slotNum(&fx, out).?, 1e-9);
+
+    // Stopped: the rate goes to zero rather than holding the last velocity.
+    try run(&fx, sec / 2, 2);
+    try testing.expectApproxEqAbs(@as(f64, 0), slotNum(&fx, out).?, 1e-9);
+}
+
+test "beat 1a: `integrate` needs its clamp, and honours it" {
+    // The clamp is REQUIRED, not optional: op state rides in every dump, so an
+    // unbounded accumulator is a corpse that gets copied.
+    try expectParseError("plane.v | integrate | set plane.o", "max");
+
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | integrate max 2 | set plane.o", .{.{ "plane.v", @as(f64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.integrate1.out.out";
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+
+    try run(&fx, sec, 1); // one unit per second, one second
+    try testing.expectApproxEqAbs(@as(f64, 1), slotNum(&fx, out).?, 1e-9);
+    try run(&fx, sec, 5); // and then it pins at the bound rather than running away
+    try testing.expectEqual(@as(f64, 2), slotNum(&fx, out).?);
+
+    // The bound is symmetric: a negative rate drains it and pins at -2.
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, -1));
+    try run(&fx, sec, 10);
+    try testing.expectEqual(@as(f64, -2), slotNum(&fx, out).?);
+}
+
+test "beat 1a: `range` clamps where `lerp` extrapolates" {
+    // The one difference between them, and the reason `range` is a word:
+    // `lerp` blends two things, `range` is the EXIT from the unit interval
+    // and stays inside the interval it was given. Same ruling as `along`.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.t | range 0.5 1.5 | set plane.ranged
+        \\plane.t | lerp 0.5 1.5 | set plane.lerped
+    , .{.{ "plane.t", @as(f64, 2.0) }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 1.5), slotNum(&fx, "programs.p.range1.out.out").?);
+    try testing.expectEqual(@as(f64, 2.5), slotNum(&fx, "programs.p.lerp1.out.out").?);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.t", @as(f64, -1.0));
+    try run(&fx, 16 * ms, 1);
+    try testing.expectEqual(@as(f64, 0.5), slotNum(&fx, "programs.p.range1.out.out").?);
+    try testing.expectEqual(@as(f64, -0.5), slotNum(&fx, "programs.p.lerp1.out.out").?);
+}
+
+test "beat 1a: `shape` eases the unit interval" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.t | shape smooth | set plane.a
+        \\plane.t | shape in | set plane.b
+        \\plane.t | shape out | set plane.c
+        \\plane.t | shape linear | set plane.d
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fx.deinit();
+    // Every curve passes through the midpoint of the ends it was given…
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, "programs.p.shape1.out.out").?, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.25), slotNum(&fx, "programs.p.shape2.out.out").?, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), slotNum(&fx, "programs.p.shape3.out.out").?, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, "programs.p.shape4.out.out").?, 1e-12);
+    // …and every one of them clamps, unit in, unit out.
+    try feedValue(&fx.rt, testing.allocator, "plane.t", @as(f64, 4.0));
+    try run(&fx, 16 * ms, 1);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.shape1.out.out").?);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.shape2.out.out").?);
+}
+
+test "beat 1a: an unknown shape is refused at parse, naming the list" {
+    // `one_of` on a string port, checked at wire time — so a typo is caught
+    // when the program is written, not three seconds into the animation.
+    try expectParseError("lfo sqare 4s | set plane.o", "sine");
+    try expectParseError("plane.t | shape bouncy | set plane.o", "smooth");
+}
+
+test "beat 1a: `clock` and `frame` count from mount, not from zero" {
+    // Program-relative, so two cells mounted a second apart do not share a
+    // phase and a replay lands on the same numbers.
+    var fx: Fixture = undefined;
+    fx.reg = try hostRegistry(testing.allocator);
+    defer fx.reg.deinit();
+    fx.mock = rill.MockPlane.init(testing.allocator);
+    defer fx.mock.deinit();
+    var diag = rill.Diag{};
+    fx.prog = try rill.parse(testing.allocator, &fx.reg, "p",
+        "clock | set plane.secs\nframe | set plane.frames", &diag);
+    defer fx.prog.deinit();
+    // Mounted mid-session, at t=90s / frame 5400 — the one-shot console
+    // dispatch does this on every line.
+    fx.rt = try rill.Runtime.mount(testing.allocator, &fx.prog, fx.mock.asPlane(), .{
+        .now = .{ .time_ns = 90 * sec, .frame = 5400 },
+    });
+    defer fx.rt.deinit();
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.clock1.out.out").?);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.frame1.out.out").?);
+
+    try fx.rt.tick(.{ .time_ns = 92 * sec, .frame = 5460 });
+    try testing.expectApproxEqAbs(@as(f64, 2), slotNum(&fx, "programs.p.clock1.out.out").?, 1e-9);
+    try testing.expectEqual(@as(f64, 60), slotNum(&fx, "programs.p.frame1.out.out").?);
+}
+
+test "beat 1a: an op-internal register is not a cycle, and the plane one still is" {
+    // §0's confirmation, executed rather than asserted. The register chases a
+    // target inside the operator and mounts cleanly; the same idea routed
+    // through the plane is refused, as it was before this beat.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.target | ease 100ms | set plane.smoothed", .{.{ "plane.target", @as(f64, 1) }});
+    defer fx.deinit();
+    try testing.expect(fx.prog.findCycle() == null);
+
+    // …and the same idea routed through the plane is still refused, at PARSE,
+    // naming both the write and the subscription. A register does not buy a
+    // way around §4.4; it makes going around it unnecessary.
+    try expectParseError("plane.smoothed | ease 100ms | set plane.smoothed", "cycle");
+    try expectParseError("plane.smoothed | ease 100ms | set plane.smoothed", "plane.smoothed");
 }
 
 // ---------------------------------------------------------------------------
@@ -2665,8 +3267,12 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // Both numbers move on purpose. `rill_cells` rises as a beat turns a
     // markdown "after" into a program; `total` rises as asks are added.
     // Opening count (recon, before beat 1a): 12 before-cells, 37 cells.
-    try testing.expectEqual(@as(usize, 12), rill_cells);
-    try testing.expectEqual(@as(usize, 37), total);
+    // 12 → 21, 37 → 53 (beat 1a): nine after-cells — the founding example,
+    // the VU meter, the eased target, closing-fast, the swing, the two rows
+    // beat 1a both added and cleared, the partial fade, and the ticking
+    // demonstration — plus the pages that record what the family costs.
+    try testing.expectEqual(@as(usize, 21), rill_cells);
+    try testing.expectEqual(@as(usize, 53), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -3012,3 +3618,4 @@ test "^: the archetype sigil lexes one token, guarded — engine-owned, never an
     try expectParseError("plane.x | mul 2 as ^x", "cannot wear");
     try expectParseError("def ^d(x) = x | mul 2", "cannot wear");
 }
+

@@ -487,6 +487,370 @@ fn gateEval(comptime initially_open: bool) fn (*EvalCtx) EvalError!Emit {
 }
 
 // ---------------------------------------------------------------------------
+// Tier 2, beat 1a — time as a value, and the registers.
+//
+// The family confirmed by the recon (§0): state INSIDE an operator is legal
+// under §4.4 because the cycle check is a cross product over two lists of
+// plane paths and op state is not a path. `window`, `debounce` and the gates
+// have held state since v0; these are the next customers, not a new
+// mechanism.
+//
+// What is new is that these operators re-arm THEMSELVES: a register with a
+// target it has not reached asks the wheel to wake it on the next tick of its
+// own lane, so it converges without anything upstream moving. Three rules
+// keep that from being a cycle wearing a hat:
+//
+//   1. **Every ticker stops.** `ease` stops inside ε of its target, `ramp`
+//      stops at its end, `diff` stops when the rate is zero, `integrate`
+//      stops at its clamp. A gate per op watches the eval counter STOP
+//      rising — ε is not decoration.
+//   2. **The re-arm is `now + 1` on the op's own lane** (the lane its
+//      duration named, exactly as `every` picks it). A tick where that lane
+//      did not advance simply doesn't fire the entry — `expireWheel`
+//      consumes only what is due — so a missed wake is free and
+//      self-healing: the node fires on the first tick that actually moved,
+//      which is the first tick its output could differ on.
+//   3. **The epoch lives in op state, baselined on first eval.** Not on the
+//      Runtime: `restore` rebuilds from a dump without ticking and takes
+//      `now` from MountOpts, so a runtime-held epoch would re-seed and
+//      `clock` would jump. Tick 0 evaluates every node, so first-eval and
+//      mount coincide and the baseline is exact.
+// ---------------------------------------------------------------------------
+
+/// Register state: [lane u8][epoch u64 LE][a f64 LE][b f64 LE][flags u8].
+/// One shape for the whole family — `a`/`b` mean different things per op
+/// (ease: last output, unused; ramp: from, to; diff: last value, last rate;
+/// integrate: accumulator, unused) and `epoch` is the op's own zero. Opaque
+/// little-endian like the temporal ops' state, for the same reason: it is
+/// dumped and restored verbatim and never read by anything but its op.
+const RegState = struct {
+    frames: bool = false,
+    at: u64 = 0, // last-eval time on the lane (or the epoch, for sources)
+    a: f64 = 0,
+    b: f64 = 0,
+    started: bool = false,
+
+    const size = 1 + 8 + 8 + 8 + 1;
+
+    fn read(ctx: *EvalCtx) RegState {
+        const st = ctx.state.items;
+        if (st.len < size) return .{};
+        return .{
+            .frames = st[0] == 1,
+            .at = std.mem.readInt(u64, st[1..9], .little),
+            .a = @bitCast(std.mem.readInt(u64, st[9..17], .little)),
+            .b = @bitCast(std.mem.readInt(u64, st[17..25], .little)),
+            .started = st[25] == 1,
+        };
+    }
+
+    fn write(self: RegState, ctx: *EvalCtx) EvalError!void {
+        var buf: [size]u8 = undefined;
+        buf[0] = @intFromBool(self.frames);
+        std.mem.writeInt(u64, buf[1..9], self.at, .little);
+        std.mem.writeInt(u64, buf[9..17], @as(u64, @bitCast(self.a)), .little);
+        std.mem.writeInt(u64, buf[17..25], @as(u64, @bitCast(self.b)), .little);
+        buf[25] = @intFromBool(self.started);
+        try ctx.setState(&buf);
+    }
+};
+
+/// Wake on the next tick of `lane`. See rule 2 above.
+fn armNextTick(ctx: *EvalCtx, frames: bool) EvalError!void {
+    try ctx.wake(if (frames) .{ .frame = ctx.now_frame + 1 } else .{ .ns = ctx.now_ns + 1 });
+}
+
+/// Seconds between two stamps on a lane. The frame lane has no seconds, so a
+/// frame-lane register measures in frames and says so in its help — mixing
+/// the two would be the faked `3f`≈50ms the duration grammar exists to
+/// refuse.
+fn elapsed(frames: bool, from: u64, to: u64) f64 {
+    const d: f64 = @floatFromInt(to -| from);
+    return if (frames) d else d / 1_000_000_000.0;
+}
+
+/// The convergence cutoff, shared by `ease` and `diff` (ruled: per-op
+/// default, not a knob). Relative above 1 and absolute below it, so a
+/// register on metres and a register on an exposure both stop, and one on a
+/// value in the millions still stops rather than ticking forever.
+const EPS: f64 = 1e-4;
+
+fn converged(target: f64, current: f64) bool {
+    const scale = @max(1.0, @abs(target));
+    return @abs(target - current) <= EPS * scale;
+}
+
+// -- sources ----------------------------------------------------------------
+
+/// `clock` / `frame` — fed time as a value, since mount. Program-relative
+/// (so replay is clean and two programs mounted a second apart do not share
+/// a phase) and epoch-in-state (so restore does not jump).
+fn timeSource(comptime frames: bool) fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn eval(ctx: *EvalCtx) EvalError!Emit {
+            const now = ctx.nowOn(frames);
+            var st = RegState.read(ctx);
+            if (!st.started) st = .{ .frames = frames, .at = now, .started = true };
+            try st.write(ctx);
+            try armNextTick(ctx, frames);
+            return emitF64(ctx, elapsed(frames, st.at, now));
+        }
+    }.eval;
+}
+
+// -- waveforms --------------------------------------------------------------
+
+const WAVE_SHAPES = [_][]const u8{ "sine", "tri", "saw", "square" };
+
+/// The one waveform function. `lfo` and `wave` both call it and cannot drift:
+/// `lfo` computes phase from its own epoch, `wave` from the piped seconds,
+/// and a gate asserts the two forms are bit-identical over a fed sequence.
+/// Phase in, 0..1 out — every shape leaves the unit interval, which is what
+/// makes `| range lo hi` the universal exit.
+fn waveAt(shape: []const u8, phase_in: f64) EvalError!f64 {
+    const ph = phase_in - @floor(phase_in); // fract: phase is modular
+    if (std.mem.eql(u8, shape, "sine")) return 0.5 - 0.5 * @cos(ph * std.math.tau);
+    if (std.mem.eql(u8, shape, "tri")) return 1.0 - @abs(2.0 * ph - 1.0);
+    if (std.mem.eql(u8, shape, "saw")) return ph;
+    if (std.mem.eql(u8, shape, "square")) return if (ph < 0.5) 0.0 else 1.0;
+    return error.BadValue; // parse checks `one_of`; a STREAM can only be caught here
+}
+
+/// Seconds (or frames) per cycle, from a duration on either lane. A frame
+/// duration on `wave`'s period means the piped `t` is counted in frames —
+/// `frame | wave saw 120f` is a two-second cycle at 60fps and says so.
+fn periodOf(d: types.Duration) EvalError!f64 {
+    if (d.count == 0) return error.BadValue;
+    const c: f64 = @floatFromInt(d.count);
+    return if (d.frames) c else c / 1_000_000_000.0;
+}
+
+/// `wave <shape> <period>` — piped t (seconds on the real lane, frames on the
+/// frame lane) shaped into 0..1. Pure: same t, same answer, no state, no
+/// wheel. This is the half of `lfo` that composes — anything that produces a
+/// number can drive it.
+fn evalWave(ctx: *EvalCtx) EvalError!Emit {
+    const t = try num(ctx, 0);
+    const shape = types.asString(try raw(ctx, 1)) orelse return error.BadValue;
+    const period = try periodOf(try dur(ctx, 2));
+    return emitF64(ctx, try waveAt(shape, t / period));
+}
+
+/// `lfo <shape> <period> [phase <p>]` — the source. Sugar over `clock | wave`
+/// in the sense that matters: the SAME `waveAt`, so the two spellings cannot
+/// diverge. It exists as its own op because "an LFO at four seconds" is how
+/// people say it, and because a source that owns its epoch is one node
+/// instead of two.
+fn evalLfo(ctx: *EvalCtx) EvalError!Emit {
+    const shape = types.asString(try raw(ctx, 0)) orelse return error.BadValue;
+    const d = try dur(ctx, 1);
+    const period = try periodOf(d);
+    const phase: f64 = if (ctx.in[2] != null) try num(ctx, 2) else 0;
+    const now = ctx.nowOn(d.frames);
+    var st = RegState.read(ctx);
+    if (!st.started) st = .{ .frames = d.frames, .at = now, .started = true };
+    try st.write(ctx);
+    try armNextTick(ctx, d.frames);
+    return emitF64(ctx, try waveAt(shape, elapsed(d.frames, st.at, now) / period + phase));
+}
+
+// -- registers --------------------------------------------------------------
+
+/// `ease <tau> [up <t>] [down <t>]` — the leaky integrator, and the smoother
+/// rill lacked. Output chases input with time constant τ; `up`/`down` make it
+/// asymmetric, which is the envelope follower (`abs | ease 20ms down 400ms`)
+/// and the trigger envelope in two keyword ports.
+///
+/// It STOPS inside ε and does not snap (ruled 2026-08-25): an exponential
+/// never arrives, so the honest end is "close enough, and quiet", not a step
+/// on the last frame. `ramp` is the op with an end, and it lands its target
+/// exactly.
+fn evalEase(ctx: *EvalCtx) EvalError!Emit {
+    const target = try num(ctx, 0);
+    const tau_d = try dur(ctx, 1);
+    const now = ctx.nowOn(tau_d.frames);
+    var st = RegState.read(ctx);
+    if (!st.started) {
+        // Baseline AT the input: a register that started at zero would swing
+        // from zero to the current reading on mount, which is a transient
+        // nobody asked for.
+        st = .{ .frames = tau_d.frames, .at = now, .a = target, .started = true };
+        try st.write(ctx);
+        return emitF64(ctx, target);
+    }
+
+    // Direction picks the constant; `tau` is the default for both sides.
+    const rising = target > st.a;
+    const chosen = if (rising and ctx.in[2] != null) try dur(ctx, 2) else if (!rising and ctx.in[3] != null) try dur(ctx, 3) else tau_d;
+    const tau = try periodOf(chosen);
+
+    const dt = elapsed(st.frames, st.at, now);
+    // 1 - exp(-dt/tau): the exact leak over dt, so the answer does not depend
+    // on how often the wheel happened to wake us. A per-tick constant would
+    // make the same fade take different times at different frame rates.
+    const k = 1.0 - @exp(-dt / tau);
+    const next = st.a + (target - st.a) * k;
+
+    st.at = now;
+    st.a = next;
+    try st.write(ctx);
+    if (!converged(target, next)) try armNextTick(ctx, st.frames);
+    return emitF64(ctx, next);
+}
+
+/// `ramp <duration>` — on a new target, tween linearly to it over `duration`.
+/// The "fade to". Unlike `ease` it has an end, so its last frame emits the
+/// target EXACTLY and then it goes quiet (ruled 2026-08-25) — a fade that
+/// stopped one ε short of full would be a visible band.
+fn evalRamp(ctx: *EvalCtx) EvalError!Emit {
+    const target = try num(ctx, 0);
+    const d = try dur(ctx, 1);
+    const span = try periodOf(d);
+    const now = ctx.nowOn(d.frames);
+    var st = RegState.read(ctx);
+
+    if (!st.started) {
+        st = .{ .frames = d.frames, .at = now, .a = target, .b = target, .started = true };
+        try st.write(ctx);
+        return emitF64(ctx, target);
+    }
+    // A new target restarts the tween FROM WHERE WE ARE, not from the old
+    // target: retargeting mid-fade must not jump.
+    if (ctx.in_fresh[0] and target != st.b) {
+        st.a = currentRamp(st, now, span);
+        st.b = target;
+        st.at = now;
+    }
+    const t = if (span <= 0) 1.0 else elapsed(st.frames, st.at, now) / span;
+    if (t >= 1.0) {
+        st.a = st.b;
+        try st.write(ctx);
+        return emitF64(ctx, st.b); // exactly the target, then quiet
+    }
+    try st.write(ctx);
+    try armNextTick(ctx, st.frames);
+    return emitF64(ctx, st.a + (st.b - st.a) * t);
+}
+
+fn currentRamp(st: RegState, now: u64, span: f64) f64 {
+    const t = if (span <= 0) 1.0 else @min(1.0, elapsed(st.frames, st.at, now) / span);
+    return st.a + (st.b - st.a) * t;
+}
+
+/// `hold <duration>` — take a new value, then ignore further changes for
+/// `duration`. Sample-and-hold. It does NOT tick: nothing needs to happen at
+/// the end of the window, so there is no wake — the next arrival simply finds
+/// the window expired. Ignored values are gone, which is the point.
+fn evalHold(ctx: *EvalCtx) EvalError!Emit {
+    const d = try dur(ctx, 1);
+    const now = ctx.nowOn(d.frames);
+    var st = RegState.read(ctx);
+    if (st.started and now < st.at + d.count) return emitF64(ctx, st.a);
+    const v = try num(ctx, 0);
+    st = .{ .frames = d.frames, .at = now, .a = v, .started = true };
+    try st.write(ctx);
+    return emitF64(ctx, v);
+}
+
+/// `diff` — rate of change per second, from the previous sample. Velocity
+/// from position: the derived quantity people otherwise invent as a sensor
+/// field (`plane.sensors.gate.nearest_distance | diff | dropped_below -2`).
+///
+/// It ticks WHILE MOVING and stops when the rate reaches zero, which is the
+/// only honest reading: a value that stops changing has a rate of zero, and
+/// an op that only spoke when its input spoke would report the last velocity
+/// of a raider who has stopped, forever.
+///
+/// The first observation baselines silently (`dropped_below`'s idiom) — and
+/// here the arithmetic forces it: dt is zero on the first eval and a rate
+/// needs two samples.
+fn evalDiff(ctx: *EvalCtx) EvalError!Emit {
+    const v = try num(ctx, 0);
+    const now = ctx.now_ns;
+    var st = RegState.read(ctx);
+    if (!st.started) {
+        st = .{ .frames = false, .at = now, .a = v, .b = 0, .started = true };
+        try st.write(ctx);
+        return Emit.none; // no rate exists yet; the wave dies here, once
+    }
+    const dt = elapsed(false, st.at, now);
+    if (dt <= 0) return Emit.none; // same tick again: no new information
+    const rate = (v - st.a) / dt;
+    st.at = now;
+    st.a = v;
+    st.b = rate;
+    try st.write(ctx);
+    if (rate != 0) try armNextTick(ctx, false); // still moving: ask again
+    return emitF64(ctx, rate);
+}
+
+/// `integrate max <m>` — running sum over fed time, clamped to ±m. "Charge
+/// while held." The clamp is a REQUIRED keyword port, not an option: op state
+/// rides in every dump, so an unbounded accumulator is a corpse that gets
+/// copied. It is also what lets the op stop — pinned at the bound, the value
+/// no longer changes, so it stops re-arming.
+fn evalIntegrate(ctx: *EvalCtx) EvalError!Emit {
+    const rate = try num(ctx, 0);
+    const cap = @abs(try num(ctx, 1));
+    const now = ctx.now_ns;
+    var st = RegState.read(ctx);
+    if (!st.started) {
+        st = .{ .frames = false, .at = now, .a = 0, .started = true };
+        try st.write(ctx);
+        try armNextTick(ctx, false);
+        return emitF64(ctx, 0);
+    }
+    const dt = elapsed(false, st.at, now);
+    const next = std.math.clamp(st.a + rate * dt, -cap, cap);
+    const moving = rate != 0 and next != st.a;
+    st.at = now;
+    st.a = next;
+    try st.write(ctx);
+    if (moving) try armNextTick(ctx, false);
+    return emitF64(ctx, next);
+}
+
+// -- shaping ----------------------------------------------------------------
+
+/// `range <lo> <hi>` — the exit from the unit interval. `lfo`, `wave` and
+/// `shape` all leave 0..1, and this is what puts that back on a real scale.
+///
+/// It CLAMPS its input to 0..1 first, which is the whole difference from
+/// `lerp` (`range 0.5 1.5` and `lerp 0.5 1.5` are otherwise the same
+/// arithmetic): `lerp` blends and extrapolates past its ends, `range` maps a
+/// unit-domain source onto an interval and stays inside it. Same ruling as
+/// `along` outside 0..1 — clamp, and `wrap 0 1` first if you meant to.
+fn evalRange(ctx: *EvalCtx) EvalError!Emit {
+    const t = std.math.clamp(try num(ctx, 0), 0, 1);
+    const lo = try num(ctx, 1);
+    const hi = try num(ctx, 2);
+    return emitF64(ctx, lo + (hi - lo) * t);
+}
+
+const SHAPE_CURVES = [_][]const u8{ "linear", "smooth", "in", "out", "inout" };
+
+/// `shape <curve>` — 0..1 → 0..1, the easing curve as a value transform.
+/// Input clamps (unit in, unit out). `bezier` with four handles is deferred
+/// to the curves beat; these five are the ones every ask so far wanted.
+fn evalShape(ctx: *EvalCtx) EvalError!Emit {
+    const t = std.math.clamp(try num(ctx, 0), 0, 1);
+    const curve = types.asString(try raw(ctx, 1)) orelse return error.BadValue;
+    const v = if (std.mem.eql(u8, curve, "linear"))
+        t
+    else if (std.mem.eql(u8, curve, "smooth"))
+        t * t * (3.0 - 2.0 * t) // smoothstep
+    else if (std.mem.eql(u8, curve, "in"))
+        t * t
+    else if (std.mem.eql(u8, curve, "out"))
+        t * (2.0 - t)
+    else if (std.mem.eql(u8, curve, "inout"))
+        (if (t < 0.5) 2.0 * t * t else 1.0 - 2.0 * (1.0 - t) * (1.0 - t))
+    else
+        return error.BadValue;
+    return emitF64(ctx, v);
+}
+
+// ---------------------------------------------------------------------------
 // Math
 // ---------------------------------------------------------------------------
 
@@ -771,6 +1135,12 @@ const p = struct {
     fn kwOpt(n: []const u8, ty: types.TypeId) registry.Port {
         return .{ .name = n, .ty = ty, .optional = true, .kw = true };
     }
+    /// A closed-value-set string port: a bare word coerces and its membership
+    /// is checked at PARSE, so `lfo sqare 4s` is a wire-time error naming the
+    /// list, not a BadValue three seconds into the animation.
+    fn oneOf(n: []const u8, vals: []const []const u8) registry.Port {
+        return .{ .name = n, .ty = types.Tag.string, .one_of = vals };
+    }
 };
 
 const CORE = [_]registry.OpDef{
@@ -803,6 +1173,20 @@ const CORE = [_]registry.OpDef{
     // nodes with a missing required input).
     .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .class = .reads, .eval = gateEval(true) },
     .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .class = .reads, .eval = gateEval(false) },
+    // tier 2, beat 1a — time as a value, waveforms, registers, shaping.
+    // `ticks` is declared on every one that may re-arm itself; the badge is
+    // derived from it and the live eval counter is shown beside it as proof.
+    .{ .name = "clock", .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Fed real time in seconds since mount, as a value. Re-evaluates every tick — anything downstream does too.", .class = .reads, .ticks = true, .eval = timeSource(false) },
+    .{ .name = "frame", .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Fed frame count since mount, as a value. Re-evaluates every frame — anything downstream does too.", .class = .reads, .ticks = true, .eval = timeSource(true) },
+    .{ .name = "wave", .inputs = &.{ p.in("t", Tag.number), p.oneOf("shape", &WAVE_SHAPES), p.in("period", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Shape piped time into 0..1 — `clock | wave sine 4s`; shapes: sine, tri, saw, square. Pure: same t, same answer.", .eval = evalWave },
+    .{ .name = "lfo", .inputs = &.{ p.oneOf("shape", &WAVE_SHAPES), p.in("period", Tag.duration), p.kwOpt("phase", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Modulation source in 0..1 — `lfo sine 4s [phase 0.25]`. The same waveform as `clock | wave`, in one node.", .class = .reads, .ticks = true, .eval = evalLfo },
+    .{ .name = "ease", .inputs = &.{ p.in("in", Tag.number), p.in("tau", Tag.duration), p.kwOpt("up", Tag.duration), p.kwOpt("down", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Chase the input with time constant `tau`; `up`/`down` make it asymmetric. Stops inside epsilon of the target — it never snaps.", .class = .reads, .ticks = true, .eval = evalEase },
+    .{ .name = "ramp", .inputs = &.{ p.in("in", Tag.number), p.in("over", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Tween linearly to each new target over `over`; retargeting starts from where it is. The last frame emits the target exactly.", .class = .reads, .ticks = true, .eval = evalRamp },
+    .{ .name = "hold", .inputs = &.{ p.in("in", Tag.number), p.in("for", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Sample-and-hold: take a value, then ignore changes for `for`. Does not tick — ignored values are gone.", .class = .reads, .eval = evalHold },
+    .{ .name = "diff", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Rate of change per second from the previous sample. First observation baselines silently; ticks while moving, stops at zero.", .class = .reads, .ticks = true, .eval = evalDiff },
+    .{ .name = "integrate", .inputs = &.{ p.in("in", Tag.number), p.kwIn("max", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Running sum over fed time, clamped to +/-max. The clamp is required — unbounded state is a corpse that rides every dump.", .class = .reads, .ticks = true, .eval = evalIntegrate },
+    .{ .name = "range", .inputs = &.{ p.in("t", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Map 0..1 onto lo..hi, CLAMPING outside it — the exit from the unit interval. `lerp` is the same arithmetic that extrapolates.", .eval = evalRange },
+    .{ .name = "shape", .inputs = &.{ p.in("t", Tag.number), p.oneOf("curve", &SHAPE_CURVES) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Ease a 0..1 value into 0..1 — curves: linear, smooth, in, out, inout. Input clamps.", .eval = evalShape },
     // math
     .{ .name = "add", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a + b.", .eval = binMath(fAdd) },
     .{ .name = "sub", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "a - b.", .eval = binMath(fSub) },

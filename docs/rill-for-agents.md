@@ -138,6 +138,24 @@ mirror the consumer's primary input into a comparison.
 **No array/vec literals.** A position is read from a path (dot-form is
 live: a moving `at` re-aims without re-rousing).
 
+**Movement ticks, and it stops.** `clock`/`frame`/`lfo` re-evaluate every
+tick for as long as time is fed, so everything downstream of them does
+too — that is the cost of animation and the console shows it (a badge
+from `OpDef.ticks`, the node's live eval count beside it). A register
+ticks only *while converging* and then goes quiet: `ease` settles inside
+epsilon of its target and never snaps to it; `ramp` has an end and emits
+the target exactly on its last frame; `diff` goes to zero when nothing
+moves; `integrate` pins at its clamp. `hold` never ticks at all.
+
+Epochs are per-program: "since mount" means since *this* program mounted,
+and the epoch is saved with it, so a restored program continues rather
+than restarting.
+
+```rill
+lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
+```
+
 ---
 
 ## 3. The operator table
@@ -147,6 +165,9 @@ live: a moving `at` re-aims without re-rousing).
 | flow | `select cond a b` · `lerp t a b` (t piped: `s \| lerp 0.5 1.5`) · `and`/`or`/`not` · `where in pred` · `partition in pred` → pass/fail · `changed` · `latch in trigger` |
 | events | `dropped_below in t` · `rose_above in t` (strict crossings, silent first baseline) · `edge` (false→true) |
 | temporal | `sample in period` · `debounce in quiet` · `throttle in w` · `cooldown in w` · `window in span` → array · `stats` → record · `delay in by` · `every period` (source; fires at mount then per period; skip-forward after gaps) · `arm`/`disarm in off on` |
+| movement | `clock` / `frame` (sources: fed seconds / frames SINCE MOUNT) · `lfo shape period [phase p]` → 0..1 (source) · `wave t shape period` → 0..1 (t piped; same waveform, pure) · shapes `sine tri saw square` |
+| registers | `ease in tau [up t] [down t]` · `ramp in over` · `hold in for` · `diff in` (per second) · `integrate in max m` (clamp REQUIRED, ±m) — all hold state INSIDE the operator, which is legal: the cycle ban is about state through the plane |
+| shaping | `range t lo hi` (0..1 → lo..hi, CLAMPS) · `shape t curve` (0..1 → 0..1; `linear smooth in out inout`) · `lerp t a b` extrapolates where `range` clamps |
 | math | `add sub mul div min max` · `clamp in lo hi` · `abs floor round` · `= != < <= > >=` |
 | records | `{f: x, …}` · `.field` projection · `merge a b` |
 | sinks | `set <path> [value]` · `notify <path> [value]` · `inc <path> <by>` · `cast <$chan> [value] radius <r> at <pos> [decay <d>] [to <#tag>]` · `tag <@subject> <#tag>` / `untag …` (ONE tag per call; unpiped = once at tick 0; membership is a SET — twice is once, only transitions speak) |

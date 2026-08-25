@@ -230,6 +230,12 @@ in steps.
 | "remember that X happened" | subscribe to the occurrence that says so | a flag is lingering state standing in for an event; if the state is real, its owner publishes it |
 | "wait until X finishes" | the action's completion occurrence (R3); until then a labelled `delay` | rills express intent; the engine resolves the doing and *says* when it's done |
 | "every N seconds…" | `every Ns { … }` | the metronome; fires at mount, never bursts after a hitch |
+| "make it breathe / swing / pulse" | `lfo <shape> <period> \| range lo hi` | a waveform is a source, not a loop; `range` is the exit from 0..1 |
+| "how long has this been running?" | `clock` | time is a value you read, not a counter you keep |
+| "smooth this jittery reading" | `\| ease <tau>` | a rill can't chase a target through the plane; a register chases it inside the operator |
+| "fade to the new value" | `\| ramp <over>` | `ease` never quite arrives (and shouldn't); `ramp` has an end and lands on it |
+| "how fast is it changing?" | `\| diff` | derive it; don't ask the host to publish a velocity field |
+| "count up while this is held" | `\| integrate max <m>` | op-internal state, so no `inc` dance — and the cap is required |
 | "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
 | "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
 | "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
@@ -298,6 +304,71 @@ One behavior to know: after a *gap* in fed time (a hitch, a pause),
 `every` fires **once** and resumes — it never bursts to catch up. A
 brazier returns to steady state after a hitch; it does not spike above
 it with deposits the pause never earned.
+
+---
+
+## 6b. Movement — time as a value, and the registers
+
+Everything above treats time as something that *arrives*. To animate,
+you need it as something you can *read*, and you need values that chase
+other values. Both are operators.
+
+**Time as a value.** `clock` is fed seconds since this program mounted;
+`frame` is fed frames. Since **mount**, so two cells started a second
+apart don't share a phase and a replay lands on the same numbers.
+
+**Waveforms.** `lfo <shape> <period>` is a source in 0..1 — `sine`,
+`tri`, `saw`, `square`. `wave` is the same waveform with `t` piped in,
+for when the phase comes from somewhere other than a clock. `range lo hi`
+takes 0..1 back out to a real scale, and `shape <curve>` eases it on the
+way (`linear`, `smooth`, `in`, `out`, `inout`).
+
+```rill
+lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+clock | set plane.ui.elapsed
+lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle
+```
+
+The first line is the whole point of the family: *breathe the exposure
+between 0.5 and 1.5 over four seconds*, one sentence, one line. It used
+to be two programs and seven lines of arithmetic.
+
+**Registers** chase a target *inside* the operator. They can, where a
+program can't: a rill may not write a path it also reads, but an
+operator's own state is not a path.
+
+| op | does |
+|---|---|
+| `ease <tau> [up <t>] [down <t>]` | follow the input with time constant `tau`; `up`/`down` make it asymmetric |
+| `ramp <over>` | tween linearly to each new target over `over` |
+| `hold <for>` | take a value, then ignore changes for `for` |
+| `diff` | rate of change per second |
+| `integrate max <m>` | running sum over fed time, clamped to ±m |
+
+```rill
+plane.sensors.hearth.heat | ease 400ms | set plane.lights.hearth.level
+plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure
+plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
+plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu
+```
+
+The last one is the envelope follower — fast to rise, slow to fall — and
+it is why `up`/`down` exist.
+
+**They stop.** A register re-evaluates every frame *while it is
+converging* and then goes quiet: `ease` settles a hair short of its
+target (an exponential never quite arrives, and snapping would put a
+visible step on the last frame), `ramp` lands its target exactly at the
+end, `diff` goes to zero when nothing is moving, `integrate` pins at its
+clamp. That clamp is required, not optional — a register's state is
+saved with the program, and an unbounded accumulator is a corpse that
+gets copied.
+
+**Movement costs every frame, and the cost is visible.** Anything
+downstream of `clock`, `frame` or `lfo` re-evaluates every tick, and a
+converging register does too until it stops. The console shows a cell
+that ticks, with the node's live evaluation count beside it — the badge
+says what could cost, the counter says what did.
 
 ---
 

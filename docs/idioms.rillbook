@@ -34,7 +34,28 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "### after \u2014 beat 1a\n\n```\nlfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure\n```\n\nNot yet: `lfo` and `range` land in beat 1a. This cell becomes a rill cell in\nthe commit that lands them, and the mutation that must bite is deleting `lfo`."
+   "source": "### after \u2014 beat 1a \u2705\n\nOne line. `lfo` is the source, `range` is the exit from the unit interval,\n`set` ends the wave. No counter, no second program, no seed \u2014 and a real\nsine instead of the triangle the arithmetic could reach.\n\nThe mutation that must bite is deleting `lfo`."
+  },
+  {
+   "name": "breathe-after-cell",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "elapsed-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Show elapsed time on the HUD\n\nThe row `clock` earned for itself. `clock` and `frame` were admitted as\n*substrate* \u2014 they are what `lfo` and the registers are built from \u2014 but\nthe recon noted that admitting them by pin rather than by customer left\nadmission rule 1 with a silent exception. This row closes it honestly."
+  },
+  {
+   "name": "elapsed-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "clock | set plane.ui.elapsed"
   },
   {
    "name": "flash-ask",
@@ -104,7 +125,14 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## Fade the exposure in over two seconds on mount\n\n\u00a74: *can't (no register) \u2192 1*, needing `once` and `ramp`.\n\nThere is no before cell. Nothing in the language moves a value toward another\nvalue over time; the counter trick above can fake it only by rebuilding the\nwhole phase apparatus per fade. Beat 1a fills this in."
+   "source": "## Fade the exposure in over two seconds on mount\n\n\u00a74: *can't (no register) \u2192 1*, needing `once` and `ramp`.\n\n**Half of it landed in beat 1a.** `ramp` exists, so a fade to a target is\none word; what is still missing is `once` \u2014 a rousing that fires at mount\nand never again. Beat 4. The cell below is the fade with an explicit\ntarget on the plane, which is the honest spelling until `once` lands."
+  },
+  {
+   "name": "fade-in-partial",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure"
   },
   {
    "name": "ease-toward-ask",
@@ -114,11 +142,39 @@
    "source": "## Ease the camera exposure toward a target\n\n\u00a74: *can't \u2192 1*, needing `ease`. No before cell \u2014 same reason."
   },
   {
+   "name": "ease-toward-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after \u2014 beat 1a \u2705\n\nThe register chases the target inside the operator, which is legal because\nthe cycle ban is about state through the *plane*. The same idea written\nthrough the plane is still refused at parse."
+  },
+  {
+   "name": "ease-toward-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.render.grade.exposure_target | ease 400ms | set plane.render.grade.exposure"
+  },
+  {
    "name": "vu-meter-ask",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
    "source": "## A VU meter on a field reading\n\n\u00a74: *can't \u2192 1*, needing `abs | ease 20ms down 400ms` \u2014 the envelope\nfollower, which is `ease` with asymmetric time constants. No before cell."
+  },
+  {
+   "name": "vu-meter-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after \u2014 beat 1a \u2705\n\n`ease` with asymmetric constants IS the envelope follower: fast to rise,\nslow to fall. Two keyword ports where the prior art needs three CHOPs."
+  },
+  {
+   "name": "vu-meter-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu"
   },
   {
    "name": "closing-fast-ask",
@@ -128,11 +184,53 @@
    "source": "## Alarm when a raider is closing fast, not merely near\n\nProposed \u00a74 row (recon \u00a73e): *invented sensor field \u2192 1*, needing `diff`.\n\nThe probe reviewer invented a `raider_velocity` sensor field because nothing\nin rill derived it. The honest spelling is one word, and it is why `diff`\nearns admission. No before cell: the before was a change to the host."
   },
   {
+   "name": "closing-fast-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after \u2014 beat 1a \u2705\n\nOne word where the before was a change to the host. Note the threshold is\nnegative: closing fast is a *falling* distance."
+  },
+  {
+   "name": "closing-fast-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge"
+  },
+  {
+   "name": "charge-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Charge a mechanism while a lever is held, capped\n\nProposed \u00a74 row (recon \u00a73e), landed with the operator. The clamp is\nrequired, not optional: a register's state is saved with the program, so\nan unbounded accumulator is a corpse that gets copied."
+  },
+  {
+   "name": "charge-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.keep.lever.held | integrate max 100 | set plane.keep.portcullis.charge"
+  },
+  {
    "name": "swing-ask",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
    "source": "## Swing a light back and forth\n\n\u00a74: *~8 lines \u2192 1*, needing `lfo tri` and `range`. The before is the breathing\ncounter again with a different output path \u2014 which is the finding: every\nperiodic ask rebuilds the same seven lines."
+  },
+  {
+   "name": "swing-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after \u2014 beat 1a \u2705\n\nThe same three words as the breathing exposure with a different waveform\nand a different sink \u2014 which is the point. Every periodic ask used to\nrebuild the same seven lines of phase arithmetic."
+  },
+  {
+   "name": "swing-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle"
   },
   {
    "name": "cooldown-ask",
@@ -195,7 +293,7 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## Shake the camera on impact, 300ms\n\n\u00a74: *can't \u2192 2\u20133*, needing `noise` on three seeds, `hold`, and record math.\nBeat 4, and the row that most wants the broadcast pin."
+   "source": "## Shake the camera on impact, 300ms\n\n\u00a74: *can't \u2192 2\u20133*, needing `noise` on three seeds, `hold`, and record math.\n`hold` landed in beat 1a; `noise` is beat 4 and record math is beat 1b, so\nthe row does not move yet. Recorded rather than quietly skipped."
   },
   {
    "name": "random-idle-ask",
@@ -259,6 +357,20 @@
    "markdown": true,
    "collapsed": false,
    "source": "## Refuse a malformed contact list, and pin what a program reads\n\n\u00a74's last two rows: both *silent \u2192 1*, needing `match` (runtime) and `expect`\n(mount). Beat 2. There is no before cell because \"silent\" is the before: a\nshape mismatch today is discovered downstream, or not at all."
+  },
+  {
+   "name": "ticking-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## What movement costs, and how to see it\n\nEverything downstream of `clock`, `frame` or `lfo` re-evaluates every\ntick \u2014 that is the cost of animation, and it is meant to be visible\nrather than discovered. `OpDef.ticks` declares which operators may\nre-arm themselves; the console lights a badge from it and shows the\nnode's **live evaluation count** beside it. The badge says what could\ncost; the counter says what did.\n\nA register is the interesting case: it ticks *while converging* and then\nstops, so its badge is lit and its counter goes flat. The cell below\nconverges and then costs nothing, which is the property the whole family\nrests on \u2014 and there is a gate that watches the counter stop."
+  },
+  {
+   "name": "ticking-demo",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.target | ease 100ms | set plane.smoothed"
   }
  ]
 }
