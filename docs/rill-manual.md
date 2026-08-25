@@ -239,6 +239,9 @@ in steps.
 | "map 0..1 onto a real range" | `\| range lo hi`, not `lerp` | `range` clamps and `lerp` extrapolates; a modulation chain wants the interval it named |
 | "add 2 metres to a position" | `\| add {x: 0, y: 2, z: 0}` | math is elementwise over records and arrays; there is no vector family to learn |
 | "double every reading in the window" | `window 10s \| mul 2` | broadcasting over an array IS map |
+| "pick one of these" | `\| choose [a, b, c]` | a table of choices is a *value*, not a chain of `select`s — read it left to right, edit it in place |
+| "the i-th one" | `\| nth <i>` | `nth` and `choose` are one computation; the difference is which port rouses it |
+| "three points typed into a cell" | `[{x: 0, …}, {x: 2, …}, …]` | an array literal is live, immutable, and not a buffer — `[0, 2, 0]` is not a position |
 | "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
 | "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
 | "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
@@ -398,6 +401,52 @@ downstream of `clock`, `frame` or `lfo` re-evaluates every tick, and a
 converging register does too until it stops. The console shows a cell
 that ticks, with the node's live evaluation count beside it — the badge
 says what could cost, the counter says what did.
+
+---
+
+## 6c. Arrays — several parts, one value
+
+`[a, b, c]` — commas, matching records, because that is what a
+no-priors reader writes. Arrays were already a value kind: `window`
+emits one and `stats` consumes one, so the literal is the missing half
+of something that existed rather than a new thing.
+
+```rill
+plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure
+[{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] | choose plane.stage.leg | set plane.lights.key.pos
+plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample
+```
+
+The first line is the point of the family. Written as control flow it
+is four lines — two thresholds, two named streams, and a nested
+`select` you read inside-out to learn that dusk is 0.4. Written as a
+value, the bands are *in the value*: left to right, editable in place.
+
+**An array is live**, exactly as a record is. An element that is a path
+or a name is a wire, so a change to any element is a change to the
+array.
+
+**An array is not a buffer.** Values are immutable per tick: no element
+assignment, no append, no loop over one. It is a value that happens to
+have several parts.
+
+| op | does |
+|---|---|
+| `nth <i>` | the i-th element, 0-based — the array rouses it |
+| `choose <i> <array>` | the same, with the index piped — the index rouses it |
+| `stats` | {max, mean, min, n, stddev} over a numeric array |
+
+`nth` and `choose` are one computation with the hot port swapped, the
+way `lfo` is `clock | wave` in one node. Which port is the rousing is a
+real difference and it earns the second word.
+
+**Out of range is an error.** Not a clamp, not a silent nothing — the
+mistake is in the program, and a clamped index is a wrong picture
+nobody is told about. So is a fractional index: rounding is a guess.
+Both refusals name the index and the length.
+
+Positions stay records: `[0, 2, 0]` does not coerce to `{x, y, z}`.
+One thing, one spelling.
 
 ---
 

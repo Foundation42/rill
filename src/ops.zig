@@ -1397,6 +1397,61 @@ fn evalRecord(ctx: *EvalCtx) EvalError!Emit {
     return Emit.first;
 }
 
+/// `array` — the positional twin of `record` (§2.10). Statics are the element
+/// indices (see `Parser.makeArrayNode`); the eval ignores them, because order
+/// IS the meaning: it packs the ports in port order and nothing else.
+fn evalArray(ctx: *EvalCtx) EvalError!Emit {
+    var inner = struple.Packer.init(ctx.arena);
+    for (0..ctx.in.len) |i| {
+        inner.appendRaw(try raw(ctx, i)) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.BadValue,
+        };
+    }
+    try ctx.out[0].appendArray(inner.bytes());
+    return Emit.first;
+}
+
+/// Indexing, minted twice. `nth` and `choose` are the same computation and
+/// differ only in WHICH PORT IS HOT — the language's own distinction (port 0
+/// is the rousing, a bound port is the payload), so the two spellings are two
+/// words rather than one word with a mode:
+///
+///     contacts | nth 2                 // the list rouses; the index is fixed
+///     plane.time.band | choose [ … ]   // the index rouses; the list is fixed
+///
+/// Out of range is an error, not a clamp and not an empty emission: the
+/// mistake is in the program, and a silently-clamped index is a wrong picture
+/// nobody is told about.
+fn indexEval(comptime arr_port: usize, comptime idx_port: usize) fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn e(ctx: *EvalCtx) EvalError!Emit {
+            const av = try raw(ctx, arr_port);
+            if (types.typeOfValue(av) != Tag.array) {
+                return ctx.refuse("{s}: '{s}' is {s}, not an array", .{ ctx.op.name, ctx.portName(arr_port), describeTop(ctx, av) });
+            }
+            const iv = try raw(ctx, idx_port);
+            const f = types.asNumber(iv) orelse
+                return ctx.refuse("{s}: '{s}' is {s}, not a number — an index is a whole number from 0", .{ ctx.op.name, ctx.portName(idx_port), describeTop(ctx, iv) });
+            if (f != @floor(f) or !std.math.isFinite(f)) {
+                return ctx.refuse("{s}: index {d} is not a whole number", .{ ctx.op.name, f });
+            }
+            // `struple.view` reads an element STREAM, and `av` is one array
+            // element — so counting it directly says 1, always. The elements
+            // live in the container body, which is what `innerOf` unpacks.
+            const view = struple.view(try innerOf(ctx, av));
+            const n = view.count() catch return ctx.refuse("{s}: '{s}' is a malformed array", .{ ctx.op.name, ctx.portName(arr_port) });
+            if (f < 0 or f >= @as(f64, @floatFromInt(n))) {
+                return ctx.refuse("{s}: index {d} is out of range — the array has {d} element{s}", .{ ctx.op.name, f, n, if (n == 1) "" else "s" });
+            }
+            const elem = (view.at(@intFromFloat(f)) catch null) orelse
+                return ctx.refuse("{s}: '{s}' is a malformed array", .{ ctx.op.name, ctx.portName(arr_port) });
+            try splice(ctx, 0, elem);
+            return Emit.first;
+        }
+    }.e;
+}
+
 fn evalProject(ctx: *EvalCtx) EvalError!Emit {
     const inner = try innerOf(ctx, try raw(ctx, 0));
     var kp = struple.Packer.init(ctx.arena);
@@ -1673,6 +1728,11 @@ const CORE = [_]registry.OpDef{
     .{ .name = "<=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a <= b.", .eval = cmpOp(fLe) },
     .{ .name = ">", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a > b.", .eval = cmpOp(fGt) },
     .{ .name = ">=", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "a >= b.", .eval = cmpOp(fGe) },
+    // tier 2, beat 2 — arrays. The literal is the missing half of a value kind
+    // that already existed: `window` emits an array and `stats` consumes one.
+    .{ .name = "array", .variadic = true, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Array construction [ a, b, c ] — a live tuple with positions instead of names.", .eval = evalArray },
+    .{ .name = "nth", .inputs = &.{ p.in("in", Tag.array), p.in("i", Tag.number) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The i-th element, 0-based — `window 5s | nth 0`. Out of range is an error, never a clamp.", .eval = indexEval(0, 1) },
+    .{ .name = "choose", .inputs = &.{ p.in("i", Tag.number), p.in("of", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "`nth` with the index piped — `plane.time.band | choose [0.2, 1, 0.6, 0.05]`. Pick one of these.", .eval = indexEval(1, 0) },
     // records
     .{ .name = "record", .variadic = true, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Record construction { field: stream, … } — a live tuple with named fields.", .eval = evalRecord },
     .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },

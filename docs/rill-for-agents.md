@@ -135,8 +135,13 @@ head followed by `{ … }` fans out into the block's branches (the
 `also` desugar, at the head). Predicate sections — `where (> 0)` —
 mirror the consumer's primary input into a comparison.
 
-**No array/vec literals** yet (beat 2). A position is read from a path
-(dot-form is live: a moving `at` re-aims without re-rousing).
+**Array literals** are `[a, b, c]`, commas, matching records — and live
+the same way: an element that is a path or a name re-evaluates the
+array. Elements are literals, paths, names, records, or arrays. An
+array is **not a buffer**: no element assignment, no append, no loop.
+`[0, 2, 0]` does not coerce to a position — positions stay records, and
+a position is still read from a path (dot-form is live: a moving `at`
+re-aims without re-rousing).
 
 **Math broadcasts.** `add sub mul div min max`, the completions, the
 comparators and `and`/`or`/`not` are **elementwise over records and
@@ -194,6 +199,7 @@ plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.sig
 | math | …and the completions: `sin cos tan atan2 sqrt pow exp log mod ceil sign fract` · `pi`/`tau` (sources, once at mount). `mod` and `fract` are FLOORED — the sign follows the divisor, so `-90 \| mod 360` is 270 |
 | math | `add sub mul div min max` · `clamp in lo hi` · `abs floor round` · `= != < <= > >=` |
 | records | `{f: x, …}` · `.field` projection · `merge a b` |
+| arrays | `[a, b, c]` (live, immutable, not a buffer) · `nth in i` (0-based) · `choose i of` (`nth` with the index piped) · `window` → array · `stats` → record. Out of range and fractional indices REFUSE — never a clamp, never a round |
 | sinks | `set <path> [value]` · `notify <path> [value]` · `inc <path> <by>` · `cast <$chan> [value] radius <r> at <pos> [decay <d>] [to <#tag>]` · `tag <@subject> <#tag>` / `untag …` (ONE tag per call; unpiped = once at tick 0; membership is a SET — twice is once, only transitions speak) |
 | util | `const <lit>` · `tap <label>` (log passthrough) |
 

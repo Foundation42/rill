@@ -95,14 +95,16 @@ scripted delta feed.
 program     := statement*
 statement   := chain | defstmt
 chain       := expr ( "|" (opcall | alsoblock) )* ( "as" namelist )?
-expr        := opcall | path | literal | record | name
+expr        := opcall | path | literal | record | array | name
 alsoblock   := "also" "{" branch (NEWLINE branch)* "}"
 branch      := opcall ( "|" (opcall | alsoblock) )*
 opcall      := opname arg*
-arg         := literal | path | name | record | kwarg
+arg         := literal | path | name | record | array | kwarg
 kwarg       := portname ":" ( literal | path | name )
 record      := "{" ( field ("," | NEWLINE) )* "}"
-field       := fieldname ":" ( literal | path | name )
+field       := fieldname ":" ( literal | path | name | record | array )
+array       := "[" ( element ("," | NEWLINE) )* "]"
+element     := literal | path | name | record | array
 path        := "plane" "." segment ("." segment)*
              | "plane" "." segment ".{" fieldname ("," fieldname)* "}"
 namelist    := name ("," name)*
@@ -182,6 +184,28 @@ reads `playerStats.mana`. Sugar:
 ```
 plane.player.{health, stamina, mana} as playerStats
 ```
+
+### 3.6a Array literals (v0.3, tier 2 beat 2a, 2026-08-25)
+
+```
+[0.2, 1, 0.6, 0.05]
+[{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}]
+[plane.a, plane.b]
+```
+
+The record literal's positional twin, and **live for the same reason**: each element is a
+wire into one variadic node, so an element that is a path or a name re-evaluates the array.
+Arrays were already a value kind — `window` emits one, `stats` consumes one — so the literal
+is the missing half of something that existed. Additive by construction: `[` and `]` lexed as
+inert `raw` characters before this, legal only inside a tail, so no existing program can
+change meaning. Tails are unaffected (a tail slices the raw source between token offsets and
+never reads a token's kind).
+
+An array is **not a buffer**: values are immutable per tick, so there is no element
+assignment, no append, and no loop over one. `[]` is legal, unlike `{}` — the empty record is
+refused because `{` also opens a fan-out block, while `[` opens nothing else.
+
+`[0, 2, 0]` does not coerce to a position. One thing, one spelling.
 
 ### 3.7 Plane paths are subscriptions (everywhere)
 
@@ -788,6 +812,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | shaping | `range` (0..1 → interval, clamping), `shape` (0..1 → 0..1 easing curves) |
 | math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
 | record | record construction `{…}`, projection `.field`, `merge` |
+| array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |
 | util | `const`, `tap` (debug passthrough → log bus) |

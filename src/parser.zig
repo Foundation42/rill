@@ -104,6 +104,8 @@ const TokKind = enum {
     rbrace,
     lparen,
     rparen,
+    lbracket,
+    rbracket,
     colon,
     comma,
     dot,
@@ -279,6 +281,15 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             '}' => .rbrace,
             '(' => .lparen,
             ')' => .rparen,
+            // Beat 2: `[` and `]` become tokens of their own. Until now they
+            // were `.raw` — legal only inside a tail — so this is additive by
+            // construction: no existing program could hold a bracket outside
+            // a tail without already failing loud. Tails are unaffected, and
+            // gated so: a tail slices the RAW SOURCE between token offsets
+            // and never reads a token's kind, so `[a, b]` inside one is still
+            // captured verbatim, brackets and all.
+            '[' => .lbracket,
+            ']' => .rbracket,
             ':' => .colon,
             ',' => .comma,
             '.' => .dot,
@@ -839,6 +850,10 @@ const Parser = struct {
                 const rec = try self.parseRecord(target);
                 return .{ .node = rec, .outputs = try self.outsOf(target, rec) };
             },
+            .lbracket => {
+                const arr = try self.parseArray(target);
+                return .{ .node = arr, .outputs = try self.outsOf(target, arr) };
+            },
             .number, .string => {
                 const lit = try self.parseLiteral(target);
                 return .{ .outputs = try self.oneSource(lit.source) };
@@ -1106,6 +1121,44 @@ const Parser = struct {
         _ = self.next(); // }
         if (fields.items.len == 0) return self.fail(open, "empty record", .{});
         return self.makeRecordNode(target, fields.items, sources.items, open);
+    }
+
+    // -- arrays ---------------------------------------------------------------
+
+    /// `[ value (,|newline value)* ]` — the record literal's positional twin
+    /// (§2.10). Elements are literals, paths, names, records, or arrays, and
+    /// an array holding a name or a path is **live** exactly as a record is:
+    /// it re-evaluates when an element changes, because each element is a
+    /// wire into one variadic node. An array is not a buffer — no element
+    /// assignment, no append, no loop.
+    ///
+    /// `[]` is legal, unlike `{}`. The empty record is refused because `{`
+    /// also opens a fan-out block and an empty one is far more likely a
+    /// mistake than a value; `[` opens nothing else, and the empty array is
+    /// a value the language already prints (`describe` says `[]`).
+    fn parseArray(self: *Parser, target: *Target) ParseError!NodeId {
+        const open = self.next(); // [
+        var sources = std.ArrayListUnmanaged(Source).empty;
+        self.skipNewlines();
+        while (self.peek().kind != .rbracket) {
+            const arg = try self.parseArgValue(target);
+            try sources.append(self.a(), arg.source);
+            if (self.peek().kind == .comma) _ = self.next();
+            self.skipNewlines();
+        }
+        _ = self.next(); // ]
+        return self.makeArrayNode(target, sources.items, open);
+    }
+
+    /// The variadic `array` node. Its statics are the element INDICES as
+    /// words, for the same reason `record`'s are the field names: `makeNode`
+    /// names a variadic port from `statics[i].word`, and a port called `2`
+    /// is what a positional field is.
+    fn makeArrayNode(self: *Parser, target: *Target, sources: []const Source, tok: Token) ParseError!NodeId {
+        const op_id = self.reg.find("array") orelse return self.fail(tok, "core operator 'array' is not registered", .{});
+        const statics = try self.a().alloc(registry.StaticVal, sources.len);
+        for (0..sources.len) |i| statics[i] = .{ .word = try std.fmt.allocPrint(self.a(), "{d}", .{i}) };
+        return self.makeNode(target, op_id, sources, statics, tok);
     }
 
     fn makeRecordNode(self: *Parser, target: *Target, fields: []const []const u8, sources: []const Source, tok: Token) ParseError!NodeId {
@@ -1626,6 +1679,11 @@ const Parser = struct {
                 const rec = try self.parseRecord(target);
                 const outs = target.nodes.items[rec].outputs;
                 return .{ .kind = .stream, .source = .{ .wire = outs[0] }, .ty = types.Tag.record, .tok = t };
+            },
+            .lbracket => {
+                const arr = try self.parseArray(target);
+                const outs = target.nodes.items[arr].outputs;
+                return .{ .kind = .stream, .source = .{ .wire = outs[0] }, .ty = types.Tag.array, .tok = t };
             },
             .lparen => {
                 _ = self.next();

@@ -2083,6 +2083,9 @@ test "every core op declares its class deliberately" {
         .{ .name = ">", .class = .pure },
         .{ .name = ">=", .class = .pure },
         .{ .name = "record", .class = .pure },
+        .{ .name = "array", .class = .pure },
+        .{ .name = "nth", .class = .pure },
+        .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
         .{ .name = "merge", .class = .pure },
         .{ .name = "set", .class = .effect },
@@ -2738,7 +2741,8 @@ test "the manuals parse: every printed example compiles" {
     // the human manual — the waveform trio and the register examples — and
     // the register line to the agent manual's temporal row.
     // 32 → 33 (beat 1b): the human manual's §6b gained the broadcast trio.
-    try testing.expectEqual(@as(usize, 33), human);
+    // 33 → 34 (beat 2a): the human manual gained §6c (arrays).
+    try testing.expectEqual(@as(usize, 34), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -2776,6 +2780,9 @@ const accepts_anything = [_][]const u8{
     "=", "!=",
     "tag",
     "untag",
+    // `array` packs its ports without reading them, exactly as `record` does:
+    // every value is a legal element, and there is nothing left to refuse.
+    "array",
 };
 
 /// Ops whose generated driver needs a hand — a `tail` port swallows the rest
@@ -2798,6 +2805,7 @@ fn fillerFor(port: registry.Port) []const u8 {
         types.Tag.string => "\"x\"",
         types.Tag.duration => "1s",
         types.Tag.record => "{a: 1}",
+        types.Tag.array => "[1]",
         else => "1",
     };
 }
@@ -4007,8 +4015,11 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // 21 → 25, 53 → 60 (beat 1b): the follow row's after-cell, the two
     // idioms broadcast replaced (window|mul is map; a comparator over an
     // array is beat 3's predicate), and the range-or-lerp page.
-    try testing.expectEqual(@as(usize, 25), rill_cells);
-    try testing.expectEqual(@as(usize, 60), total);
+    // 25 → 28, 60 → 66 (beat 2a): the time-of-day row's after-cell, the
+    // three-points row's PARTIAL cell (the literal lands, `along` does not),
+    // `nth` over a window, and the arrays page.
+    try testing.expectEqual(@as(usize, 28), rill_cells);
+    try testing.expectEqual(@as(usize, 66), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -4391,4 +4402,230 @@ test "MockPlane.putValue: containers encode as containers, strings stay strings"
     try testing.expectEqual(@as(f64, 1), fields[0].v);
     try testing.expectEqual(types.Tag.array, types.typeOfValue(try read(&mock, &buf, "plane.a")));
     try testing.expectEqual(types.Tag.number, types.typeOfValue(try read(&mock, &buf, "plane.n")));
+}
+
+// ---------------------------------------------------------------------------
+// Beat 2a — arrays: the literal, `nth`, `choose`.
+//
+// The literal is the missing half of a value kind rill already had — `window`
+// emits an array and `stats` consumes one — so these gates check the two
+// halves meet: what the literal builds is what the array readers read.
+// ---------------------------------------------------------------------------
+
+test "beat 2a: the array literal is a value, in order" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[0.2, 1, 0.6, 0.05] | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const out = fx.rt.readSlot("programs.p.array1.out.out") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(types.Tag.array, types.typeOfValue(out));
+    const nums = try arrayNums(testing.allocator, out);
+    defer testing.allocator.free(nums);
+    // Order IS the meaning: a record sorts its keys canonically, an array
+    // must not sort anything. 0.05 sorting to the front would still pass a
+    // "four numbers" check and would still be wrong.
+    try testing.expectEqualSlices(f64, &.{ 0.2, 1, 0.6, 0.05 }, nums);
+}
+
+test "beat 2a: an array holding a path is LIVE, like a record" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[plane.a, plane.b] | nth 1 | set plane.out
+    , .{ .{ "plane.a", @as(f64, 1) }, .{ "plane.b", @as(f64, 2) } });
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 2), slotNum(&fx, "programs.p.nth1.out.out").?);
+    try feedValue(&fx.rt, testing.allocator, "plane.b", @as(f64, 7));
+    try fx.rt.tick(.{});
+    // An array is a bundle of wires, not a snapshot: the element changed, so
+    // the array changed, so what reads it changed.
+    try testing.expectEqual(@as(f64, 7), slotNum(&fx, "programs.p.nth1.out.out").?);
+}
+
+test "beat 2a: `choose` — pick an exposure by time-of-day band, one line" {
+    // §4's "pick an exposure by time-of-day band", which was a `select` chain.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.time.band | choose [0.2, 1, 0.6, 0.05] | set plane.render.grade.exposure
+    , .{.{ "plane.time.band", @as(f64, 0) }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 0.2), slotNum(&fx, "programs.p.choose1.out.out").?);
+    for ([_][2]f64{ .{ 1, 1 }, .{ 2, 0.6 }, .{ 3, 0.05 }, .{ 0, 0.2 } }) |c| {
+        try feedValue(&fx.rt, testing.allocator, "plane.time.band", c[0]);
+        try fx.rt.tick(.{});
+        try testing.expectEqual(c[1], slotNum(&fx, "programs.p.choose1.out.out").?);
+    }
+}
+
+test "beat 2a: `nth` and `choose` are one computation with the hot port swapped" {
+    // The `lfo` ≡ `clock | wave` precedent: two words exist because the
+    // language distinguishes which port is the rousing, not because the
+    // arithmetic differs. If they ever disagree, one of them is a bug.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[10, 20, 30] | nth plane.i | set plane.byList
+        \\plane.i | choose [10, 20, 30] | set plane.byIndex
+    , .{.{ "plane.i", @as(f64, 0) }});
+    defer fx.deinit();
+
+    for ([_]f64{ 0, 1, 2, 0 }) |i| {
+        try feedValue(&fx.rt, testing.allocator, "plane.i", i);
+        try fx.rt.tick(.{});
+        const a = slotNum(&fx, "programs.p.nth1.out.out").?;
+        const b = slotNum(&fx, "programs.p.choose1.out.out").?;
+        try testing.expectEqual(a, b);
+        try testing.expectEqual(@as(f64, 10) * (i + 1), a);
+    }
+}
+
+test "beat 2a: `nth` reads what `window` wrote — one array kind, not two" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.hp | window 5s | nth 0 | set plane.out
+    , .{.{ "plane.hp", @as(f64, 100) }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 100), slotNum(&fx, "programs.p.nth1.out.out").?);
+    try feedValue(&fx.rt, testing.allocator, "plane.hp", @as(f64, 90));
+    try fx.rt.tick(.{ .time_ns = 1_000_000_000 });
+    // The window's oldest entry is still the first reading.
+    try testing.expectEqual(@as(f64, 100), slotNum(&fx, "programs.p.nth1.out.out").?);
+}
+
+test "beat 2a: an out-of-range index refuses and names the length — never a clamp" {
+    // The ledger's "A rather than B" rule: this gate runs where clamping and
+    // refusing give DIFFERENT answers, and asserts that difference first.
+    // Index 3 into a 3-element array would clamp to 30; the gate asserts the
+    // wave died instead, so a clamping implementation cannot pass it.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.i | choose [10, 20, 30] | set plane.out
+    , .{.{ "plane.i", @as(f64, 3) }});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "choose", "out of range", "3 elements" });
+    try testing.expectEqualStrings("choose", Refusal.opName());
+    // A clamp would have emitted 30 here. Nothing was emitted at all.
+    try testing.expect(fx.rt.readSlot("programs.p.choose1.out.out") == null);
+}
+
+test "beat 2a: a fractional index refuses rather than rounding" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.i | choose [10, 20, 30] | set plane.out
+    , .{.{ "plane.i", @as(f64, 1.5) }});
+    defer fx.deinit();
+
+    try expectRefusalNames(&.{ "choose", "not a whole number" });
+    // Rounding either way would have emitted 20 or 10. Neither happened.
+    try testing.expect(fx.rt.readSlot("programs.p.choose1.out.out") == null);
+}
+
+test "beat 2a: indexing a non-array names the type word, both sides" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.rec | nth 0 | set plane.out
+    , .{.{ "plane.rec", .{ .x = @as(f64, 1), .y = @as(f64, 2) } }});
+    defer fx.deinit();
+
+    // Beat 1b's type-word vocabulary, reused verbatim — one vocabulary for
+    // every shape complaint the language makes.
+    try expectRefusalNames(&.{ "nth", "'in'", "record{x, y}", "not an array" });
+}
+
+test "beat 2a: the empty array is a value, and indexing it says so" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\[] | nth 0 | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const arr = fx.rt.readSlot("programs.p.array1.out.out") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(types.Tag.array, types.typeOfValue(arr));
+    const nums = try arrayNums(testing.allocator, arr);
+    defer testing.allocator.free(nums);
+    try testing.expectEqual(@as(usize, 0), nums.len);
+    // Plural agreement, because the message is read by a person: "0 elements"
+    // is right and "0 element" is not.
+    try expectRefusalNames(&.{ "nth", "0 elements" });
+}
+
+test "beat 2a: arrays nest, and hold records" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[[1, 2], [3, 4]] | nth 1 | nth 0 | set plane.out
+        \\[{x: 1, y: 2}, {x: 3, y: 4}] | nth 1 as second
+        \\second.x | set plane.fx
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, "programs.p.nth2.out.out").?);
+    try testing.expectEqual(@as(f64, 3), slotNum(&fx, "programs.p.project1.out.out").?);
+}
+
+test "beat 2a: beat 1b's broadcast reaches an array literal unchanged" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[1, 2, 3] | mul 2 | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const out = fx.rt.readSlot("programs.p.mul1.out.out") orelse return error.TestUnexpectedResult;
+    const nums = try arrayNums(testing.allocator, out);
+    defer testing.allocator.free(nums);
+    try testing.expectEqualSlices(f64, &.{ 2, 4, 6 }, nums);
+}
+
+test "beat 2a: brackets became tokens and the tail still captures them verbatim" {
+    // The hazard this beat was warned about: `[` and `]` used to lex as `.raw`
+    // — legal only inside a tail — and a tail captures the RAW SOURCE between
+    // token offsets. If the tail ever started reading token kinds instead,
+    // this is where it would show. Both tail shapes are driven: no fixed
+    // prefix, and a prefix of a static plus a port.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\sound play cue/[intro]/take 2, loud
+        \\emitter drop e1 0.5 rig/[main]/nozzle
+    , .{});
+    defer fx.deinit();
+
+    const s1 = fx.rt.readSlot("programs.p.sound play1.out.out") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("cue/[intro]/take 2, loud", types.asString(s1).?);
+    const s2 = fx.rt.readSlot("programs.p.emitter drop1.out.out") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("rig/[main]/nozzle", types.asString(s2).?);
+}
+
+test "beat 2a: an unmatched bracket is a loud parse error, not an inert raw token" {
+    try expectParseError("plane.a | mul [1, 2 | set plane.out", "|");
+    try expectParseError("plane.a | mul 2] | set plane.out", "]");
+}
+
+test "beat 2a: the time-of-day row is CORRECT, not merely one line" {
+    // §4's correctness column (ruled 2026-08-25): a ✓ means expressible; the
+    // gate is what says it is right. This is the idioms book's after-cell,
+    // driven against the four-line `select` chain it replaced — same answer
+    // at every hour, including the band edges where an off-by-one would live.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure
+        \\plane.world.hour | < 6 as night
+        \\plane.world.hour | < 18 as day
+        \\night | select 0.2 1.0 as lit
+        \\day | select lit 0.4 | set plane.before.exposure
+    , .{.{ "plane.world.hour", @as(f64, 0) }});
+    defer fx.deinit();
+
+    for ([_]f64{ 0, 5, 6, 11, 12, 17, 18, 23 }) |hour| {
+        try feedValue(&fx.rt, testing.allocator, "plane.world.hour", hour);
+        try fx.rt.tick(.{});
+        const after = slotNum(&fx, "programs.p.choose1.out.out").?;
+        const before = slotNum(&fx, "programs.p.select2.out.out").?;
+        if (after != before) {
+            std.debug.print("hour {d}: one line says {d}, the chain says {d}\n", .{ hour, after, before });
+            return error.TestUnexpectedResult;
+        }
+    }
 }

@@ -395,6 +395,76 @@ would be touched **once** — every math word is born broadcasting.
   records the reason and returns the error in one move, so a refusal
   cannot record a reason and forget to fail.
 
+## Tier 2, beat 2a — the array literal, `nth`, `choose` (2026-08-25)
+
+Built: `[a, b, c]` as a grammar form, the variadic `array` op behind it,
+and the two readers. Broadcast over arrays was already there (beat 1b),
+so this beat is the *literal* and its indexing, nothing more.
+
+- **Additive by construction, not by promise.** `[` and `]` lexed as
+  `.raw` before this — the token kind that is legal only inside a tail —
+  so no existing program could hold a bracket outside a tail without
+  already failing loud. That is what makes the grammar change safe to
+  assert rather than hope. The tail is the one place brackets already
+  worked, and it still works for a structural reason: `parseTailArgs`
+  slices the RAW SOURCE between token offsets and never reads a token's
+  kind. There is a gate driving both tail shapes (no fixed prefix, and a
+  static-plus-port prefix) with brackets in the captured text.
+
+- **`array` is `record` with positions instead of names.** Same variadic
+  machinery, same live-wire property: `makeNode` names a variadic port
+  from `statics[i].word`, so the array's statics are the element indices
+  as words and a port called `2` is what a positional field is. The eval
+  ignores them — order IS the meaning, and a gate asserts the elements
+  come back unsorted (a record sorts its keys canonically; an array must
+  not sort anything, and `[0.2, 1, 0.6, 0.05]` sorted would still pass a
+  "four numbers" check).
+
+- **`[]` is legal where `{}` is not.** The empty record is refused
+  because `{` also opens a fan-out block and an empty one is far more
+  likely a slip than a value. `[` opens nothing else, and the empty array
+  is a value the language already prints (`describe` says `[]`).
+
+- **`nth` and `choose` are one eval, minted twice** — `indexEval(0, 1)`
+  and `indexEval(1, 0)`. They differ only in which port is hot, which is
+  the language's own distinction (port 0 is the rousing), so it is two
+  words rather than one word with a mode. Gated as an identity: they must
+  agree at every index, the way `lfo` ≡ `clock | wave` is gated.
+
+- **`struple.view` reads an element STREAM, not a container.** The first
+  draft called `view(av).count()` on the array value and got 1, always —
+  every index but 0 was "out of range" and index 0 was the whole array.
+  The elements live in the container body, which is what `innerOf`
+  unpacks; the same shape as beat 1b's `MapView.Entry.key` lesson (the
+  key is the *encoded* element, not the string). Found by a gate on the
+  first run, which is why the gate existed.
+
+- **Out of range and fractional indices refuse.** Not a clamp, not a
+  round, not a silent nothing. Both gates are built to the "A rather than
+  B" rule: each drives an index where clamping/rounding would produce a
+  *different* answer (3 into a 3-element array; 1.5 into the same), and
+  each asserts the wave died rather than emitting that answer. A clamping
+  implementation cannot pass them.
+
+- **What did not land, and why it is not an omission.** The recon
+  admitted `first` and `choose`, listed `nth`, cut `len`/`last`. `nth`
+  landed **as substrate** — §4's existing category for `clock`/`frame`,
+  and the recon's own for `wave` under `lfo` — because `choose` is
+  defined as `nth` with the index piped and shipping the derived spelling
+  while hiding the primitive is the magic-box shape that category exists
+  to refuse. `first` did not land: its only §4 row is `sort by | first`,
+  a **beat 3** row, and it admits itself there beside `sort`. `len` stays
+  cut, and the draft's stated reason was corrected — §7 justified cutting
+  `rate` with "`window | len`" and then cut `len` two items later, which
+  cannot both be true. The conclusion holds on rule 1 alone (`rate`'s row
+  already scores ✓ with `sample`), so no word was spent to save it.
+
+- **Gates: 14 new (180 → 194), Debug and ReleaseFast. Mutations: 6/6
+  bitten** — sorting the elements (6 tests), clamping the index (2),
+  rounding a fractional index (1), giving `choose` `nth`'s ports (1),
+  reverting the bracket tokens (10), and indexing the element stream
+  instead of the container body (1).
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no

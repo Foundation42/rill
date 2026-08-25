@@ -582,8 +582,8 @@ besides.
 | slide a light along its rail as the door opens | can't | 1 | `along` (beat 3) |
 | ease the exposure in with a custom curve | can't | 1 | `shape bezier` (`shape`'s five named curves landed; `bezier` is the curves beat) |
 | reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` (own beat) |
-| move a light through three points typed into a cell | host verb only | 1 | array literal, `along` (beats 2–3) |
-| pick an exposure by time-of-day band | `select` chain | 1 | array literal, `choose` (beat 2) |
+| move a light through three points typed into a cell | ~~host verb only~~ **1 ✓ to STEP, not to travel** | 1 | ~~array literal~~ **landed, beat 2a**; `along` (beat 3) |
+| pick an exposure by time-of-day band | ~~`select` chain~~ **1 ✓** | 1 | ~~array literal, `choose`~~ **landed, beat 2a** |
 | nearest hostile from the contact list | invented sensor field | 1 | `sort by`, `first` (beat 3) |
 | top three threats | can't | 1 | `sort by`, `take` (beat 3) |
 | refuse a malformed contact list at the boundary | silent | 1 | `match` (beat 2) |
@@ -597,6 +597,15 @@ missing support and the list says where.
 **Beat 1a's score: eight rows cleared, one row added and cleared, one
 row re-scored honestly downward.** The rows that moved from "can't" to
 one line are the register family's whole argument.
+
+**Beat 2a's score: one row cleared with its correctness gated, one row
+half-cleared and said so.** The time-of-day row is one line *and* its
+gate drives it against the four-line `select` chain it replaces at every
+hour, band edges included — the correctness column doing its job. The
+three-points row gets the literal (the points are typeable, and stepping
+between them is one line) and not the travel; the idioms book carries it
+as a **partial** cell, the same shape `fade-in-partial` has, rather than
+a ✓ that would read as finished.
 
 ## 5. How to find pain points
 
@@ -721,18 +730,46 @@ the tags beat.
    mismatch check, and `binMath` is touched once, ever. `expect`/`match`
    stay in beat 2 — they are the author-side tools and are independent of
    the engine check.
-5. **Beat 2 — arrays.** The literal (a grammar change, additive: no
-   existing program changes meaning), `nth`/`len`/`first`/`last`/
-   `choose`/`take`, broadcast over records and arrays with the loud
-   mismatch check, and `expect`/`match`. Its arrival retires the agent
-   manual's "no array/vec literals" line and the grammar note beneath
-   it.
-6. **Beat 3 — over arrays and records.** `map`/`reduce`/`sort`/`take`/
+5. **Beat 2a — the array literal and its readers. ✅ BUILT 2026-08-25.**
+   The literal (a grammar change, additive as promised: `[` and `]` lexed
+   as inert `raw` before, legal only inside a tail, so no existing program
+   could change meaning), plus `nth` and `choose`. Broadcast over arrays
+   already landed in beat 1b. It retired the agent manual's "no array/vec
+   literals" line.
+
+   **Words landed against the recon's scoring, honestly.** The recon
+   admitted `first` and `choose`, listed `nth`, and cut `len`/`last`.
+   What landed is `nth` + `choose`, and the difference is two calls
+   worth recording:
+
+   - **`nth` is admitted as substrate**, the category §4 already keeps
+     for `clock`/`frame` and the recon already used for `wave` under
+     `lfo`. `choose` is *defined* as `nth` with the index piped (§2.10);
+     they are one computation with the hot port swapped, and shipping the
+     derived spelling while hiding the primitive is the magic-box shape
+     that category exists to refuse.
+   - **`first` did not land**, because its only §4 row is `sort by |
+     first` — a **beat 3** row. It admits itself there, beside `sort`,
+     rather than here on the strength of being cheap.
+   - **`len` stays cut, but the stated reason was wrong.** §7's cut list
+     justified cutting `rate` with "`window | len`" and then cut `len` two
+     items later: you cannot cut A because B covers it and also cut B.
+     The conclusion survives — `rate`'s row ("rate-limit a noisy sensor")
+     already scores ✓ with `sample`, so `rate` is cut for having no row,
+     which is rule 1 and needs no `len`. The prose is corrected below.
+
+6. **Beat 2b — the contracts.** `expect`/`match` and the shape literal,
+   reusing beat 1b's type-word vocabulary. Split from 2a for the reason
+   1a/1b split: the array half is a grammar change with no open
+   questions, and `expect`'s mount-time promise has one (§2.13 note).
+   The `take` in this beat's original line was a slip carried from
+   §2.11 — it is a beat-3 word and is scored there.
+7. **Beat 3 — over arrays and records.** `map`/`reduce`/`sort`/`take`/
    `keep`, `without`/`transpose`/`shuffle`, `along` with inline knots.
    The names are already settled (§2.11, §2.12) — this beat builds them.
-7. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
+8. **Beat 4 — noise, events, spatial.** `noise`, `rand`, `pulse`,
    `once`, `toggle`, `tally`, `above`, `distance`/`within`/`toward`.
-8. **Deferred to their own beats:** tracks as a tenant (with D),
+9. **Deferred to their own beats:** tracks as a tenant (with D),
    `beat` (needs tempo on the plane), `walk`, `spring`, `smooth`
    (needs the window-with-times shape), `group by`.
 
@@ -750,10 +787,12 @@ applied*; the only way it blows is admitting the listed ten on the
 strength of the prose that argues them.
 
 Cut, confirmed by that scoring: `norm` (`remap` covers it), `either`
-(two lines to one sink), `rate` (`window | len`), `slew` (`ease`
-approximates it, and its row is already met), `toward` (record math once
-`normalize` exists), `len`/`last` (cheap but still words), `without`,
-and `zip`/`unzip` as separate words.
+(two lines to one sink), `rate` (**its row already scores ✓ with
+`sample`** — the first draft said "`window | len`" and then cut `len`
+two items later, which cannot both be true; corrected at beat 2a),
+`slew` (`ease` approximates it, and its row is already met), `toward`
+(record math once `normalize` exists), `len`/`last` (cheap but still
+words), `without`, and `zip`/`unzip` as separate words.
 
 Watch `map` and `reduce`: both have excellent customers in §2.11's own
 bullet list that never made it onto §4. Beat 3 adds those rows or drops
