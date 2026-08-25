@@ -620,6 +620,31 @@ rill granted `tags/squads/*` is refused at mount when it writes
   before the string coercion and broke the console's own grammar
   (`entity bind @wall …` — @wall is TEXT there); the wire gate caught it
   within the hour, which is exactly the gate Chris asked for.
+- **T4 LANDED (2026-08-25), F4 met on the pinned timing.** The T3 stamp's
+  fixes first: casts joined the grant policy (rill programs carry a CAST
+  LIST beside the write list — casts stay out of the cycle check's sight,
+  in the grant policy's; "casts N channel(s) with no grants", same tail);
+  the morgue is bounded (cap 64, oldest evicted, an aged-out certificate
+  still refuses and says so); the sigil is required on every surface
+  (entity bind/free, tag declare, ear bind refuse bare words WITH the
+  spelling). Then the beat: `cast … to #tag` rides the deposit whole and
+  converts once at the bridge; POSTS HEAR EVERYTHING — coupling governs
+  entity perception, a post is the operator's instrument; `to` names a
+  DECLARED tag (undeclared refuses the mount, node named; declared-but-
+  empty reaches no one and is not an error; `tag declare #x` is the
+  authoring row, project/rig-persisted with memberships, sorted). TAGS ARE
+  A LEVEL, one frame wide: each bound ear's carried set snapshots at the
+  END of the sampling pass — gain at n, hear from n+1, untag and the
+  reading drops next tick, no back-fill. `ear bind <name> <@subject>
+  <arche>`: the standpoint follows the entity (the id-keyed mirror IS the
+  standpoint), readings publish at ents/<id>/<chan> so `@tom.$dread`
+  reads, a dead binding dangles the sampler (doctrine reused), a rebind
+  baselines a fresh zero row. Found by reading, not by a gate: T3's
+  membership sinks never routed to main (a bare subject has no dot for
+  hasEntityRef, and the wire walk samples Cmd rows only) — a live console
+  tag would have read the registry off-main; routed and gated now. Seven
+  gates, seven mutations bitten (the level's gate mutation: refresh moved
+  before the sample — hears at n — bitten by F4's first-pass zero).
 
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind
