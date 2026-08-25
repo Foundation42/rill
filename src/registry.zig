@@ -123,10 +123,13 @@ pub const EvalCtx = struct {
     /// Effect channel: queue a plane write, flushed in order at end of tick.
     write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: plane.DeltaKind) EvalError!void,
     write_ctx: *anyopaque,
-    /// Field-cast channel (`cast`): queue a deposit into the caster's owned
-    /// space, flushed with the tick's other effects. Null when the host has no
-    /// field store — `cast` then fails loud at the node, counted, and §6's
-    /// machinery reports it.
+    /// Field-cast channel (`cast`): a deposit into the caster's owned space,
+    /// dispatched AT EVAL — not queued to the flush — so a host refusal
+    /// (unknown channel, bad position) lands on the node that cast it,
+    /// counted and §6-reported. (This used to say "flushed with the tick's
+    /// other effects"; that stopped being true when the flush was found to
+    /// lose the node association, turning one refused cast into a failed
+    /// mount.) Null when the host has no field store — same loud path.
     cast_fn: ?*const fn (ctx: *anyopaque, c: plane.Cast) EvalError!void = null,
     cast_ctx: ?*anyopaque = null,
     /// Debug/log bus for `tap`; null when the host wired none.

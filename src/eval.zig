@@ -69,14 +69,6 @@ const QueuedWrite = struct {
     kind: DeltaKind, // what the write MEANS, which decides how it coalesces
 };
 
-const QueuedCast = struct {
-    channel: []const u8, // program-arena-owned (the `.channel` static)
-    amplitude: f64,
-    pos: []u8, // gpa-owned copy (the source bytes live in the tick arena)
-    radius: f64,
-    decay: ?types.Duration,
-};
-
 pub const LogFn = *const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void;
 
 /// Called once per freshened slot at the end of each tick, before the fresh
@@ -153,7 +145,6 @@ pub const Runtime = struct {
     touched_slots: std.ArrayListUnmanaged(SlotId) = .empty,
     touched_nodes: std.ArrayListUnmanaged(NodeId) = .empty,
     write_queue: std.ArrayListUnmanaged(QueuedWrite) = .empty,
-    cast_queue: std.ArrayListUnmanaged(QueuedCast) = .empty,
 
     // path → slot, for watch/override addressing
     slot_by_path: std.StringHashMapUnmanaged(SlotId) = .empty,
@@ -288,8 +279,6 @@ pub const Runtime = struct {
         self.touched_nodes.deinit(self.gpa);
         for (self.write_queue.items) |w| self.gpa.free(w.value);
         self.write_queue.deinit(self.gpa);
-        for (self.cast_queue.items) |c| self.gpa.free(c.pos);
-        self.cast_queue.deinit(self.gpa);
         self.slot_by_path.deinit(self.gpa);
         self.wheel_ns.deinit(self.gpa);
         self.wheel_frame.deinit(self.gpa);
@@ -472,26 +461,17 @@ pub const Runtime = struct {
 
         // Flush queued plane writes ONCE, in evaluation order across every
         // round: a tick's effects reach the world as one batch, whatever it
-        // took to produce them. Casts flush after writes as their own batch —
-        // a separate store with no observable coupling to path writes, and
-        // deposit order within a caster is `born` order by construction here.
+        // took to produce them. (Casts are NOT here: they dispatch at eval,
+        // where a refusal — unknown channel, bad position — can still land on
+        // the NODE that cast it, §6-counted, instead of failing a flush that
+        // no longer knows whose deposit it was holding. Batching is the
+        // host's: its cast inbox drains once per frame either way.)
         defer {
             for (self.write_queue.items) |w| self.gpa.free(w.value);
             self.write_queue.clearRetainingCapacity();
-            for (self.cast_queue.items) |c| self.gpa.free(c.pos);
-            self.cast_queue.clearRetainingCapacity();
         }
         for (self.write_queue.items) |w| {
             try self.plane.write(w.path, w.value, w.kind);
-        }
-        for (self.cast_queue.items) |c| {
-            try self.plane.cast(.{
-                .channel = c.channel,
-                .amplitude = c.amplitude,
-                .pos = c.pos,
-                .radius = c.radius,
-                .decay = c.decay,
-            });
         }
 
         self.tick_index += 1;
@@ -534,7 +514,7 @@ pub const Runtime = struct {
             .state_gpa = self.gpa,
             .write_fn = queueWriteThunk,
             .write_ctx = self,
-            .cast_fn = queueCastThunk,
+            .cast_fn = castThunk,
             .cast_ctx = self,
             .log_fn = self.log_fn,
             .log_ctx = self.log_ctx,
@@ -639,22 +619,17 @@ pub const Runtime = struct {
         }
     };
 
-    fn queueCastThunk(ctx: *anyopaque, c: plane_mod.Cast) registry.EvalError!void {
+    fn castThunk(ctx: *anyopaque, c: plane_mod.Cast) registry.EvalError!void {
         const self: *Runtime = @ptrCast(@alignCast(ctx));
-        // Fail at the NODE, not at the flush: a host with no field store makes
-        // the cast op error (counted, reported through §6) while the rest of
-        // the tick's effects land untouched.
-        if (self.plane.castFn == null) return error.PlaneWrite;
-        const pos = self.gpa.dupe(u8, c.pos) catch return error.OutOfMemory;
-        self.cast_queue.append(self.gpa, .{
-            .channel = c.channel,
-            .amplitude = c.amplitude,
-            .pos = pos,
-            .radius = c.radius,
-            .decay = c.decay,
-        }) catch {
-            self.gpa.free(pos);
-            return error.OutOfMemory;
+        // Dispatched at EVAL so a refusal lands on the node that cast it —
+        // counted, §6-reported, wave dies there — instead of failing an
+        // end-of-tick flush that no longer knows whose deposit it held. A
+        // host with no field store refuses through the same door
+        // (`Plane.cast` on a null castFn is Denied). The host is expected to
+        // say WHY on its own channel before erroring; rill only counts.
+        self.plane.cast(c) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.PlaneWrite,
         };
     }
 
