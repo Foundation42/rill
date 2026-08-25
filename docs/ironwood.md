@@ -645,6 +645,37 @@ rill granted `tags/squads/*` is refused at mount when it writes
   tag would have read the registry off-main; routed and gated now. Seven
   gates, seven mutations bitten (the level's gate mutation: refresh moved
   before the sample — hears at n — bitten by F4's first-pass zero).
+- **T5 LANDED (2026-08-25), F5 met on the band — THE TAGS CAMPAIGN'S FIVE
+  BEATS ARE COMPLETE.** First the T4 stamp's items: routing went STRUCTURAL
+  (`OpDef.routes`, comptime-required on every op at registration —
+  cast/tag/untag declare `.main`, the host's routesToMain is one derived
+  line, the exception list is dead; cross-repo mutation bitten) with the
+  pattern in the ledger: when a predicate over a registry is a coverage
+  surface, the registry carries the answer and the predicate is derived
+  (fourth time). Positional-optional refusal recorded as policy: optionals
+  are keyword-only — a maybe-there positional shifts every static after
+  it. Tier-2 §7 item 1 landed (lerp flips: piped value is `t`; `and or
+  not` complete the conjunction idiom). Then the beat: `derive set #alert
+  ^raider $alarm 0.5 0.4` — the TENTH tenant, archetype-only, keyed by
+  tag. Same membership write with `.derive` as source (joined/left/count
+  identical, no second path, replay re-derives); ON and OFF levels with
+  the band as the maintainer's only memory (F5: a signal held at the line
+  joins once, no chatter — stateless reconciliation, nothing to lose
+  across a load); `derive del` withdraws every membership it owns, one
+  left per member, strangers stand. **Ownership fill (my judged default,
+  AWAITING Chris's stamp — the pin's bracket was left open): one
+  maintainer per tag, others refused at declaration (a redeclare updates
+  in place, an import keeps the resident), owning tag ∩ population,
+  continuously reconciled — chosen over per-source union assertions
+  because refusal is reversible and statelessness survives loads. A
+  manual tag on a population member below the band is withdrawn next
+  frame; outside the population, never touched.** DOC LINE, named: a
+  derived tag can be a RECEPTOR — the maintainer reads each entity with
+  its own carried set, so a cast `to #tag` can feed the tag's own
+  derivation: authored feedback, one step per frame (gated: a seeded
+  member self-sustains where its unseeded twin never joins). The `^`
+  sigil is sayable (one token, engine-owned, refused in every expression
+  position — only `derive set` takes one today).
 
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind
