@@ -136,7 +136,7 @@ live: a moving `at` re-aims without re-rousing).
 
 | family | operators |
 |---|---|
-| flow | `select cond a b` · `lerp a b t` · `where in pred` · `partition in pred` → pass/fail · `changed` · `latch in trigger` |
+| flow | `select cond a b` · `lerp t a b` (t piped: `s \| lerp 0.5 1.5`) · `and`/`or`/`not` · `where in pred` · `partition in pred` → pass/fail · `changed` · `latch in trigger` |
 | events | `dropped_below in t` · `rose_above in t` (strict crossings, silent first baseline) · `edge` (false→true) |
 | temporal | `sample in period` · `debounce in quiet` · `throttle in w` · `cooldown in w` · `window in span` → array · `stats` → record · `delay in by` · `every period` (source; fires at mount then per period; skip-forward after gaps) · `arm`/`disarm in off on` |
 | math | `add sub mul div min max` · `clamp in lo hi` · `abs floor round` · `= != < <= > >=` |
@@ -198,6 +198,7 @@ first, so `sound play` is one operator.
 | `$alarm \| rose_above 0.5 \| …` | a field read names its standpoint | `plane.sensors.gate.$alarm \| rose_above 0.5 \| …` |
 | `cast $alarm 30` for radius 30 | payload-or-radius is ambiguous | `cast $alarm radius 30 at <ref>` |
 | `sample 5` | durations carry units | `sample 5s` (or `5f` if you mean frames) |
+| `lerp a b t` with all three bound | the PIPED value is `t` (flipped 2026-08-25, before the corpus had a caller) | `s \| lerp 0.5 1.5` — s, lerped between 0.5 and 1.5 |
 | `x \| mul 2 { set plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { set plane.a }` |
 | `x \| plane.y` | a pipe feeds an OPERATOR; a path on the right is a write | `x \| set plane.y` (the error asks: did you forget `set`?) |
 | `as $x` / `def $f(…)` | sigils name store rows, never streams/ops | pick an unsigiled name |

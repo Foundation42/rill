@@ -1982,6 +1982,9 @@ test "every core op declares its class deliberately" {
     const table = [_]Expect{
         .{ .name = "select", .class = .pure },
         .{ .name = "lerp", .class = .pure },
+        .{ .name = "and", .class = .pure },
+        .{ .name = "or", .class = .pure },
+        .{ .name = "not", .class = .pure },
         .{ .name = "where", .class = .reads }, // arrival
         .{ .name = "partition", .class = .reads }, // arrival
         .{ .name = "changed", .class = .reads }, // arrival
@@ -2904,4 +2907,30 @@ test "cast: `to` refuses a sigil-less word, and an optional static must be kw" {
         .help = "",
         .eval = noopEval,
     }));
+}
+
+test "lerp: the piped value is t — `s | lerp 0.5 1.5` reads as the sentence says" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.s | lerp 0.5 1.5 | set plane.out", .{
+        .{ "plane.s", @as(f64, 0.25) },
+    });
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 0.75), types.asNumber(fx.mock.store.get("plane.out").?).?);
+}
+
+test "and/or/not: the conjunction idiom's missing words" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.dark | and plane.calm | set plane.both
+        \\plane.dark | or plane.calm | set plane.either
+        \\plane.dark | not | set plane.lit
+    , .{
+        .{ "plane.dark", true },
+        .{ "plane.calm", false },
+    });
+    defer fx.deinit();
+    try testing.expectEqual(false, types.asBool(fx.mock.store.get("plane.both").?).?);
+    try testing.expectEqual(true, types.asBool(fx.mock.store.get("plane.either").?).?);
+    try testing.expectEqual(false, types.asBool(fx.mock.store.get("plane.lit").?).?);
 }

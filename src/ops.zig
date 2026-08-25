@@ -84,10 +84,25 @@ fn evalSelect(ctx: *EvalCtx) EvalError!Emit {
 }
 
 fn evalLerp(ctx: *EvalCtx) EvalError!Emit {
-    const a = try num(ctx, 0);
-    const b = try num(ctx, 1);
-    const t = try num(ctx, 2);
+    // The PIPED value is `t` (tier-2 §2.4, flipped while the corpus held
+    // zero callers): "s, lerped between 0.5 and 1.5" is `s | lerp 0.5 1.5`.
+    // The old order (a b t) forced every piped use to bind all three.
+    const t = try num(ctx, 0);
+    const a = try num(ctx, 1);
+    const b = try num(ctx, 2);
     return emitF64(ctx, a + (b - a) * t);
+}
+
+fn evalAnd(ctx: *EvalCtx) EvalError!Emit {
+    return emitBool(ctx, try boolean(ctx, 0) and try boolean(ctx, 1));
+}
+
+fn evalOr(ctx: *EvalCtx) EvalError!Emit {
+    return emitBool(ctx, try boolean(ctx, 0) or try boolean(ctx, 1));
+}
+
+fn evalNot(ctx: *EvalCtx) EvalError!Emit {
+    return emitBool(ctx, !(try boolean(ctx, 0)));
 }
 
 fn evalWhere(ctx: *EvalCtx) EvalError!Emit {
@@ -761,7 +776,10 @@ const p = struct {
 const CORE = [_]registry.OpDef{
     // flow
     .{ .name = "select", .inputs = &.{ p.in("cond", Tag.boolean), p.in("a", Tag.any), p.in("b", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .help = "cond ? a : b — all branches exist; one is chosen per tick.", .eval = evalSelect },
-    .{ .name = "lerp", .inputs = &.{ p.in("a", Tag.number), p.in("b", Tag.number), p.in("t", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a + (b - a) * t — the honest blend between select's hard edges.", .eval = evalLerp },
+    .{ .name = "lerp", .inputs = &.{ p.in("t", Tag.number), p.in("a", Tag.number), p.in("b", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .help = "a + (b - a) * t, t PIPED — `s | lerp 0.5 1.5` is s, lerped between 0.5 and 1.5.", .eval = evalLerp },
+    .{ .name = "and", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Boolean and — the conjunction idiom's other half: `dark | and calm | …`.", .eval = evalAnd },
+    .{ .name = "or", .inputs = &.{ p.in("a", Tag.boolean), p.in("b", Tag.boolean) }, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Boolean or.", .eval = evalOr },
+    .{ .name = "not", .inputs = &.{p.in("a", Tag.boolean)}, .outputs = &.{p.val("out", Tag.boolean)}, .help = "Boolean not.", .eval = evalNot },
     .{ .name = "where", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
     .{ .name = "partition", .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
     .{ .name = "changed", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
