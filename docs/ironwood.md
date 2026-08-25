@@ -676,6 +676,23 @@ rill granted `tags/squads/*` is refused at mount when it writes
   member self-sustains where its unseeded twin never joins). The `^`
   sigil is sayable (one token, engine-owned, refused in every expression
   position — only `derive set` takes one today).
+- **OWNERSHIP RATIFIED AS BUILT (Chris, 2026-08-25):** one maintainer per
+  tag, owning tag ∩ population, continuously reconciled — refusal is
+  reversible, statelessness survives loads. **Per-source union assertions:
+  NOT BUILT, recorded with its trigger** (the fill-the-hole corollary —
+  a pointer, never a rule): build it when two rules want one tag over
+  OVERLAPPING populations; until then a second rule is a second tag.
+  Two pins, landed with gates and bitten mutations: ① import conflict is
+  LOUD — a pack shipping a maintainer for a tag with a resident refuses
+  that row with the resident named (arche, channel, band) on a .warn,
+  counted on `derive_import_conflicts` (the rig-# shape: gate-visible,
+  never a silent keep); ② the `derive set` ack names what it ADOPTS —
+  existing population members now under the rule, with the count,
+  reconciled from next frame (which of them change is the field's answer
+  on the first service pass; the control plane cannot sample the field,
+  so the count names the exposure and the pass names the outcome). The
+  manual's Thinking-in-rill table carries the override line: if you want
+  an override, you want a different tag.
 
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind

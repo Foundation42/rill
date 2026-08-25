@@ -235,6 +235,7 @@ in steps.
 | "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
 | "make the gate close" | `set plane.keep.gate.drawbridge_target 1` | intent to an actuator target; physics is the engine's |
 | "this program does three things" | three programs, or one with named streams — never one file with sections | a program may not both write and subscribe to one path |
+| "override the derived tag for @tom" | a DIFFERENT tag (`tag @tom #alert-manual`), gated beside the derived one | a derived tag on its population is owned by its rule; a hand tag below the band is withdrawn next frame and `left` says so — if you want an override, you want a different tag |
 
 (The table's middle column shows *shapes*; every fenced block in this
 manual is a parsed program, and the shapes' real spellings appear in
