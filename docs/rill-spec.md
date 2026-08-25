@@ -241,8 +241,17 @@ SHAPE, and a closed outside with open insides is a promise nobody asked for.
 wave and counts against the error budget. `expect` checks ONCE, at mount, and a mismatch
 **refuses the mount** — see `OpDef.fails_mount` (§6). After mount `expect` is not looking:
 a later violation passes through, which is exactly what "costs nothing at runtime" buys.
-`expect` on a path with no value at mount refuses and names `match` as the alternative;
-it never defers.
+`expect` on a path with no value at mount refuses the mount: there is no shape there to
+assert. It states that and stops — which operator to reach for instead is a judgement about
+the path (one whose shape can change wants `match`) and belongs in the manual, not in an
+error message.
+
+Ratified as built 2026-08-25. The originally drafted "provable from declared schema, else
+refuse and say use `match`" clause is retired: rill has no schema surface, and the value
+present at mount is both guaranteed to exist (§4.1, mount runs tick 0) and the strongest
+evidence available. A `Plane` schema query is recorded as a host dependency; when it lands,
+`expect` prefers the declaration and keeps the mount-value check for undeclared paths — a
+strengthening, not a change of promise.
 
 ### 3.7 Plane paths are subscriptions (everywhere)
 

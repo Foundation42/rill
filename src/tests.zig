@@ -4875,10 +4875,10 @@ test "beat 2b: `expect` NEVER falls back to a runtime check" {
     try testing.expectEqual(@as(f64, 3), types.asNumber(out).?);
 }
 
-test "beat 2b: `expect` on a path with nothing at mount refuses, and says to use `match`" {
-    // The case the doc cares about most: what cannot be proven at mount is not
-    // quietly deferred. The refusal names the other word, because a refusal
-    // that only says no is half an error message.
+test "beat 2b: `expect` on a path with nothing at mount refuses the mount" {
+    // Nothing to assert against is a failed assertion, not a deferral. The
+    // message states that and stops: which operator to reach for instead is a
+    // judgement about the path, and it lives in the manual (ruled 2026-08-25).
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
     var mock = rill.MockPlane.init(testing.allocator);
@@ -4892,7 +4892,7 @@ test "beat 2b: `expect` on a path with nothing at mount refuses, and says to use
     Refusal.reset();
     const result = rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .error_fn = Refusal.on });
     try testing.expectError(error.Refused, result);
-    try expectRefusalNames(&.{ "expect", "nothing here at mount", "match" });
+    try expectRefusalNames(&.{ "expect", "nothing here at mount", "no shape to assert" });
 }
 
 test "beat 2b: a `match` refusal after mount does NOT bring the program down" {

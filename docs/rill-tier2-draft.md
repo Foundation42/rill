@@ -500,7 +500,7 @@ they're buying:
 
 | op | when it checks | on failure |
 |---|---|---|
-| `expect <shape> [exact]` | **at mount.** The upstream shape must be provable from declared schema; if it can't be proven, `expect` refuses the mount and says to use `match` | refuses the mount, node named, field and both kinds in the message |
+| `expect <shape> [exact]` | **at mount, once.** It asserts the shape against the value that is there when the program mounts — which the ledger guarantees exists — and never looks again | refuses the mount, node named, field and both kinds in the message |
 | `match <shape> [exact]` | **per value, at runtime.** If a mismatch is provable at mount, it refuses there instead — loud earlier is always allowed | operator error naming the field and both kinds; kills the wave, counts against the budget |
 
 `expect` never silently falls back to a runtime check — that would hide
@@ -513,11 +513,15 @@ an array of, `?` for an optional field (`{pos: {x: number, y: number,
 z: number}, kind?: string}`). Shapes are **open** by default — extra
 fields pass, TS-style — and `exact` closes them.
 
-**Where each belongs.** `expect` at the boundary with the plane — after
-a path whose schema the registry declares, which is most of them. It
-costs nothing at runtime and it's documentation on the wire. `match`
-after anything whose shape is only known on arrival: a contact list, a
-record built from `window`, a host verb's result. Between them they are
+**Where each belongs** (amended 2026-08-25, on the beat-2b ruling).
+`expect` at the boundary with the plane, where the value is there at
+mount and you want the mount to fail loudly if the world is not what you
+think. It costs nothing at runtime and it's documentation on the wire.
+**A path whose shape can change wants `match`** — that is the line, and
+it is a judgement about the path, not a fallback the operator makes for
+you. `match` also for anything whose shape is only known on arrival: a
+contact list, a record built from `window`, a host verb's result.
+Between them they are
 the author's half of the ICE lesson (§2.5): the engine's mismatch check
 catches what you didn't anticipate; `expect`/`match` is where you write
 down what you did.
@@ -794,8 +798,14 @@ the tags beat.
 
    **A schema surface on the `Plane` is recorded as a host dependency,
    not built** (brief §7: if tier 2 needs something from the host, record
-   it and defer). If Matryoshka ever publishes declared shapes, `expect`
-   gains a *stronger* mount-time proof without changing what it promises.
+   it and defer) — see §8.
+
+   **RATIFIED as built, 2026-08-25.** The "provable from declared schema,
+   else refuse and say use `match`" clause is **retired**: `expect`
+   asserts the shape at mount, full stop, and a path whose shape can
+   change wants `match`. The refusal for a path with nothing at mount
+   states the fact and stops there — advice about a different operator
+   belongs in the manual, not in an error.
 
    **`OpDef.fails_mount` is new registry surface, and deliberately so.**
    "Refuses the mount" is ratified (§2.13, brief §3), and an op's eval
@@ -860,3 +870,13 @@ host, or the manual rather than the operator table:
   for free; everyone else gets a second explanation.
 - **Tempo on the plane.** `beat` needs the host to publish tempo as
   data. That's the music stack's job and it's small.
+- **A schema query on the `Plane`** (recorded 2026-08-25, beat 2b). rill
+  has no way to ask what shape a path declares — `Plane` is subscribe /
+  read / write / cast / tag — which is why `expect` asserts against the
+  value present at mount instead. **Trigger and behaviour when it lands:**
+  `expect` *prefers the declaration* (a real proof, for all time, and it
+  can then refuse before tick 0 rather than during it) and **keeps the
+  mount-value check for undeclared paths**. The promise does not change
+  in either case — assert at mount, never look again — so this is a
+  strengthening, not a redesign, and no program written today changes
+  meaning when it arrives.

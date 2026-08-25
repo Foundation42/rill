@@ -1607,8 +1607,12 @@ fn evalExpect(ctx: *EvalCtx) EvalError!Emit {
     const checked = ctx.state.items.len > 0 and ctx.state.items[0] == 1;
     if (!checked) {
         try ctx.setState(&.{1});
+        // States the fact and stops. Which operator to reach for instead is a
+        // judgement about the path — one whose shape can change wants `match`
+        // — and that belongs in the manual, not in an error message (ruled
+        // 2026-08-25, retiring the "refuse and say use match" clause).
         const v = ctx.in[0] orelse return ctx.refuse(
-            "expect: there is nothing here at mount to check — 'expect' asserts once, at mount, and never falls back; use 'match' to check each value as it arrives",
+            "expect: there is nothing here at mount, so there is no shape to assert",
             .{},
         );
         const sp = try shapeStatic(ctx);

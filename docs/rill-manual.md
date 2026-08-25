@@ -474,8 +474,12 @@ is why `match` is a separate word rather than a flag. `expect` never
 degrades into a runtime check, and `match` never promotes into a
 guarantee.
 
-If there is nothing at the path when the program mounts, `expect`
-refuses and says to use `match`. It does not defer.
+**Which one to reach for.** `expect` at the boundary with the plane,
+where the value is there at mount and you want the mount to fail loudly
+if the world isn't what you think. **A path whose shape can change wants
+`match`** — that is a judgement about the path, and the operator will
+not make it for you. If there is nothing at the path when the program
+mounts, `expect` refuses the mount: there is no shape there to assert.
 
 **The shape literal** is the record literal with type words as values:
 
