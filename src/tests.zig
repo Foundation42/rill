@@ -2782,7 +2782,12 @@ test "the manuals parse: every printed example compiles" {
     // quartet.
     // 38 → 39 (beat 4): the human manual gained §6f (events, levels, noise
     // and space).
-    try testing.expectEqual(@as(usize, 39), human);
+    // 39 → 45 (tier-2 close, the manuals parity pass): §11 gains six recipes
+    // — the breathing exposure, the fade that stops, the threshold that does
+    // not chatter, the nearest threat, the boundary contract, the camera
+    // shake. The campaign's whole vocabulary, in the section a person reads
+    // when they want to copy something that works.
+    try testing.expectEqual(@as(usize, 45), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -4092,8 +4097,11 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // kill count, night-falls, the torch, the drift, the idle pick, the
     // camera shake (four lines, and the note says why), the mount fade-in —
     // and the levels page.
+    // 92 → 93 (tier-2 close): the closing page. The rill-cell count does not
+    // move — the close ratified two spellings and rewrote the cells that used
+    // them, rather than adding programs.
     try testing.expectEqual(@as(usize, 45), rill_cells);
-    try testing.expectEqual(@as(usize, 92), total);
+    try testing.expectEqual(@as(usize, 93), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -5910,11 +5918,11 @@ test "beat 4b: `noise` is pinned to its BIT PATTERNS, not to values" {
 
     const Case = struct { ns: u64, n: u32, n7: u32, n3: u32 };
     for ([_]Case{
-        .{ .ns = 0, .n = 0x3F000000, .n7 = 0x3F000000, .n3 = 0x3F000000 },
-        .{ .ns = 250_000_000, .n = 0x3EB7636E, .n7 = 0x3F01906A, .n3 = 0x3ED6C002 },
-        .{ .ns = 500_000_000, .n = 0x3E8EEFAC, .n7 = 0x3F052BFC, .n3 = 0x3EBF6462 },
-        .{ .ns = 1_500_000_000, .n = 0x3F1CEA02, .n7 = 0x3EDB4F78, .n3 = 0x3F1085B8 },
-        .{ .ns = 3_700_000_000, .n = 0x3EA7C9EE, .n7 = 0x3F1C3E3F, .n3 = 0x3ED33E94 },
+        .{ .ns = 0, .n = 0x3EF91800, .n7 = 0x3F056ABE, .n3 = 0x3EF4B2E6 },
+        .{ .ns = 250_000_000, .n = 0x3F149BA0, .n7 = 0x3F018651, .n3 = 0x3F0FCC5A },
+        .{ .ns = 500_000_000, .n = 0x3F1DDE7D, .n7 = 0x3EF5480F, .n3 = 0x3F188C65 },
+        .{ .ns = 1_500_000_000, .n = 0x3F1799A8, .n7 = 0x3F0858D6, .n3 = 0x3F19F52B },
+        .{ .ns = 3_700_000_000, .n = 0x3F2B93C2, .n7 = 0x3ED42F1F, .n3 = 0x3F19E449 },
     }) |c| {
         try fx.rt.tick(.{ .time_ns = c.ns });
         try testing.expectEqual(c.n, bits32(slotNum(&fx, "programs.p.noise1.out.out").?));
@@ -5950,9 +5958,44 @@ test "beat 4b: `noise` stays inside 0..1, and the seed decorrelates" {
     // "the decorrelator". Not EVERY sample differs: 1D gradient noise is zero
     // at every lattice point, so all seeds meet at 0.5 there whatever their
     // gradients. What matters is that they are apart nearly everywhere else.
-    // 108 of 109 as built. The one that matches is fed time zero — a lattice
-    // point, where 1D gradient noise is zero for every seed by construction.
-    try testing.expect(differed * 10 > samples * 9);
+    try testing.expect(differed == samples);
+}
+
+test "beat 4b: seeds offset the LATTICE, not only the gradients" {
+    // Chris's amendment, and the gate that would have caught it: the first
+    // decorrelation gate sampled at 37ms over a 300ms period and so never once
+    // landed on a lattice boundary. Gradient noise is zero at every lattice
+    // point FOR EVERY SEED, and seeds sharing a period share a lattice — so
+    // without a per-seed lattice phase, every torch on a different seed passes
+    // through 0.5 in lockstep at each period boundary. A family, not a corner.
+    //
+    // So this samples exactly ON the boundaries, which is where the bug lived.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\noise 300ms | set plane.a
+        \\noise 300ms seed 1 | set plane.b
+        \\noise 300ms seed 2 | set plane.c
+        \\noise 300ms octaves 3 seed 3 | set plane.d
+    , .{});
+    defer fx.deinit();
+
+    var ns: u64 = 0;
+    while (ns <= 3_000_000_000) : (ns += 300_000_000) { // every period boundary
+        try fx.rt.tick(.{ .time_ns = ns });
+        const v = [_]f64{
+            slotNum(&fx, "programs.p.noise1.out.out").?,
+            slotNum(&fx, "programs.p.noise2.out.out").?,
+            slotNum(&fx, "programs.p.noise3.out.out").?,
+            slotNum(&fx, "programs.p.noise4.out.out").?,
+        };
+        for (v) |x| {
+            // Nobody sits at the lattice zero any more — that was the tell.
+            try testing.expect(x != 0.5);
+        }
+        for (v, 0..) |x, i| {
+            for (v[i + 1 ..]) |y| try testing.expect(x != y);
+        }
+    }
 }
 
 test "beat 4b: `noise` is SMOOTH — that is what separates it from `rand`" {
@@ -6238,10 +6281,7 @@ test "beat 4: the rest of §4's noise rows, each one line" {
     try mountFixture(testing.allocator, &fx,
         \\noise 80ms | range 0.6 1 | set plane.lights.torch.level
         \\noise 20s | range 0.9 1.1 | set plane.render.grade.exposure
-        \\noise 40ms seed 1 as sx
-        \\noise 40ms seed 2 as sy
-        \\noise 40ms seed 3 as sz
-        \\{x: sx, y: sy, z: sz} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake
+        \\{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake
         \\pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level
         \\clock | div 8 | range 0 1 | along [{x: 0, y: 2, z: 0}, {x: 5, y: 2, z: 1}, {x: 9, y: 3, z: 0}] | set plane.camera.pos
     , .{});
@@ -6256,11 +6296,9 @@ test "beat 4: the rest of §4's noise rows, each one line" {
     // Three seeds make three independent shake axes — one seed would shake
     // the camera along a diagonal, which is the bug this row is about.
     //
-    // It costs FOUR lines, not the 2–3 §4 estimated, and the extra ones are
-    // `as` bindings: a record field value may be a literal, a path, a name, a
-    // record or an array — never an operator call. So a record built from
-    // three computed streams needs a name per stream. Scored honestly and
-    // raised as a fork rather than rounded down.
+    // ONE line, since the paren form was ratified: a record field may hold a
+    // complete operator call. It first landed at four, three of them `as`
+    // bindings, which is what raised the fork.
     const shake = fx.rt.readSlot("programs.p.mul1.out.out").?;
     const f = try recordFields(testing.allocator, shake);
     defer freeFields(testing.allocator, f);
@@ -6276,4 +6314,197 @@ test "beat 4: the rest of §4's noise rows, each one line" {
     // The camera is somewhere along its path, as a position.
     const pos = fx.rt.readSlot("programs.p.along1.out.out").?;
     try testing.expectEqual(types.Tag.record, types.typeOfValue(pos));
+}
+
+
+test "the paren form: a record field may hold a complete operator call" {
+    // Ratified 2026-08-25. `( … )` in a field position is a COMPLETE call, not
+    // a section — nothing at a field position consumes an open port, so the
+    // section reading would be a guess (and would bind `40ms` to `octaves`).
+    // Array elements take it too, for the same reason.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: (add 1 2), y: (mul 3 4)} | set plane.rec
+        \\[(add 1 2), (mul 3 4)] | set plane.arr
+    , .{});
+    defer fx.deinit();
+
+    const rec = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.record1.out.out").?);
+    defer freeFields(testing.allocator, rec);
+    try testing.expectEqual(@as(f64, 3), rec[0].v);
+    try testing.expectEqual(@as(f64, 12), rec[1].v);
+
+    const arr = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.array1.out.out").?);
+    defer testing.allocator.free(arr);
+    try testing.expectEqualSlices(f64, &.{ 3, 12 }, arr);
+}
+
+test "the paren form: a field is live when its call is" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{v: (mul plane.a 10)} | .v | set plane.out
+    , .{.{ "plane.a", @as(f64, 2) }});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 20), slotNum(&fx, "programs.p.project1.out.out").?);
+    try feedValue(&fx.rt, testing.allocator, "plane.a", @as(f64, 5));
+    try fx.rt.tick(.{});
+    try testing.expectEqual(@as(f64, 50), slotNum(&fx, "programs.p.project1.out.out").?);
+}
+
+test "the paren form: sections still mean sections where a consumer takes one" {
+    // The two readings do not collide, because they live in different
+    // positions: a field never takes a section, and `map`/`keep`/`where`
+    // always do. Both in one program.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{v: (add 1 1)}, {v: (add 1 2)}] | map (.v) | keep (> 2) | set plane.out
+    , .{});
+    defer fx.deinit();
+
+    const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.keep1.out.out").?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualSlices(f64, &.{3}, out);
+}
+
+test "beat 4: `ramp … from` — the mount fade in one line THAT STOPS" {
+    // The ratified fork. `clock | div 2 | range 0 1` is also one line and also
+    // correct, and it re-evaluates every frame forever; this one lands and
+    // goes quiet, which is the register family's whole argument.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\once 1 | ramp 2s from 0 | set plane.render.grade.exposure
+    , .{});
+    defer fx.deinit();
+
+    const out = "programs.p.ramp1.out.out";
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+    try fx.rt.tick(.{ .time_ns = 1_000_000_000 });
+    try testing.expectEqual(@as(f64, 0.5), slotNum(&fx, out).?);
+    try fx.rt.tick(.{ .time_ns = 2_000_000_000 });
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+
+    // …and then it STOPS. The eval counter is the proof, not the value:
+    // a value that stays put looks identical to one being recomputed.
+    const node = nodeIdOf(&fx.prog, "ramp1").?;
+    const settled = fx.rt.eval_count[node];
+    for ([_]u64{ 3_000_000_000, 4_000_000_000, 9_000_000_000 }) |ns| {
+        try fx.rt.tick(.{ .time_ns = ns });
+    }
+    try testing.expectEqual(settled, fx.rt.eval_count[node]);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, out).?);
+}
+
+test "beat 4: without `from`, `ramp` still baselines at its first target" {
+    // The behaviour `from` was added BESIDE, not instead of: a ramp with
+    // nowhere to start from must not animate out of nothing.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\once 1 | ramp 2s | set plane.a
+    , .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.ramp1.out.out").?);
+}
+
+// ---------------------------------------------------------------------------
+// The manual-parity gate (tier 2 close, 2026-08-25).
+//
+// Two manuals drifted behind the language twice during this campaign, and both
+// times a person found it by reading. Reading is not a coverage surface. This
+// is: every registered core operator must be NAMED in the agent manual's
+// operator tables, or be on the substrate list on purpose — exhaustive both
+// ways, like the class, ticks and fails_mount audits.
+//
+// It checks the agent manual because that one is a reference: it promises to
+// list the vocabulary. The human manual is prose and is gated the other way,
+// by every printed example being parsed.
+// ---------------------------------------------------------------------------
+
+/// Registered and reachable, but deliberately NOT taught. Each is a fact worth
+/// pinning rather than an exemption: a reader who meets these meets them
+/// through the spelling that replaced them.
+const untaught_substrate = [_]struct { name: []const u8, why: []const u8 }{
+    .{ .name = "project", .why = "the taught spelling is `.field` / `| .field`" },
+    .{ .name = "array", .why = "the taught spelling is the `[…]` literal" },
+};
+
+/// Is `name` a whole token inside some inline-code span of `doc`? Code spans
+/// only, because prose says "record" about a type word and a table cell says
+/// `record` about the operator, and only one of those is the manual doing its
+/// job. Whole tokens only, because `add` inside "address" is not a mention —
+/// and because the tables list families in one span (`add sub mul div min
+/// max`), which IS a mention of each.
+fn namedInCode(doc: []const u8, name: []const u8) bool {
+    const isTok = struct {
+        fn f(c: u8) bool {
+            return std.ascii.isAlphanumeric(c) or c == '_' or c == '=' or c == '!' or c == '<' or c == '>';
+        }
+    }.f;
+    // Line by line, and fenced blocks skipped: a ```-fence is three backticks
+    // and pairing them off against inline spans puts the whole scan out of
+    // phase — which is exactly what the first draft of this did, and it
+    // reported thirty operators missing that were sitting in the table.
+    var lines = std.mem.splitScalar(u8, doc, '\n');
+    var fenced = false;
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " "), "```")) {
+            fenced = !fenced;
+            continue;
+        }
+        if (fenced) continue;
+        var in_span = false;
+        var span_start: usize = 0;
+        for (line, 0..) |c, i| {
+            if (c != '`') continue;
+            if (!in_span) {
+                in_span = true;
+                span_start = i + 1;
+                continue;
+            }
+            in_span = false;
+            const span = line[span_start..i];
+            var j: usize = 0;
+            while (j < span.len) {
+                if (!isTok(span[j])) {
+                    j += 1;
+                    continue;
+                }
+                var k = j;
+                while (k < span.len and isTok(span[k])) k += 1;
+                if (std.mem.eql(u8, span[j..k], name)) return true;
+                j = k;
+            }
+        }
+    }
+    return false;
+}
+
+test "manual parity: every core operator is named in the agent manual, or is substrate on purpose" {
+    const gpa = testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const doc = @embedFile("rill-for-agents.md");
+
+    var missing: usize = 0;
+    for (reg.ops.items) |def| {
+        const substrate = for (untaught_substrate) |u| {
+            if (std.mem.eql(u8, u.name, def.name)) break true;
+        } else false;
+
+        const named = namedInCode(doc, def.name);
+
+        if (named and substrate) {
+            std.debug.print("'{s}' is on the untaught-substrate list and IS taught — take it off\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+        if (!named and !substrate) {
+            std.debug.print("'{s}' is registered and appears nowhere in rill-for-agents.md\n", .{def.name});
+            missing += 1;
+        }
+    }
+    if (missing > 0) {
+        std.debug.print("{d} operator(s) missing from the agent manual\n", .{missing});
+        return error.TestUnexpectedResult;
+    }
 }

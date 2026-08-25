@@ -721,9 +721,20 @@ fn evalRamp(ctx: *EvalCtx) EvalError!Emit {
     var st = RegState.read(ctx);
 
     if (!st.started) {
-        st = .{ .frames = d.frames, .at = now, .a = target, .b = target, .started = true };
+        // With no `from`, the first target is where we ARE: a ramp with
+        // nowhere to start from must not animate out of nothing.
+        //
+        // With `from` (ratified 2026-08-25), it starts there and tweens to the
+        // first target — which is the mount fade, and unlike `clock | div 2 |
+        // range 0 1` it STOPS when it lands. That was the whole argument for
+        // the register family and this was the one row where it was
+        // unavailable.
+        const start = if (ctx.in[2] == null) target else try num(ctx, 2);
+        st = .{ .frames = d.frames, .at = now, .a = start, .b = target, .started = true };
         try st.write(ctx);
-        return emitF64(ctx, target);
+        if (start == target) return emitF64(ctx, target);
+        try armNextTick(ctx, d.frames);
+        return emitF64(ctx, start);
     }
     // A new target restarts the tween FROM WHERE WE ARE, not from the old
     // target: retargeting mid-fade must not jump.
@@ -1501,8 +1512,24 @@ fn fade(t: f32) f32 {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 }
 
+/// Where this seed's LATTICE starts, in cells (Chris's amendment,
+/// 2026-08-25).
+///
+/// Offsetting the gradients is not enough. Gradient noise is zero at every
+/// lattice point *for every seed*, and seeds sharing a period share a lattice
+/// — so without this, every torch on a different seed passes through 0.5 in
+/// lockstep at each period boundary, octaves included. That is a family of
+/// coincidences, not the single corner at t = 0 that the first gate found.
+/// A seed must move the lattice as well as the gradients on it.
+fn latticePhase(seed: u64) f32 {
+    const h = latticeHash(0x5EED, seed);
+    return @as(f32, @floatFromInt(h >> 40)) / 16777216.0;
+}
+
 /// One octave of 1D gradient noise at `t` lattice units, in [-0.5, 0.5].
-fn perlin1(t: f32, seed: u64) f32 {
+/// Each octave carries its own seed, so each gets its own lattice phase too.
+fn perlin1(t_raw: f32, seed: u64) f32 {
+    const t = t_raw + latticePhase(seed);
     const fl = @floor(t);
     const i: i64 = @intFromFloat(fl);
     const u = t - fl;
@@ -2614,7 +2641,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "wave", .inputs = &.{ p.in("t", Tag.number), p.oneOf("shape", &WAVE_SHAPES), p.in("period", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Shape piped time into 0..1 — `clock | wave sine 4s`; shapes: sine, tri, saw, square. Pure: same t, same answer.", .eval = evalWave },
     .{ .name = "lfo", .inputs = &.{ p.oneOf("shape", &WAVE_SHAPES), p.in("period", Tag.duration), p.kwOpt("phase", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Modulation source in 0..1 — `lfo sine 4s [phase 0.25]`. The same waveform as `clock | wave`, in one node.", .class = .reads, .ticks = true, .eval = evalLfo },
     .{ .name = "ease", .inputs = &.{ p.in("in", Tag.number), p.in("tau", Tag.duration), p.kwOpt("up", Tag.duration), p.kwOpt("down", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Chase the input with time constant `tau`; `up`/`down` make it asymmetric. Stops inside epsilon of the target — it never snaps.", .class = .reads, .ticks = true, .eval = evalEase },
-    .{ .name = "ramp", .inputs = &.{ p.in("in", Tag.number), p.in("over", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Tween linearly to each new target over `over`; retargeting starts from where it is. The last frame emits the target exactly.", .class = .reads, .ticks = true, .eval = evalRamp },
+    .{ .name = "ramp", .inputs = &.{ p.in("in", Tag.number), p.in("over", Tag.duration), p.kwOpt("from", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Tween linearly to each new target over `over`; retargeting starts from where it is. `from` gives the FIRST tween a start, which is the mount fade — `once 1 | ramp 2s from 0`. The last frame emits the target exactly.", .class = .reads, .ticks = true, .eval = evalRamp },
     .{ .name = "hold", .inputs = &.{ p.in("in", Tag.number), p.in("for", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Sample-and-hold: take a value, then ignore changes for `for`. Does not tick — ignored values are gone.", .class = .reads, .eval = evalHold },
     .{ .name = "diff", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Rate of change per second from the previous sample. First observation baselines silently; ticks while moving, stops at zero.", .class = .reads, .ticks = true, .eval = evalDiff },
     .{ .name = "integrate", .inputs = &.{ p.in("in", Tag.number), p.kwIn("max", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Running sum over fed time, clamped to +/-max. The clamp is required — unbounded state is a corpse that rides every dump.", .class = .reads, .ticks = true, .eval = evalIntegrate },

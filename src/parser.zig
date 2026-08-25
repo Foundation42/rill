@@ -1128,7 +1128,7 @@ const Parser = struct {
             if (ft.kind != .name) return self.fail(ft, "expected field name in record", .{});
             const ct = self.next();
             if (ct.kind != .colon) return self.fail(ct, "expected ':' after field '{s}'", .{ft.text});
-            const arg = try self.parseArgValue(target);
+            const arg = try self.parseFieldValue(target);
             try fields.append(self.a(), try self.a().dupe(u8, ft.text));
             try sources.append(self.a(), arg.source);
             // separators: comma or newline(s)
@@ -1158,7 +1158,7 @@ const Parser = struct {
         var sources = std.ArrayListUnmanaged(Source).empty;
         self.skipNewlines();
         while (self.peek().kind != .rbracket) {
-            const arg = try self.parseArgValue(target);
+            const arg = try self.parseFieldValue(target);
             try sources.append(self.a(), arg.source);
             if (self.peek().kind == .comma) _ = self.next();
             self.skipNewlines();
@@ -1886,6 +1886,31 @@ const Parser = struct {
     }
 
     /// arg := literal | path | name(.field)* | record | "(" opcall ")"
+    /// A value in a position that can never take a section — a record field or
+    /// an array element. There, `(op …)` is a **complete operator call**, not a
+    /// partial application (ratified 2026-08-25): nothing at a field position
+    /// consumes an open port, so the section reading would be a guess, and a
+    /// guess that binds `40ms` to `octaves` at that.
+    ///
+    /// This is what lets a record be built from computed streams —
+    /// `{x: (noise 40ms seed 1), y: (noise 40ms seed 2)}` — without the comma
+    /// becoming significant inside an argument list. The parens already
+    /// delimit; they just had to mean the other thing here.
+    fn parseFieldValue(self: *Parser, target: *Target) ParseError!Arg {
+        if (self.peek().kind != .lparen) return self.parseArgValue(target);
+        const open = self.next();
+        const op_tok = self.next();
+        if (op_tok.kind != .name and op_tok.kind != .sym) {
+            return self.fail(op_tok, "expected an operator inside '(…)'", .{});
+        }
+        const res = try self.parseOpcall(target, op_tok, null, false);
+        const close = self.next();
+        if (close.kind != .rparen) return self.fail(close, "expected ')' to close '{s}'", .{op_tok.text});
+        if (res.outputs.len == 0) return self.fail(op_tok, "'{s}' has no output to put in a field", .{op_tok.text});
+        _ = open;
+        return .{ .kind = .stream, .source = res.outputs[0], .ty = self.sourceTy(target, res.outputs[0]), .tok = op_tok };
+    }
+
     fn parseArgValue(self: *Parser, target: *Target) ParseError!Arg {
         const t = self.peek();
         switch (t.kind) {

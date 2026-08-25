@@ -405,7 +405,7 @@ pub const OpDef = struct {
     /// A refusal from this operator **during mount's tick 0 fails the mount**
     /// rather than merely killing its wave. One customer, and it is the whole
     /// reason the field exists: `expect` promises to assert AT MOUNT and never
-    /// to degrade into a runtime check (`rill-tier2-draft.md` §2.13), and an
+    /// to degrade into a runtime check (`rill-tier2.md` §2.13), and an
     /// assertion that only logs is not an assertion. Structural rather than
     /// disciplinary — the registry carries the answer and `evalNode` derives
     /// the behaviour, so an op cannot acquire mount-fatality by being special-

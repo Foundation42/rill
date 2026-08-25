@@ -255,7 +255,7 @@ exists yet), which is exactly why it was worth fixing before it wasn't.
 
 Built: `clock`, `frame`, `wave`, `lfo`, `ease`, `ramp`, `hold`, `diff`,
 `integrate`, `range`, `shape`. Recon in `docs/cc-recon-tier2.md`; the
-campaign's rulings are in `docs/rill-tier2-draft.md` §6.
+campaign's rulings are in `docs/rill-tier2.md` §6.
 
 - **Op-internal state is the sanctioned mechanism, confirmed
   structurally.** `Program.findCycle` is a cross product over `writes` ×
@@ -780,6 +780,47 @@ Built: `pulse`, `once`, `toggle`, `tally`, `above` (4a); `noise`, `rand`,
   arithmetic, no fade curve, `rand` not advancing, `rand` ignoring its
   seed, `distance` never looking for z, and `within` comparing backwards.
 
+## Tier 2 close — the amendment, two forks ruled, and a parity gate (2026-08-25)
+
+- **Seeds offset the LATTICE, not only the gradients** (Chris's
+  amendment). See the ledger addendum under "Gate discipline": the t = 0
+  match the first gate found was a family, not a corner, and the gate's
+  own sampling grid was what hid it.
+
+- **`ramp … from <v>` — ruled.** An optional keyword port giving the
+  FIRST tween a start. `once 1 | ramp 2s from 0` is the mount fade in one
+  line **that stops**, where `clock | div 2 | range 0 1` is one line that
+  ticks forever. Gated on the eval counter going flat, not on the value:
+  a value that stays put looks identical to one being recomputed. Without
+  `from`, the old baseline-at-first-target behaviour is unchanged and
+  separately gated, because `from` was added beside it, not instead.
+
+- **The paren form — ruled.** A record field or array element may hold a
+  **complete operator call**: `{x: (noise 40ms seed 1), …}`. Chris's
+  framing was the whole solution — `( … )` is already an argument form
+  and parens already delimit, so no comma rule was needed. The two
+  readings never collide because they live in different positions: a
+  field position takes no section (nothing there consumes an open port,
+  so the section reading would be a guess — and would bind `40ms` to
+  `octaves`), and `map`/`keep`/`where`/`sort by` always do. Gated in one
+  program. The camera-shake row went from four lines to one, under its
+  2–3 target.
+
+- **The manual-parity gate.** Both manuals drifted behind the language
+  twice during this campaign, and both times a person found it by
+  reading. Reading is not a coverage surface. Now: every registered core
+  operator must be NAMED in a code span of the agent manual, or be on the
+  `untaught_substrate` list on purpose — exhaustive both ways, beside the
+  class, ticks and fails_mount audits. The human manual is gated the
+  other way, by every printed example being parsed.
+
+  Its first draft reported thirty operators missing that were sitting in
+  the table: it paired backticks across the whole document, so a
+  ```-fence put the whole scan out of phase. Scanning line by line with
+  fences skipped is the fix, and it is worth recording that a
+  *coverage* gate can fail by over-reporting as easily as under — the
+  first is merely noisy, the second is the dangerous one.
+
 ## The refusals gate (2026-08-25)
 
 Ruled after beat 1a segfaulted Matryoshka in a refusal message that no
@@ -809,6 +850,27 @@ A refusal message is built from the thing being refused, so the message
 must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
+
+**Addendum, 2026-08-25 (beat 4), ratified: gate the property the doc
+claims, not the implementation's incidental ones.** `noise` promised that
+"same seed and period ⇒ the same stream" and, by contraposition, that
+different seeds are different streams. The range gate passed the broken
+version. The smoothness gate passed it. What caught it was a gate on
+*decorrelation itself* — how often three seeds disagree — which is the
+sentence §2.8 actually wrote down. Incidental properties (it's in 0..1,
+it's continuous) are cheap to check and cheap to satisfy; the claimed
+property is neither.
+
+And the amendment, which is the sharper half: **the first version of that
+gate sampled at 37 ms over a 300 ms period and so never once landed on a
+lattice boundary.** Gradient noise is zero at every lattice point for
+every seed, and seeds sharing a period share a lattice — so
+gradient-only seeding made every stream pass through 0.5 in lockstep at
+each period boundary, octaves included. A *family* of coincidences, and
+the gate's sampling grid stepped over all of them. Seeds now offset the
+lattice phase too, and decorrelation is re-gated at t = period exactly.
+Corollary worth keeping: **when a property has a period, sample on the
+period, not near it.**
 
 **Addendum, 2026-08-25 (beat 3b), ratified: gate past the library's
 fallbacks, or the library is the thing under test.** `sort`'s stability gate used

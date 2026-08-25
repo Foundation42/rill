@@ -1,6 +1,6 @@
 # Recon — the tier-2 campaign (CC, 2026-08-25)
 
-*Read against `docs/rill-tier2-draft.md` and `docs/cc-brief-tier2.md`.
+*Read against `docs/rill-tier2.md` and `docs/cc-brief-tier2.md`.
 Baseline verified before anything was claimed: `zig build test` is
 140/140 in Debug and 140/140 in ReleaseFast at `d812ee6`. §7 item 1 was
 already landed by the previous session (verified, §1). One thing is
@@ -15,7 +15,7 @@ and is mine unless he says otherwise.*
 
 Chris ruled every fork in §8 the day this landed. Recorded here so the
 note reads as history rather than as an open question; the rulings
-themselves live in `docs/rill-tier2-draft.md` §6 and
+themselves live in `docs/rill-tier2.md` §6 and
 `docs/implementation-notes.md`.
 
 1. **Beat 1a/1b split, broadcast in 1b — yes.** `binMath` is touched once.

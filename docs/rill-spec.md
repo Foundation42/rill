@@ -984,7 +984,17 @@ forever — and no third. `noise` computes in f32 in a fixed order and widens ex
 gates pin f32 bit patterns, not values, which is what makes "bit-identical across machines"
 checkable. Gradients are taken continuously from the hash rather than as ±1: two-valued
 gradients give a lattice cell only four possible shapes, so two seeds coincide one time in
-four and the seed stops decorrelating.
+four and the seed stops decorrelating. A seed also offsets the LATTICE PHASE, not only the
+gradients on it: gradient noise is zero at every lattice point for every seed, and seeds
+sharing a period share a lattice, so without the phase every stream would pass through the
+midpoint in lockstep at each period boundary — a family of coincidences rather than a corner
+case, and decorrelation is gated at t = period explicitly.
+
+**A record field or array element may hold a complete operator call in parentheses** (v0.3,
+ruled 2026-08-25): `{x: (noise 40ms seed 1), y: (noise 40ms seed 2)}`. Nothing at a field
+position consumes an open port, so the *section* reading would be a guess there; `( … )` is
+a section only where the consumer declares one (§3.15). The parens already delimit, so no
+comma rule was needed inside an argument list.
 
 **Threshold boundaries (corrected 2026-08-24).** `dropped_below t` fires crossing from ≥t to
 <t; `rose_above t` fires crossing from ≤t to >t. Each is strict on the comparison it names,

@@ -1,17 +1,52 @@
-# rill tier 2 — stock operators, and how to find the next ones
+# rill tier 2 — stock operators (RATIFIED, BUILT, CLOSED)
 
-*Design input for CC's tier-2 campaign, now partly built. Shapes and
-pins ratified by Chris (§6); the bikeshed names in §2.11 and §2.12 were
-proposed by the recon and ruled 2026-08-25 — they are recorded here as
-rulings, not questions. Everything here was imagined from typical use,
-then probed by building it; the method section (§5) is how the rest gets
-probed. Sequencing in §7.*
+**Status: the tier-2 campaign is closed, 2026-08-25.** Every beat is
+built, every §4 row is scored, every pin is honoured and gated. This file
+began as a design draft (`rill-tier2.md`) and is kept as the
+campaign's record: what was proposed, what was admitted, what was cut,
+what was built, and what is left with the trigger that would start it.
 
-**Status:** recon done (`docs/cc-recon-tier2.md`); **beat 1a BUILT
-2026-08-25** — `clock`, `frame`, `wave`, `lfo`, `ease`, `ramp`, `hold`,
-`diff`, `integrate`, `range`, `shape`. The founding example below is one
-line and gated. Named deviations and what beat 1a did not take are in
-`docs/implementation-notes.md`.
+*Shapes and pins ratified by Chris (§6); the bikeshed names in §2.11 and
+§2.12 were proposed by the recon and ruled 2026-08-25. Everything here
+was imagined from typical use, then probed by building it; §5 is how the
+rest gets probed. Sequencing and per-beat findings in §7.*
+
+## What landed
+
+| beat | built | gates |
+|---|---|---|
+| recon | `docs/cc-recon-tier2.md` — the word budget scored by customer | — |
+| 1a | `clock` `frame` `wave` `lfo` `ease` `ramp` `hold` `diff` `integrate` `range` `shape` | 140 → 165 |
+| 1b | broadcast over records and arrays, the loud mismatch check, 14 math completions | → 180 |
+| 2a | the `[a, b, c]` literal, `nth`, `choose` | → 194 |
+| 2b | `expect`, `match`, the shape literal | → 210 |
+| 3a | section **bodies** — `map`, `keep`, `reduce` | → 227 |
+| 3b | `sort` `first` `take` `transpose` `shuffle` `along` | → 245 |
+| 4 | `pulse` `once` `toggle` `tally` `above`; `noise` `rand` `distance` `within` | → 276 |
+| close | `ramp … from`, the paren form, the lattice-phase amendment, the manual-parity gate | → 283 |
+
+The founding example is one line and gated:
+`lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure`.
+
+Named deviations, the findings each beat produced, and the ledger lines
+they became are in `docs/implementation-notes.md`.
+
+## What is NOT built, and what would start it
+
+| word / thing | why not | trigger |
+|---|---|---|
+| `smooth <kernel>` | admitted (its row is real: reconstructing a 10 Hz ear into a per-frame knob without smear) but needs a **window-with-times** shape — `window` emits values, and a reconstruction filter needs their stamps | the day `window` can emit `[{at, v}]`, or a sibling that does |
+| `beat [division]` | needs the host to publish **tempo** on the plane | tempo lands as data; §8 records it as a host dependency |
+| tracks as a tenant | a spine tenant, sequenced with the D beat — not an operator | the D campaign |
+| `shape bezier <x1> <y1> <x2> <y2>` | the curves beat; `shape`'s five named curves cover every row §4 has | a row that names a curve none of the five give |
+| `walk <step> range <lo> <hi>` | listed, never rowed — `noise` at a long period covers "wander" | a row that needs a *bounded random walk* specifically |
+| `spring <freq> <damping>` | deferred until a scene wants overshoot | a row with overshoot in it |
+| `group by <body>` | tier 3 | a customer |
+| `noise3 <pos> <scale>` | pure and legal, but "what varies over space" is a field's job | a row that is not a field's job |
+| multi-node section bodies (a `def` as a body) | needs the caller to drive a node *range*, i.e. re-entrant evaluation of the slot machinery. Refused by name today, never mis-parsed | a body that genuinely cannot be one operator |
+| a `Plane` **schema query** | rill has no way to ask what shape a path declares | when it lands, `expect` prefers the declaration and keeps the mount-value check for undeclared paths — §8 |
+| `below <on> <off>` | `above`'s mirror; read-aloud question, no row | a row that reads better as "below" |
+| `drop <pred>` | `keep`'s mirror | a customer |
 
 ---
 
@@ -550,6 +585,30 @@ gate that mounts it measures. A row is only finished when its cell is in
 the idioms book and its gate asserts the behaviour, not the length.
 Rows carrying a known wrongness say so in the "today" column.
 
+**THE COLUMN IS CLOSED, 2026-08-25.** Every ✓ below is backed by a gate
+that asserts behaviour, and the three rows that carried a known
+wrongness or an unverified read have each been settled:
+
+- *night falls → lights on* — the row that put this column here. `above`
+  fixes it, and the gate drives the exact oscillation where a strict
+  comparator and a hysteresis band disagree: **six flips against zero**.
+- *dim the lamp as the fire dies* — re-probed at beat-4 close against
+  real `noise`. Holds at 2 lines **and only at 2**: the naked reading
+  jitters, and the gate asserts the difference the smoothing line makes
+  rather than asserting "it works".
+- *rate-limit a noisy sensor into a knob* — re-probed the same way.
+  Holds at 1. It promises a write RATE, not smoothness, and delivers
+  one: ten changes over ten periods while the sensor moved on all 126
+  frames.
+
+**Final score: 35 rows. 31 at one line ✓, 1 at its two-line target ✓,
+and 3 not cleared** — each blocked on something recorded above with its
+trigger: `pulse a light with the beat` (needs tempo on the plane),
+`ease the exposure in with a custom curve` (needs `shape bezier`), and
+`reconstruct a 10 Hz ear without smear` (needs `smooth`, which needs a
+window-with-times). No row is scored on prose; every ✓ has a mounted
+gate.
+
 **Admitted as substrate.** Two operators (`clock`, `frame`) are admitted
 by ruling rather than by a row: they are what `lfo` and the registers are
 built from, and a language whose animation primitives are a magic box
@@ -563,7 +622,7 @@ besides.
 | breathe the exposure between 0.5 and 1.5 over 4s | ~~9 lines, 2 programs, a seed~~ **1 ✓** | 1 | ~~`lfo`, `range`~~ **landed, beat 1a** |
 | flash a light on an event (attack, decay — not a rectangle) | ~~~4, and a rectangle~~ **1 ✓** | 1 | ~~`pulse` + `ease up down`~~ **landed, beat 4** |
 | VU meter on a field reading | ~~can't~~ **1 ✓** | 1 | ~~`abs \| ease 20ms down 400ms`~~ **landed, beat 1a** |
-| fade the exposure in over 2s on mount | ~~can't~~ **1 ✓, and it ticks forever** | 1 | `clock \| div 2 \| range 0 1` — it never needed `once`. The STOPPING spelling needs `ramp from`; see the fork in §8 |
+| fade the exposure in over 2s on mount | ~~can't~~ **1 ✓, and it stops** | 1 | ~~`once`~~ **landed, beat 4** — `once 1 \| ramp 2s from 0`. `from` was ratified at close; without it the row is still one line (`clock \| div 2 \| range 0 1`) but ticks forever |
 | ease the camera exposure toward a target | ~~can't~~ **1 ✓** | 1 | ~~`ease`~~ **landed, beat 1a** |
 | show elapsed time on the HUD | ~~can't~~ **1 ✓** | 1 | ~~`clock`~~ **landed, beat 1a** |
 | alarm when a raider is closing fast, not merely near | ~~invented sensor field~~ **1 ✓** | 1 | ~~`diff`~~ **landed, beat 1a** |
@@ -579,7 +638,7 @@ besides.
 | follow: keep a light 2m above the player | ~~~3~~ **1 ✓** | 1–2 | ~~record math~~ **landed, beat 1b** |
 | rate-limit a noisy sensor into a knob | 1 | 1 | ✓ (`sample`) — **re-probed at beat-4 close against real `noise`: holds.** It promises a write RATE, not smoothness, and delivers one |
 | flicker a torch | ~~can't~~ **1 ✓** | 1 | ~~`noise`, `range`~~ **landed, beat 4** |
-| shake the camera on impact, 300ms | ~~can't~~ **4** | 2–3 | landed, beat 4 — the extra lines are `as` bindings: a record field cannot be an operator call. See the fork in §8 |
+| shake the camera on impact, 300ms | ~~can't~~ **1 ✓** | 2–3 | landed, beat 4 — **under** target since the paren form was ratified: `{x: (noise 40ms seed 1), …}` |
 | let the grade drift slowly over a minute | ~~can't~~ **1 ✓** | 1 | ~~`noise 20s`, `range`~~ **landed, beat 4** |
 | pick a random idle animation per trigger | ~~can't~~ **1 ✓** | 1 | ~~`rand`, `floor`~~ **landed, beat 4** |
 | fly the camera along the intro path over 8s, once | ~~host verb only~~ **1 ✓** | 1 | `clock \| div 8 \| range 0 1 \| along […]` — `range` clamps, so it finishes and stays finished |
@@ -588,9 +647,9 @@ besides.
 | reconstruct a 10 Hz ear into a per-frame knob without smear | `ease` (smears) | 1 | `smooth lanczos` (own beat) |
 | move a light through three points typed into a cell | ~~host verb only~~ **1 ✓** | 1 | ~~array literal, `along`~~ **landed, beats 2a + 3b** |
 | pick an exposure by time-of-day band | ~~`select` chain~~ **1 ✓** | 1 | ~~array literal, `choose`~~ **landed, beat 2a** |
-| any of these contacts armed? | can't | 1 | ~~`map`, `reduce`~~ **landed, beat 3a** — `map (.armed) \| reduce (or)` |
-| the loudest reading in the last 5s | `stats \| .max` (only because `stats` happens to carry it) | 1 | ~~`reduce`~~ **landed, beat 3a** — `window 5s \| reduce (max)` |
-| just the contacts that are armed | can't | 1 | ~~`keep`~~ **landed, beat 3a** — `keep (.armed)` |
+| any of these contacts armed? | ~~can't~~ **1 ✓** | 1 | ~~`map`, `reduce`~~ **landed, beat 3a** — `map (.armed) \| reduce (or)` |
+| the loudest reading in the last 5s | ~~`stats \| .max`, only because `stats` happens to carry it~~ **1 ✓** | 1 | ~~`reduce`~~ **landed, beat 3a** — `window 5s \| reduce (max)` |
+| just the contacts that are armed | ~~can't~~ **1 ✓** | 1 | ~~`keep`~~ **landed, beat 3a** — `keep (.armed)` |
 | nearest hostile from the contact list | ~~invented sensor field~~ **1 ✓** | 1 | ~~`sort by`, `first`~~ **landed, beat 3b**; one line since the `\| .field` ruling |
 | top three threats | ~~can't~~ **1 ✓** | 1 | ~~`sort by`, `take`~~ **landed, beat 3b** |
 | refuse a malformed contact list at the boundary | ~~silent~~ **1 ✓** | 1 | ~~`match`~~ **landed, beat 2b** |
@@ -943,6 +1002,17 @@ the tags beat.
    times. A float64 oracle would have passed the f64 mutation; the bit
    patterns did not.
 
+   **Seeds offset the LATTICE, not only the gradients** (Chris's
+   amendment at close). Gradient noise is zero at every lattice point for
+   *every* seed, and seeds sharing a period share a lattice — so with
+   gradient-only seeding, every torch on a different seed passes through
+   0.5 in lockstep at each period boundary, octaves included. That is a
+   **family** of coincidences, not the single corner at t = 0 the first
+   gate found: the gate sampled at 37ms over a 300ms period and so never
+   once landed on a boundary. Each seed now carries its own lattice
+   phase, and decorrelation is re-gated **at t = period exactly**, which
+   is where the bug lived.
+
    **The gradients are continuous, and a gate is why.** The textbook 1D
    Perlin gradient is ±1, which gives a cell only four possible shapes —
    so two seeds produce an *identical* cell one time in four and `seed`
@@ -1020,27 +1090,25 @@ host, or the manual rather than the operator table:
   for free; everyone else gets a second explanation.
 - **Tempo on the plane.** `beat` needs the host to publish tempo as
   data. That's the music stack's job and it's small.
-- **FORK — `ramp` cannot start a mount fade** (raised 2026-08-25, beat
-  4). `ramp` baselines at its FIRST target, so `once 1 | ramp 2s` jumps
-  to 1 rather than fading to it. The fade-in row is met instead by
-  `clock | div 2 | range 0 1`, which is one line and correct — and which
-  **ticks every frame forever**, because `clock` does. The stopping
-  spelling wants a start value: `ramp 2s from 0`, a keyword port on the
-  ratified pattern. CC's lean is to add it, because "animate once and
-  then cost nothing" is the whole argument for the register family and
-  this is the one row where it is unavailable. **Not decided.** Pinned by
-  a gate either way, so the day it changes, the gate says so.
+- **`ramp … from <v>` — RULED 2026-08-25** (raised and settled at close).
+  `ramp` baselines at its FIRST target, so `once 1 | ramp 2s` jumped to 1
+  rather than fading to it, and the fade-in row was met by
+  `clock | div 2 | range 0 1` — one line, correct, and **ticking every
+  frame forever**. `from` is an optional keyword port giving the first
+  tween a start: `once 1 | ramp 2s from 0` is one line **that stops**,
+  which is the register family's whole argument. Gated on the eval
+  counter going flat, not on the value — a value that stays put looks
+  identical to one being recomputed. Without `from` the old behaviour is
+  unchanged and separately gated.
 
-- **FORK — a record field cannot be an operator call** (raised
-  2026-08-25, beat 4). A record literal's field takes a literal, a path,
-  a name, a record or an array — never an opcall. So a record built from
-  three computed streams costs three `as` bindings, which is why the
-  camera-shake row lands at four lines against a target of 2–3. CC's lean
-  is to leave it: `{x: noise 40ms seed 1, …}` needs the parser to know
-  where the operator's arguments stop and the next field begins, and the
-  comma would have to become significant inside an argument list. The
-  `as` lines are three names that a reader can see. **Not decided** —
-  recorded because the row is scored against it.
+- **The paren form — RULED 2026-08-25.** A record field or array element
+  may hold a **complete operator call** in parentheses:
+  `{x: (noise 40ms seed 1), y: (noise 40ms seed 2)}`. `( … )` was already
+  an argument form and parens already delimit, so no comma rule was
+  needed anywhere. The two readings do not collide because they live in
+  different positions: a field never takes a section, and `map`/`keep`/
+  `where` always do — gated in one program. The camera-shake row went
+  from four lines to **one**, under its 2–3 target.
 
 - **`| .field` — RULED 2026-08-25** (raised and settled the same day).
   `| .field` is the taught spelling for a field read mid-chain, sugar for

@@ -243,6 +243,8 @@ in steps.
 | "the i-th one" | `\| nth <i>` | `nth` and `choose` are one computation; the difference is which port rouses it |
 | "read a field mid-chain" | `\| .field` | a field read used to need a name to hang off; now the chain is the standpoint |
 | "three points typed into a cell" | `[{x: 0, …}, {x: 2, …}, …]` | an array literal is live, immutable, and not a buffer — `[0, 2, 0]` is not a position |
+| "a record built from three computed streams" | `{x: (noise 40ms seed 1), …}` | a field may hold a whole operator call in parens; `( … )` only means a *section* where a consumer asks for one |
+| "fade in on mount, then cost nothing" | `once 1 \| ramp 2s from 0` | `from` gives the first tween a start; without it the ramp simply is its target |
 | "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
 | "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
 | "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
@@ -373,7 +375,7 @@ operator's own state is not a path.
 | op | does |
 |---|---|
 | `ease <tau> [up <t>] [down <t>]` | follow the input with time constant `tau`; `up`/`down` make it asymmetric |
-| `ramp <over>` | tween linearly to each new target over `over` |
+| `ramp <over> [from <v>]` | tween linearly to each new target over `over`; `from` gives the FIRST tween a start |
 | `hold <for>` | take a value, then ignore changes for `for` |
 | `diff` | rate of change per second |
 | `integrate max <m>` | running sum over fed time, clamped to ±m |
@@ -381,12 +383,15 @@ operator's own state is not a path.
 ```rill
 plane.sensors.hearth.heat | ease 400ms | set plane.lights.hearth.level
 plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure
+once 1 | ramp 2s from 0 | set plane.render.grade.exposure
 plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
 plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu
 ```
 
 The last one is the envelope follower — fast to rise, slow to fall — and
-it is why `up`/`down` exist.
+it is why `up`/`down` exist. The second is the mount fade: without
+`from`, a ramp has nowhere to start and simply *is* its first target,
+which is right everywhere except at mount.
 
 **They stop.** A register re-evaluates every frame *while it is
 converging* and then goes quiet: `ease` settles a hair short of its
@@ -632,6 +637,11 @@ period means the same stream, in every program and every replay — so two
 torches on one seed flicker together, and three shake axes on seeds 1, 2
 and 3 are independent. The default is 0, so the naive program is already
 deterministic. `noise 80ms` flickers; `noise 20s` drifts.
+
+A seed moves the *lattice* as well as the gradients on it. Without that,
+every seed would pass through 0.5 together at each period boundary —
+smooth noise is zero at its lattice points whatever its gradients are,
+and seeds sharing a period would share those points.
 
 **`rand` and `shuffle` share one generator; `noise` is a hash.** That is
 two mechanisms for two questions: a generator produces a *sequence*, and
@@ -883,6 +893,44 @@ every 1f { cast $torchlight 0.8 radius 2.5 at plane.sensors.hearth.pos decay 4s 
 
 ```rill
 plane.sensors.hearth.$torchlight | mul 0.5 | add 0.5 | set plane.render.grade.exposure
+```
+
+**The breathing exposure** — the founding example of tier 2, and the
+sentence it started as:
+
+```rill
+lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+```
+
+**The fade that stops** — animate once at mount, then cost nothing:
+
+```rill
+once 1 | ramp 2s from 0 | set plane.render.grade.exposure
+```
+
+**The threshold that does not chatter** — a noisy reading into a switch:
+
+```rill
+plane.world.light | above 0.3 0.2 | set plane.lights.street.on
+```
+
+**The nearest threat** — a list into one answer:
+
+```rill
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
+```
+
+**The boundary contract** — refuse a malformed list where it arrives,
+and pin what a program reads:
+
+```rill
+plane.sensors.gate.contacts | match [{id: string, distance: number}] | set plane.ui.threats
+```
+
+**The camera shake** — three independent axes from one seed each:
+
+```rill
+{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake
 ```
 
 **The supervisor** — a rill watching the machines:

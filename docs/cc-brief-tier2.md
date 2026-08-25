@@ -2,7 +2,7 @@
 
 *For the Claude Code session that builds tier 2. You are starting cold.
 Everything below is what the previous sessions learned the hard way;
-read it before the code, then read `docs/rill-tier2-draft.md` §7 before
+read it before the code, then read `docs/rill-tier2.md` §7 before
 anything else in that file. Chris is the verdict function: rulings are
 his, gates are yours, and nothing lands without both.*
 
@@ -138,7 +138,7 @@ Each of these was paid for. Most were paid for twice.
 
 ## 5. Where to read
 
-- `docs/rill-tier2-draft.md` — §7 first (sequencing), then §1
+- `docs/rill-tier2.md` — §7 first (sequencing), then §1
   (admission rules), then the families. §4 is the simple-things list:
   your ergonomics gate. §5 is the method. §8 is what isn't language.
 - `rill-spec.md` — §3.8 (sinks, port shape), §3.12 (temporal ops),

@@ -6,7 +6,7 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "# The idioms book\n\nOne page per ask on the tier-2 simple-things list (`docs/rill-tier2-draft.md`\n§4). Each ask gets a **before** cell — how it is said with the language as it\nstands — and, once its operators land, an **after** cell. The pair is the\ncampaign's evidence: the before cell is what the ask cost, the after cell is\nwhat it costs now, and both are parsed by `zig build test` so neither can rot.\n\nRules of the book:\n\n- Every non-markdown cell parses. The gate counts cells both ways, so a cell\n  that stops being collected fails loudly rather than vacuously.\n- An ask that cannot be said at all today has a markdown cell and no before\n  cell. Its beat fills in the after.\n- The mutation for an after cell is deleting the operator it shows off.\n- Paths are the tiltyard's. A cell that reads a path assumes it is seeded\n  before mount — tick 0 evaluates everything, so a path that does not exist\n  yet is a node that never fires."
+   "source": "# The idioms book\n\nOne page per ask on the tier-2 simple-things list (`docs/rill-tier2.md`\n§4). Each ask gets a **before** cell — how it is said with the language as it\nstands — and, once its operators land, an **after** cell. The pair is the\ncampaign's evidence: the before cell is what the ask cost, the after cell is\nwhat it costs now, and both are parsed by `zig build test` so neither can rot.\n\nRules of the book:\n\n- Every non-markdown cell parses. The gate counts cells both ways, so a cell\n  that stops being collected fails loudly rather than vacuously.\n- An ask that cannot be said at all today has a markdown cell and no before\n  cell. Its beat fills in the after.\n- The mutation for an after cell is deleting the operator it shows off.\n- Paths are the tiltyard's. A cell that reads a path assumes it is seeded\n  before mount — tick 0 evaluates everything, so a path that does not exist\n  yet is a node that never fires."
   },
   {
    "name": "breathe-ask",
@@ -167,14 +167,14 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## After — one line, and the cost is visible\n\n```rill\nclock | div 2 | range 0 1 | set plane.render.grade.exposure\n```\n\n`range` **clamps**, so a clock scaled into 0..1 is a fade that finishes\nand stays finished. It never needed `once`.\n\nThe cost is real and the row says so: this chain re-evaluates every frame\nforever, because `clock` does — the ticks badge will show it. The\nstopping spelling would be `once 1 | ramp 2s`, and it does not work:\n`ramp` baselines at its FIRST target, so it starts at 1 rather than\nfading to it. That gap is a fork (`ramp from`), not something to fake."
+   "source": "## After — one line that STOPS\n\n```rill\nonce 1 | ramp 2s from 0 | set plane.render.grade.exposure\n```\n\n`from` gives the first tween a start, which is the whole of the mount\nfade. Without it a ramp has nowhere to start and simply *is* its first\ntarget — right everywhere except at mount, which is why `from` was added\nbeside that behaviour rather than instead of it.\n\nThere is also a version with no `from` at all —\n`clock | div 2 | range 0 1`, since `range` clamps — and it is one line\nand correct and **re-evaluates every frame forever**. The register stops.\nThat difference is the register family's whole argument, and it is gated\non the eval counter going flat rather than on the value, because a value\nthat stays put looks exactly like one being recomputed."
   },
   {
    "name": "fade-in-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "clock | div 2 | range 0 1 | set plane.render.grade.exposure"
+   "source": "once 1 | ramp 2s from 0 | set plane.render.grade.exposure"
   },
   {
    "name": "ease-toward-ask",
@@ -356,7 +356,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "noise 40ms seed 1 as sx\nnoise 40ms seed 2 as sy\nnoise 40ms seed 3 as sz\n{x: sx, y: sy, z: sz} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake"
+   "source": "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake"
   },
   {
    "name": "random-idle-ask",
@@ -644,6 +644,13 @@
    "markdown": true,
    "collapsed": false,
    "source": "## Levels and crossings\n\n**Levels emit at tick 0. Crossings baseline silently.**\n\n`above` publishes its level at mount, `toggle` its initial `false`,\n`tally` its `0` — because a program that reads a level must have one to\nread on its first evaluation, and \"nothing yet\" is not a level.\n`dropped_below`, `rose_above` and `edge` do the opposite: they record\ntheir first observation and say nothing, because a crossing nobody\ncrossed is not an event.\n\n**`above` is the row that put a correctness column on the list.** \"Night\nfalls → lights on\" scored ✓ at one line *and* flipped the street lights\non and off every frame at dusk, because a strict comparator has no memory\nof which side it was on. `above 0.3 0.2` reads as \"above 0.3, until below\n0.2\", and the gate drives the exact wobble where the two disagree: six\nflips against zero.\n\n**`pulse` is a value and `every` is an occurrence.** One node, one kind.\n`pulse` is the rectangle you shape — `pulse 2s width 60ms | ease 10ms\ndown 300ms` is a flash with an attack and a decay, which is what the\n\"not a rectangle\" row asked for.\n\n**Seeds are the decorrelator.** `noise` and `rand` and `shuffle` all seed\nfrom 0 by default, so the naive program is deterministic and anyone who\nwants independence says so. Three shake axes on seeds 1, 2, 3 are\nindependent; two torches on one seed flicker together."
+  },
+  {
+   "name": "tier2-closed",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Tier 2, closed\n\nThirty-five asks on the simple-things list. **Thirty-one are one line**,\none is the two its target allowed, and three are not cleared — each\nblocked on something written down with the trigger that would start it:\ntempo on the plane (`beat`), a bezier curve (`shape bezier`), and a\nwindow that carries times (`smooth`).\n\nThe founding example was two programs, a seeded counter and seven lines\nof arithmetic. It is:\n\n```rill\nlfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure\n```\n\n**Twenty-four words were admitted**, which is exactly what the recon\npredicted before any of them were built. Five more are substrate,\nadmitted by ruling rather than by a row and named as such. Five were\nargued in prose, and the rows were written down **before** the words\nlanded — which is the difference between admission rule 1 having teeth\nand having a loophole. Nine were cut and stayed cut.\n\nEvery ✓ above is a mounted gate, not a paragraph. Every beat's mutations\nwere counted. Three of them were findings about the *gates* rather than\nthe code, and each became a line in the ledger:\n\n- a gate asserting \"A rather than B\" must run where A ≠ B;\n- gate past the library's fallbacks, or the library is the thing under\n  test;\n- gate the property the doc claims, not the implementation's incidental\n  ones — and when a property has a period, sample **on** the period."
   }
  ]
 }
