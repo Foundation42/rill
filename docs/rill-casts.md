@@ -6,7 +6,14 @@
 reversed to per-deposit runtime physics, §4.1 gains the
 bag-of-deposits model, §0 gains unlearn #6, §13 F3 restated. Beat 1
 (`$` sigil, `cast`, `every`, the generalised block rule) is BUILT in
-rill core, same commit as these amendments.
+rill core, same commit as these amendments. **Beats 2–3 BUILT
+2026-08-25** (matryoshka): `fields.zig` (bag of deposits, receiver-side
+sum, decay/cull in fed time), `casting.zig` (the bridge + the EarBank
+sampler runtime), `chanarche` = the spine's 8th tenant (its first
+archetype-only one), `eararche`/`ear` = the 9th (sampler doctrine — no
+override mask, binding required); gates F1/F2/F3/F6/F7 all held with
+biting mutations; F4/F5 await the tags beat. THE LOOP runs photonless:
+cast → field → ear → rill → knob, every line console-sayable.
 **Scope:** closes the two gaps found by the external review of `ironwood.md`
 (relative targeting; cross-instance interaction), introduces the fourth
 sigil, and pins the field model. Extends `rill-agents.md` and Ironwood
@@ -288,7 +295,12 @@ discovered):**
   same notification path must run on caster removal as on any other
   change. A rill delete that silently drops the sum below a
   threshold without the occurrence firing is the arm-on-first-
-  observation bug's sibling: a transition nobody said.
+  observation bug's sibling: a transition nobody said. *(Built
+  2026-08-25: met BY CONSTRUCTION — the ear reads the canonical
+  aggregate, a removal moves it, the ear publishes the change, and
+  thresholds fire from it like from any other change. There is no
+  separate delete-path notifier to forget; F7's gate and its named
+  mutation hold it.)*
 
 Three pins:
 
@@ -567,10 +579,13 @@ argument, same class, as sensor scans.
   constant and is culled; a deposit fed by `every 1f` reaches steady
   state. Deterministic in fed time; replay byte-identical. The
   mutation: skip the cull and watch the bag grow.
-- **F4 — coupling:** a coupled cast reads as zero to an entity
-  without the receptor tag and non-zero with it; granting the tag
-  mid-run changes the reading on the next tick.
-- **F5 — derived tags:** an entity crossing a field threshold gains
+- **F4 — coupling** *(awaits the tags beat — the `#` row is its
+  prerequisite, deferred per the note's §6 sequencing)*: a coupled
+  cast reads as zero to an entity without the receptor tag and
+  non-zero with it; granting the tag mid-run changes the reading on
+  the next tick.
+- **F5 — derived tags** *(awaits the tags beat, with F4)*: an entity
+  crossing a field threshold gains
   the tag within one tick and loses it within one tick of leaving
   (plus hysteresis if declared); the maintainer's removal is the only
   removal.
@@ -587,3 +602,13 @@ argument, same class, as sensor scans.
 Each gate ships with a mutation that trips it, message in the
 fiction's language, per house practice. A mutation that does not bite
 is a finding about the gate.
+
+**Status 2026-08-25: F1/F2/F3/F6 held at the instrument (fields.zig)
+and F1/F7 through the plane (casting.zig), every expected number
+derived on paper, every mutation watched biting — including F7's named
+one (suppress the drop on the delete path) and two the practice caught
+in the gates themselves: a two-caster order gate that could never see
+summation order (IEEE addition is commutative, only non-associative),
+and its replacement whose off-line expectation was computed in float64
+when the implementation sums in f32. An expectation is faithful to the
+implementation's arithmetic, or it is not an expectation.**
