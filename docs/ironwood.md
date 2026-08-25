@@ -579,6 +579,21 @@ rill granted `tags/squads/*` is refused at mount when it writes
   registry and round-trips one sample per verb through the ACTUAL wire
   parser, so no verb can be tested by direct enqueue alone. Third time
   paid; made the last.
+- **T2 LANDED (2026-08-25):** the `@` registry is live. `entity bind
+  @name <kind> <instance>` / `entity free @name` on the wire; ids from log
+  order (`@camera` engine-registered first, so id 1 without riding the
+  log); mount-time fold at the line level (`@tom.pos` →
+  `plane.ents.<id>.pos`, ack names the binding); `entities/despawned`
+  certificates carry name, kind, last position, reason, frame; despawn
+  cleans the corpse's tags in sorted order, each departure said on the
+  tag's `left` mailbox; `entityService` refreshes id-keyed pos mirrors
+  publish-on-change and turns a deleted instance into its `.deleted`
+  certificate. Entities ride rig lines and project records; ids reassigned
+  in row order at load, swap-before-remount, so replay re-folds to the
+  same ids. Six gates, six mutations bitten (fold deleted bit 55 tests —
+  the fold is load-bearing, not decorative). One rill-side yielding: the
+  parser now accepts all-digit path segments, because id-keyed rows are a
+  legitimate store shape the language was refusing on spelling alone.
 
 **Ironwood upgrades that follow:** the assembly tally becomes membership
 (`#in-courtyard & #garrison` — honest by construction, superseding the blind
