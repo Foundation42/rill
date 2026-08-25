@@ -2546,3 +2546,47 @@ test "comments: a tail keeps `//` and `#` as text — the tail takes the raw lin
     const echoed = fx.rt.readSlot("programs.p.sound play1.out.out").?;
     try testing.expectEqualStrings("pack:horns#audio.stem//v2", types.asString(echoed).?);
 }
+
+// ---------------------------------------------------------------------------
+// The manuals are front doors, and a front door needs a gate (the demo-exe
+// lesson: `as stats` sat broken for a quarter because building never parsed
+// it). Every ```rill block in both manuals parses here — if it's printed,
+// it compiles. Blocks that are deliberately console-side (chanarche lines)
+// are fenced ```console and not collected.
+// ---------------------------------------------------------------------------
+
+fn parseManual(doc: []const u8, reg: *rill.Registry, doc_name: []const u8) !usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, doc, pos, "```rill\n")) |start| {
+        const body_start = start + "```rill\n".len;
+        const end = std.mem.indexOfPos(u8, doc, body_start, "```") orelse {
+            std.debug.print("{s}: unterminated ```rill fence\n", .{doc_name});
+            return error.TestUnexpectedResult;
+        };
+        const src = doc[body_start..end];
+        var diag = rill.Diag{};
+        var prog = rill.parse(testing.allocator, reg, "manual", src, &diag) catch |err| {
+            if (err == error.Parse) {
+                std.debug.print("{s}: example failed to parse — {s} (line {d}, col {d}):\n{s}\n", .{ doc_name, diag.msg(), diag.line, diag.col, src });
+            }
+            return err;
+        };
+        prog.deinit();
+        count += 1;
+        pos = end;
+    }
+    return count;
+}
+
+test "the manuals parse: every printed example compiles" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const human = try parseManual(@embedFile("rill-manual.md"), &reg, "rill-manual.md");
+    const agent = try parseManual(@embedFile("rill-for-agents.md"), &reg, "rill-for-agents.md");
+    // Both ways, like the class table: a manual whose examples silently
+    // stopped being collected would pass vacuously. Update on purpose when
+    // examples are added or removed.
+    try testing.expectEqual(@as(usize, 23), human);
+    try testing.expectEqual(@as(usize, 2), agent);
+}

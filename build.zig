@@ -14,6 +14,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     rill_mod.addImport("struple", struple_mod);
+    // The manuals ride into the test build as anonymous imports so the
+    // manual-parse gate can @embedFile them from outside src/ — a program
+    // the repo ships as its front door needs a gate, and the manuals are
+    // the front door.
+    rill_mod.addAnonymousImport("rill-manual.md", .{ .root_source_file = b.path("docs/rill-manual.md") });
+    rill_mod.addAnonymousImport("rill-for-agents.md", .{ .root_source_file = b.path("docs/rill-for-agents.md") });
 
     // Static library artifact (handy for C / FFI / WASM consumers later).
     const lib = b.addLibrary(.{
