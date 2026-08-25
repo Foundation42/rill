@@ -312,8 +312,47 @@ Four sigils name four rows of the world:
 | `#`   | what's true of it now  | `#garrison`  |
 | `$`   | what's in the air here | `$torchlight`|
 
-(`@`, `^`, `#` arrive with the entity registry and tag store; `$` is
-live today.)
+All four are live (the tags campaign, 2026-08-25). `$` is the field
+sigil below; the other three, in brief:
+
+**`@` — which one.** `entity bind @tom prim tom` registers a placed
+instance as an addressable entity (the ack says which id it became), and
+`@tom.pos` is then a live path. The binding happens **at mount**: an
+`@`-reference folds to its id-keyed row when your program mounts, and a
+`@tom` registered *after* that — even under the same name — does not
+reattach; remount to bind anew. Death is loud: `entity free` (or the
+instance's deletion) publishes a certificate on `entities/despawned` —
+who, what kind, where they last stood, why, and when — and the corpse's
+tags are cleaned, each departure said. A dead binding's writes refuse on
+the node, carrying the certificate's reason and frame.
+
+**`#` — what's true of it now.** Membership is written with the `tag` /
+`untag` sinks — one subject, **one tag per call** — and it is a *set*:
+twice is once, and only an actual transition speaks. Every tag carries
+three service leaves: `plane.tags.<name>.count` (live member count),
+`.joined` and `.left` (occurrence mailboxes). Subscribe those freely;
+subscribing the tag row itself while writing members is a cycle and is
+refused. The muster at Ironwood is the canonical shape — thirty soldiers
+joining a set that cannot drift, and a wall that counts members instead
+of trusting a counter:
+
+```rill
+plane.signals.horn | tag @tom #in-courtyard
+plane.tags.in-courtyard.count | rose_above 29 | notify plane.signals.wall_formed { n: 30 }
+```
+
+Unpiped, `tag @tom #garrison` fires once at tick 0 — the console
+one-shot's shape. A tag can also be **derived**: `derive set #alert
+^raider $alarm 0.5 0.4` (console) declares a maintainer — entities of
+that kind carry the tag while the field at their position sits at or
+above the ON level, and leave when it falls below OFF. The band between
+is hysteresis: a signal held at the line joins once and never chatters.
+One maintainer per tag, and it owns the tag over its population — a hand
+tag below the band is withdrawn next frame and `left` says so; if you
+want an override, you want a different tag (§6a has the row).
+
+**`^` — what kind.** Engine-owned and read-only: today only `derive set`
+takes one, naming the population.
 
 A **field** is a scalar over space. A **cast** deposits into it:
 
@@ -336,14 +375,34 @@ to absorb it, absorbs it.
 Channels are declared before anyone casts (in Matryoshka:
 `chanarche set $alarm 0.01 2000 0` — epsilon, default decay in ms,
 optional clamp). Mounting a caster whose channel doesn't exist refuses
-the mount and names the node.
+the mount and names the node — and so does a coupling to an undeclared
+tag, because a cast can be **coupled**: `to #tag` scopes who absorbs it.
+
+```rill
+plane.sighting | cast $dread 1.0 radius 30 at plane.sensors.gate.pos to #garrison
+```
+
+Coupling governs *entity* perception: an ear bound to an entity hears a
+coupled deposit only while its entity carries the tag — and **tags are a
+level, one frame wide**: gain the tag at tick n, hear from n+1; untag
+and the reading drops next tick. A *post* (a placed ear) is the
+operator's instrument and hears everything. A declared-but-empty tag
+reaches no one, and that is not an error. Since a **derived** tag reads
+each entity with its own ears too, a cast `to #alert` can feed `#alert`'s
+own derivation — authored feedback, one step per frame.
 
 **Reading a field always names a standpoint.** There is no bare
 `$alarm` stream — *a cast names where it deposits; a read names where
 it samples; neither has an implicit "here."* A standpoint is an **ear**:
 a placed post reading through a declared *sampler* (point or area,
 gradient on or off, a cadence, a clamp), publishing at
-`sensors/<post>/$alarm`:
+`sensors/<post>/$alarm`. An ear can instead be **bound to an entity**
+(`ear bind tom-ear @tom war-ear`): the standpoint then *follows* the
+entity — its registry mirror is the position — and the readings publish
+at the entity's own surface, so `@tom.$alarm` reads what Tom hears. If
+Tom despawns, the ear dangles (reads nothing, holds its last word); the
+walk in §12's demo is exactly a camera-bound ear crossing a brazier's
+glow. The plain placed form:
 
 ```rill
 plane.sensors.hearth.$torchlight | mul 0.5 | add 0.5 | set plane.render.grade.exposure

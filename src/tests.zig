@@ -2594,7 +2594,9 @@ test "the manuals parse: every printed example compiles" {
     // Both ways, like the class table: a manual whose examples silently
     // stopped being collected would pass vacuously. Update on purpose when
     // examples are added or removed.
-    try testing.expectEqual(@as(usize, 28), human);
+    // 28 → 30 (2026-08-25): the tags-campaign parity pass added the
+    // membership muster and the coupled cast to the human manual's §7.
+    try testing.expectEqual(@as(usize, 30), human);
     try testing.expectEqual(@as(usize, 3), agent);
 }
 

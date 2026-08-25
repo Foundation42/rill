@@ -798,8 +798,10 @@ if convenient — sensors keyed by tag (`nearest #raiders`) want the tag row to
 exist. The Ironwood gate assembles incrementally: I5/I6/I7/I8 can run against
 a sensorless stub (horn fed directly) as soon as `also`/`inc` land; I1–I4
 switch on as R1/R2 arrive; I5's tally upgrades from blind `inc` to
-membership when R6 lands. The scenario stays green from its first partial
-mounting onward — it grows teeth, it never waits toothless.
+membership when R6 lands (DONE 2026-08-25 — the muster IS membership, and a
+second horn is the drift-proof the counter could not survive). The scenario
+stays green from its first partial mounting onward — it grows teeth, it
+never waits toothless.
 
 **R1's internal order, with one beat scheduled by a finding (2026-08-24):**
 S1 the atom · S2 the instrument · S3 the publication · **S3.5 the instance

@@ -116,11 +116,19 @@ record    := "{" field ":" value ("," …)* "}"
 Word rules: `_` and alphanumerics are name characters; `/` and `-` are
 name-interior when they **join two name characters**
 (`render/grade/exposure` and `key-light` are one word each); `//` is
-always a comment (to end of line); `$name` is one token (a field
-channel, sigil included). A bare word binding a *string-typed* port
+always a comment (to end of line); all four sigils lead one
+token each, sigil included: `$alarm` (field channel), `@tom` (entity
+subject), `#garrison` (tag), `^raider` (archetype — engine-owned; only
+`derive set` takes one). A bare word binding a *string-typed* port
 becomes a string literal (console entity names); anywhere else an
-unknown word is a loud error. `"…"` quotes strings; `#`, `@`, `^` are
-reserved sigils not yet in the grammar.
+unknown word is a loud error with a sigil-specific correction. `"…"`
+quotes strings.
+
+**`@name.field` reads bind at MOUNT** (host-side): the reference folds
+to the entity's id-keyed row when the program mounts, the ack says
+which id, and a re-registered name does NOT reattach — remount to bind
+anew. A stale binding's `tag`/`untag` refuses on the node, against the
+error budget, carrying the despawn certificate's reason and frame.
 
 A line beginning with `|` continues the statement above. A statement
 head followed by `{ … }` fans out into the block's branches (the
@@ -141,7 +149,7 @@ live: a moving `at` re-aims without re-rousing).
 | temporal | `sample in period` · `debounce in quiet` · `throttle in w` · `cooldown in w` · `window in span` → array · `stats` → record · `delay in by` · `every period` (source; fires at mount then per period; skip-forward after gaps) · `arm`/`disarm in off on` |
 | math | `add sub mul div min max` · `clamp in lo hi` · `abs floor round` · `= != < <= > >=` |
 | records | `{f: x, …}` · `.field` projection · `merge a b` |
-| sinks | `set <path> [value]` · `notify <path> [value]` · `inc <path> <by>` · `cast <$chan> [value] radius <r> at <pos> [decay <d>]` |
+| sinks | `set <path> [value]` · `notify <path> [value]` · `inc <path> <by>` · `cast <$chan> [value] radius <r> at <pos> [decay <d>] [to <#tag>]` · `tag <@subject> <#tag>` / `untag …` (ONE tag per call; unpiped = once at tick 0; membership is a SET — twice is once, only transitions speak) |
 | util | `const <lit>` · `tap <label>` (log passthrough) |
 
 The sink shape: **port 0 is the rousing** (when); a bound value is the
@@ -176,8 +184,35 @@ first, so `sound play` is one operator.
   sibling segments, so "one channel, several readings" is visible in
   the spelling and nothing lexes like a castable channel. Ears publish zero at
   binding, so your `rose_above` baselines correctly.
+- **Coupling** (`to #tag`): scopes ENTITY perception — an entity-bound
+  ear hears a coupled deposit only while its entity carries the tag,
+  and **tags are a level, one frame wide** (gain at n, hear from n+1;
+  untag and the reading drops next tick; no back-fill). A POST hears
+  everything. `to` must name a DECLARED tag (`tag declare #x`) or the
+  mount refuses, node named; declared-but-empty reaches no one and is
+  not an error.
+- **Tags** (`#name`): written with the `tag`/`untag` sinks, read at the
+  service leaves — `plane.tags.<name>.count` (live count), `.joined` /
+  `.left` (occurrence mailboxes). Subscribing the tag row itself while
+  writing members is a prefix cycle, refused; the leaves are siblings
+  and legal. A subject must be a REGISTERED entity or the mount
+  refuses with the `entity bind` spelling.
+- **Entity-bound ears** (`ear bind <name> <@subject> <arche>`): the
+  standpoint follows the entity, readings publish at its surface —
+  `@tom.$alarm` reads what Tom hears. Despawn dangles the ear (reads
+  nothing, holds its last word).
+- **Derived tags** (`derive set #alert ^raider $alarm 0.5 0.4`,
+  console): a maintainer joins population entities at the ON level,
+  removes below OFF, holds in the band (no chatter at the line). ONE
+  maintainer per tag, owning tag ∩ population, continuously
+  reconciled — a hand tag below the band is withdrawn next frame and
+  `left` says so; an override is a DIFFERENT tag. Because the
+  maintainer reads with each entity's own carried set, a cast
+  `to #alert` can feed #alert's own derivation — authored feedback,
+  one step per frame.
 - Deposits and readings are deterministic in fed time and stay out of
-  the log; replay re-derives them.
+  the log; replay re-derives them. Membership and derive writes are
+  derived sources too: replay re-derives, never re-applies.
 
 ---
 
@@ -202,6 +237,11 @@ first, so `sound play` is one operator.
 | `x \| mul 2 { set plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { set plane.a }` |
 | `x \| plane.y` | a pipe feeds an OPERATOR; a path on the right is a write | `x \| set plane.y` (the error asks: did you forget `set`?) |
 | `as $x` / `def $f(…)` | sigils name store rows, never streams/ops | pick an unsigiled name |
+| `tag @tom #a #b` | ONE tag per call — a second `#` has nowhere honest to bind | two statements, one tag each |
+| `tag tom #garrison` / `entity bind wall …` | the sigil is required on EVERY surface | `tag @tom #garrison` / `entity bind @wall …` |
+| subscribing `plane.tags.garrison` while tagging into it | set-sub vs member-write is a prefix cycle | subscribe `.count` / `.joined` / `.left` — the service leaves are siblings |
+| `untag @tom #alert` on a DERIVED tag | the tag is owned by its rule — withdrawn next frame, `left` says so | a different tag (`#alert-manual`), gated beside it |
+| keeping a program mounted across `entity free` + re-bind of its subject | binding is MOUNT-time; a rebound name does not reattach | remount to bind anew (the refusal carries the certificate's reason and frame) |
 | waiting for a path to vanish | absence is unobservable | subscribe to the occurrence that says so |
 
 ---

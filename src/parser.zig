@@ -894,7 +894,7 @@ const Parser = struct {
                     // The error states the spelling, not just the refusal.
                     // (This is also what keeps the cycle checker out of the
                     // field store.)
-                    return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: plane.sensors.<post>.{s} (or @id.{s} when the registry lands) — a bare channel has no implicit 'here'. To deposit, 'cast {s} …'", .{ t.text, t.text, t.text, t.text });
+                    return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: plane.sensors.<post>.{s}, or @tom.{s} through an entity-bound ear — a bare channel has no implicit 'here'. To deposit, 'cast {s} …'", .{ t.text, t.text, t.text, t.text });
                 }
                 const op_tok = self.next();
                 return self.parseOpcall(target, op_tok, null, false);
