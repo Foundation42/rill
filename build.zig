@@ -20,6 +20,10 @@ pub fn build(b: *std.Build) void {
     // the front door.
     rill_mod.addAnonymousImport("rill-manual.md", .{ .root_source_file = b.path("docs/rill-manual.md") });
     rill_mod.addAnonymousImport("rill-for-agents.md", .{ .root_source_file = b.path("docs/rill-for-agents.md") });
+    // The idioms book rides in the same way and for the same reason. It is the
+    // tier-2 campaign's evidence — one before/after pair per ask on the
+    // simple-things list — and evidence that never runs is prose.
+    rill_mod.addAnonymousImport("idioms.rillbook", .{ .root_source_file = b.path("docs/idioms.rillbook") });
 
     // Static library artifact (handy for C / FFI / WASM consumers later).
     const lib = b.addLibrary(.{

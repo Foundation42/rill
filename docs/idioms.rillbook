@@ -1,0 +1,264 @@
+{
+ "rillbook": 1,
+ "cells": [
+  {
+   "name": "about",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "# The idioms book\n\nOne page per ask on the tier-2 simple-things list (`docs/rill-tier2-draft.md`\n\u00a74). Each ask gets a **before** cell \u2014 how it is said with the language as it\nstands \u2014 and, once its operators land, an **after** cell. The pair is the\ncampaign's evidence: the before cell is what the ask cost, the after cell is\nwhat it costs now, and both are parsed by `zig build test` so neither can rot.\n\nRules of the book:\n\n- Every non-markdown cell parses. The gate counts cells both ways, so a cell\n  that stops being collected fails loudly rather than vacuously.\n- An ask that cannot be said at all today has a markdown cell and no before\n  cell. Its beat fills in the after.\n- The mutation for an after cell is deleting the operator it shows off.\n- Paths are the tiltyard's. A cell that reads a path assumes it is seeded\n  before mount \u2014 tick 0 evaluates everything, so a path that does not exist\n  yet is a node that never fires."
+  },
+  {
+   "name": "breathe-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Breathe the exposure between 0.5 and 1.5 over four seconds\n\nThe founding example. Scored in \u00a74 as *9 lines, 2 programs, a seed \u2192 1 line*,\nneeding `lfo` and `range`.\n\nTwo programs because \u00a74.4 refuses a program that both writes and subscribes to\none path, and a phase counter is exactly that. A seed because tick 0 evaluates\neverything: `plane.anim.breath.tick` must exist before either program mounts or\nthe reader's nodes never fire.\n\nThe waveform below is a triangle, not a sine \u2014 with no `sin` and no `wave`\nthere is no sine to be had. That is part of what the ask cost."
+  },
+  {
+   "name": "breathe-before-counter",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "every 1f | inc plane.anim.breath.tick 1"
+  },
+  {
+   "name": "breathe-before-driver",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.anim.breath.tick | div 240 as phase\nphase | floor as whole\nphase | sub whole as frac\nfrac | mul 2 | sub 1 | abs as fold\nfold | mul -1 | add 1 as tri\ntri | lerp 0.5 1.5 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "breathe-after",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after \u2014 beat 1a\n\n```\nlfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure\n```\n\nNot yet: `lfo` and `range` land in beat 1a. This cell becomes a rill cell in\nthe commit that lands them, and the mutation that must bite is deleting `lfo`."
+  },
+  {
+   "name": "flash-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Flash a light on an event \u2014 attack and decay, not a rectangle\n\n\u00a74: *~4 lines, and a rectangle \u2192 1*, needing `pulse | ease up down`.\n\nToday the shape is a rectangle because nothing decays: the light goes to full\non the rousing and drops to nothing when the window closes. `delay` moves the\nedge; it does not soften it."
+  },
+  {
+   "name": "flash-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.signals.horn | set plane.lights.alarm.level 1\nplane.signals.horn | delay 200ms | set plane.lights.alarm.level 0"
+  },
+  {
+   "name": "toggle-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Toggle a light on a keypress\n\n\u00a74: *~3 lines \u2192 1*, needing `toggle`.\n\nToday a toggle is a counter through the plane, which costs the second program\nfor the same reason the breathing exposure does \u2014 and the parity test is\narithmetic nobody should have to write."
+  },
+  {
+   "name": "toggle-before-counter",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_l | inc plane.ui.lamp.presses 1"
+  },
+  {
+   "name": "toggle-before-driver",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.ui.lamp.presses | div 2 as halved\nhalved | floor | mul 2 as even\nplane.ui.lamp.presses | sub even | = 1 | set plane.lights.lamp.on"
+  },
+  {
+   "name": "count-kills-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Count kills\n\n\u00a74: *2 programs (`inc` + reader) \u2192 1*, needing `tally`.\n\n`inc` is the write half and cannot read its own path, so the count is only\nvisible to a second program. `tally` is the same count held inside the\noperator, where the cycle ban does not reach."
+  },
+  {
+   "name": "count-kills-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.kill | inc plane.score.kills 1"
+  },
+  {
+   "name": "night-falls-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Night falls, lights on\n\n\u00a74 scores this \u2713 at 1 line today \u2014 and the score is honest about line count\nand wrong about behaviour. `dropped_below` fires on every crossing, so a light\nlevel wobbling either side of the threshold at dusk switches the lights on and\noff repeatedly. This is `above`'s customer (recon \u00a73d), and the row should be\nre-scored *today \u2014 1 line, chatters* when beat 4 lands hysteresis."
+  },
+  {
+   "name": "night-falls-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.sky.light | dropped_below 0.3 | set plane.lights.court.on true"
+  },
+  {
+   "name": "fade-in-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Fade the exposure in over two seconds on mount\n\n\u00a74: *can't (no register) \u2192 1*, needing `once` and `ramp`.\n\nThere is no before cell. Nothing in the language moves a value toward another\nvalue over time; the counter trick above can fake it only by rebuilding the\nwhole phase apparatus per fade. Beat 1a fills this in."
+  },
+  {
+   "name": "ease-toward-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Ease the camera exposure toward a target\n\n\u00a74: *can't \u2192 1*, needing `ease`. No before cell \u2014 same reason."
+  },
+  {
+   "name": "vu-meter-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## A VU meter on a field reading\n\n\u00a74: *can't \u2192 1*, needing `abs | ease 20ms down 400ms` \u2014 the envelope\nfollower, which is `ease` with asymmetric time constants. No before cell."
+  },
+  {
+   "name": "closing-fast-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Alarm when a raider is closing fast, not merely near\n\nProposed \u00a74 row (recon \u00a73e): *invented sensor field \u2192 1*, needing `diff`.\n\nThe probe reviewer invented a `raider_velocity` sensor field because nothing\nin rill derived it. The honest spelling is one word, and it is why `diff`\nearns admission. No before cell: the before was a change to the host."
+  },
+  {
+   "name": "swing-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Swing a light back and forth\n\n\u00a74: *~8 lines \u2192 1*, needing `lfo tri` and `range`. The before is the breathing\ncounter again with a different output path \u2014 which is the finding: every\nperiodic ask rebuilds the same seven lines."
+  },
+  {
+   "name": "cooldown-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## A cooldown-guarded order\n\n\u00a74 scores this \u2713 at 1 line, and here it is honest \u2014 `cooldown` already holds\nits deadline in op state, which is the mechanism the whole register family\ninherits (recon \u00a70)."
+  },
+  {
+   "name": "cooldown-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.enemy_count | rose_above 0 | cooldown 30s | notify plane.orders.muster"
+  },
+  {
+   "name": "rate-limit-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Rate-limit a noisy sensor into a knob\n\n\u00a74 scores this \u2713 at 1 line today via `sample`, and names `slew` beside it.\nThe row being already met is why `slew` is *listed, not admitted* (recon \u00a73f)."
+  },
+  {
+   "name": "rate-limit-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.hearth.heat | sample 250ms | set plane.render.grade.exposure"
+  },
+  {
+   "name": "dim-lamp-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Dim the lamp as the fire dies\n\n\u00a74 scores this \u2713 at 2 lines via fields. Kept in the book as a \u2713 row that the\ncampaign must not regress \u2014 and as one of the two rows flagged in recon \u00a73d as\npossibly \u2713-with-a-wobble against a noisy input."
+  },
+  {
+   "name": "dim-lamp-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "every 1f { cast $firelight 0.8 radius 6 at plane.sensors.hearth.pos decay 4s }"
+  },
+  {
+   "name": "flicker-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Flicker a torch\n\n\u00a74: *can't (no noise) \u2192 1*, needing `noise` and `range`. Beat 4. No before\ncell \u2014 a deterministic flicker cannot be built from the current set at all."
+  },
+  {
+   "name": "drift-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Let the grade drift slowly over a minute\n\n\u00a74: *can't \u2192 1*, needing `noise 20s` and `range`. Beat 4."
+  },
+  {
+   "name": "shake-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Shake the camera on impact, 300ms\n\n\u00a74: *can't \u2192 2\u20133*, needing `noise` on three seeds, `hold`, and record math.\nBeat 4, and the row that most wants the broadcast pin."
+  },
+  {
+   "name": "random-idle-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Pick a random idle animation per trigger\n\n\u00a74: *can't \u2192 1*, needing `rand` and `floor`. Beat 4."
+  },
+  {
+   "name": "nearest-hostile-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Nearest hostile from the contact list\n\n\u00a74: *invented sensor field \u2192 1*, needing `sort by` and `first`. Beat 3.\nThe contact source publishes an array; today nothing orders one."
+  },
+  {
+   "name": "top-three-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Top three threats\n\n\u00a74: *can't \u2192 1*, needing `sort by` and `take`. Beat 3."
+  },
+  {
+   "name": "three-points-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Move a light through three points typed into a cell\n\n\u00a74: *host verb only \u2192 1*, needing the array literal and `along`. Beats 2 and 3.\nThis is the ask the rillbook exists for: three points typed into a cell, no\nhost verb in the way."
+  },
+  {
+   "name": "time-of-day-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Pick an exposure by time-of-day band\n\n\u00a74: *`select` chain \u2192 1*, needing the array literal and `choose`. Beat 2."
+  },
+  {
+   "name": "time-of-day-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.world.hour | < 6 as night\nplane.world.hour | < 18 as day\nnight | select 0.2 1.0 as lit\nday | select lit 0.4 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "follow-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Keep a light two metres above the player\n\n\u00a74: *~3 lines \u2192 1\u20132*, needing record math (the broadcast pin). Recon \u00a76 argues\nthis lands in beat 1b rather than beat 2, because broadcast is one change to\none comptime helper and every math word should be born with it."
+  },
+  {
+   "name": "follow-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.entities.player.pos.y | add 2 as lifted\n{x: plane.entities.player.pos.x, y: lifted, z: plane.entities.player.pos.z}\n  | set plane.lights.follow.pos"
+  },
+  {
+   "name": "contracts-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Refuse a malformed contact list, and pin what a program reads\n\n\u00a74's last two rows: both *silent \u2192 1*, needing `match` (runtime) and `expect`\n(mount). Beat 2. There is no before cell because \"silent\" is the before: a\nshape mismatch today is discovered downstream, or not at all."
+  }
+ ]
+}

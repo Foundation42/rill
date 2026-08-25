@@ -2601,6 +2601,75 @@ test "the manuals parse: every printed example compiles" {
 }
 
 // ---------------------------------------------------------------------------
+// The idioms book (tier-2 recon §3a, 2026-08-25). The campaign's definition of
+// done says every new operator lands a before/after pair in the book with the
+// after cell gated by parse — and the book had neither a document nor a gate,
+// which made the clause unmeetable and the §4 simple-things list prose again.
+//
+// Same shape as the manual gate above, and for the same reason: the book is
+// the evidence that an ask got cheaper, and evidence that never runs is a
+// paragraph. Markdown cells are commentary and are not parsed; every other
+// cell is a rill program and must compile. Counted BOTH ways, so a book that
+// stopped being collected — a renamed field, a JSON shape drift — fails
+// loudly instead of passing vacuously.
+// ---------------------------------------------------------------------------
+
+const BookCell = struct {
+    name: []const u8,
+    source: []const u8 = "",
+    markdown: bool = false,
+};
+
+const BookDoc = struct {
+    rillbook: u32,
+    cells: []const BookCell,
+};
+
+/// Parse every non-markdown cell. Returns {rill cells parsed, total cells}.
+fn parseBook(gpa: std.mem.Allocator, doc_src: []const u8, reg: *rill.Registry, doc_name: []const u8) !struct { usize, usize } {
+    const parsed = std.json.parseFromSlice(BookDoc, gpa, doc_src, .{ .ignore_unknown_fields = true }) catch |err| {
+        std.debug.print("{s}: not valid JSON — {s}\n", .{ doc_name, @errorName(err) });
+        return err;
+    };
+    defer parsed.deinit();
+    const doc = parsed.value;
+    if (doc.rillbook != 1) {
+        std.debug.print("{s}: format version {d}, expected 1\n", .{ doc_name, doc.rillbook });
+        return error.TestUnexpectedResult;
+    }
+
+    var count: usize = 0;
+    for (doc.cells) |cell| {
+        if (cell.markdown) continue;
+        if (cell.source.len == 0) {
+            std.debug.print("{s}: cell '{s}' is a rill cell with no source\n", .{ doc_name, cell.name });
+            return error.TestUnexpectedResult;
+        }
+        var diag = rill.Diag{};
+        var prog = rill.parse(gpa, reg, cell.name, cell.source, &diag) catch |err| {
+            if (err == error.Parse) {
+                std.debug.print("{s}: cell '{s}' failed to parse — {s} (line {d}, col {d}):\n{s}\n", .{ doc_name, cell.name, diag.msg(), diag.line, diag.col, cell.source });
+            }
+            return err;
+        };
+        prog.deinit();
+        count += 1;
+    }
+    return .{ count, doc.cells.len };
+}
+
+test "the idioms book parses: every cell compiles, and the count is deliberate" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const rill_cells, const total = try parseBook(testing.allocator, @embedFile("idioms.rillbook"), &reg, "idioms.rillbook");
+    // Both numbers move on purpose. `rill_cells` rises as a beat turns a
+    // markdown "after" into a program; `total` rises as asks are added.
+    // Opening count (recon, before beat 1a): 12 before-cells, 37 cells.
+    try testing.expectEqual(@as(usize, 12), rill_cells);
+    try testing.expectEqual(@as(usize, 37), total);
+}
+
+// ---------------------------------------------------------------------------
 // tail_all (2026-08-25): the rest of the INPUT, verbatim — found by
 // rillbook's first drive. The line-tail stopped at the first newline, so a
 // multi-line `rill remount` source lost every line past its first (they
