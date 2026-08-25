@@ -694,11 +694,19 @@ rill granted `tags/squads/*` is refused at mount when it writes
   manual's Thinking-in-rill table carries the override line: if you want
   an override, you want a different tag.
 
-**Ironwood upgrades that follow:** the assembly tally becomes membership
-(`#in-courtyard & #garrison` — honest by construction, superseding the blind
-`inc` tally in I5); the sally-port force is that same intersection; raiders
-are `^raider` stamped `#hostile` at spawn, and the v2 growth path's
-"pacified" outcome is a tag removal, not a despawn.
+**Ironwood upgrades — LANDED (2026-08-25, the campaign's close-out):** the
+assembly tally IS membership: soldiers are placed, registered entities
+stamped `#garrison` at spawn; the horn joins each to `#in-courtyard`
+(corpus keeps `@tom` as the exemplar, the harness renames per man — R4's
+def-at-scale owns making that sayable); the wall counts the tag's service
+leaf, reconciling with the members by construction, and a SECOND horn
+holds the muster at thirty where the old `inc` doubled — I5 asserts the
+drift-proof without changing a line. Raiders wear `#hostile` from spawn
+and "pacified" takes the tag, not the man (no certificate, one `left`,
+the raider stands). THE WALK runs: a camera-bound ear (T4) carries the
+standpoint into the brazier's glow and out — §12's pointer resolved, and
+the brazier borrow repaid with `at @brazier.pos` over a registered
+brazier. rill-casts §12 records both debts settled.
 
 ## 4. The Ironwood gate (pre-registered)
 
