@@ -46,9 +46,11 @@ if [ $status -eq 0 ]; then
     exit 2
 fi
 
-if printf '%s' "$out" | grep -qE "error: 'tests|tests passed; [0-9]+ failed|[0-9]+ failed"; then
-    printf '%s' "$out" | grep -E "error: '" | head -8
-    n=$(printf '%s' "$out" | grep -cE "error: '" )
+if printf '%s' "$out" | grep -qE "error: 'tests|tests passed; [0-9]+ failed|[0-9]+ failed|while executing test"; then
+    printf '%s' "$out" | grep -E "error: '|terminated with signal" | head -8
+    # A test that PANICS is a bite too — it prints "terminated with signal",
+    # not "error: '<test>'", and the first draft counted those as 0.
+    n=$(printf '%s' "$out" | grep -cE "error: '|terminated with signal" )
     echo "mutcheck: mutation BITTEN — $n failing test(s). The gate watched something."
     exit 0
 fi
