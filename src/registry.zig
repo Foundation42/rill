@@ -36,23 +36,38 @@ pub const Port = struct {
     /// argument made enforceable — the same list the browser tab-completes
     /// from. Streams bound to the port are not (cannot be) checked at parse.
     one_of: []const []const u8 = &.{},
+    /// Keyword-introduced (`cast … at s.gate.pos decay 2s`): in source text the
+    /// port is bound by writing its name before the value, never positionally.
+    /// The word is what disambiguates — `cast $alarm 30` cannot say whether 30
+    /// is the payload or the radius, and a grammar that guesses is worse than
+    /// one that asks. The colon-kwarg spelling (`at: …`) still works too.
+    kw: bool = false,
 };
 
 /// Static (non-stream) parameters an operator consumes at parse time:
 /// `set plane.x` takes a `path` target, `tap hp` a `word` label, `const 5`
 /// a `literal`. Statics are configuration, not subscriptions — a `path`
 /// static is a write target, never an upstream edge.
-pub const StaticKind = enum { path, word, literal };
+///
+/// `channel` is a field-channel name wearing its `$` sigil (`cast $alarm …`).
+/// It is deliberately NOT a `path`: a path static lands in the program's
+/// write list and the cycle check reads that list, but a field has no read
+/// side inside rill (readings come from a standpoint — a sensor), so a cast
+/// can never close a loop the checker would need to see.
+pub const StaticKind = enum { path, word, literal, channel };
 
 pub const StaticDecl = struct {
     name: []const u8,
     kind: StaticKind,
+    /// Keyword-introduced in source text (`radius 12`), same rule as Port.kw.
+    kw: bool = false,
 };
 
 pub const StaticVal = union(StaticKind) {
     path: []const u8,
     word: []const u8,
     literal: []const u8, // struple-encoded element
+    channel: []const u8, // `$`-sigil field-channel name, sigil included
 };
 
 /// Which outputs emitted this tick. Bit i = output port i.
@@ -108,6 +123,12 @@ pub const EvalCtx = struct {
     /// Effect channel: queue a plane write, flushed in order at end of tick.
     write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: plane.DeltaKind) EvalError!void,
     write_ctx: *anyopaque,
+    /// Field-cast channel (`cast`): queue a deposit into the caster's owned
+    /// space, flushed with the tick's other effects. Null when the host has no
+    /// field store — `cast` then fails loud at the node, counted, and §6's
+    /// machinery reports it.
+    cast_fn: ?*const fn (ctx: *anyopaque, c: plane.Cast) EvalError!void = null,
+    cast_ctx: ?*anyopaque = null,
     /// Debug/log bus for `tap`; null when the host wired none.
     log_fn: ?*const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void = null,
     log_ctx: ?*anyopaque = null,
@@ -143,6 +164,11 @@ pub const EvalCtx = struct {
 
     pub fn log(self: *EvalCtx, label: []const u8, val: []const u8) void {
         if (self.log_fn) |f| f(self.log_ctx, label, val);
+    }
+
+    pub fn cast(self: *EvalCtx, c: plane.Cast) EvalError!void {
+        const f = self.cast_fn orelse return error.PlaneWrite;
+        return f(self.cast_ctx.?, c);
     }
 
     pub fn setState(self: *EvalCtx, bytes: []const u8) !void {
@@ -258,6 +284,13 @@ pub const Registry = struct {
         var words = std.mem.splitScalar(u8, def.name, ' ');
         while (words.next()) |w| {
             if (isReservedWord(w)) return error.ReservedName;
+        }
+        // The four sigils name rows of the store (`@` instance, `^` archetype,
+        // `#` condition, `$` field), never operators. Refused at registration
+        // for the same reason reserved words are: a `$`-led op would be
+        // permanently shadowed by the channel grammar.
+        if (def.name.len > 0 and std.mem.indexOfScalar(u8, "@^#$", def.name[0]) != null) {
+            return error.ReservedName;
         }
         // Tails are a closed grammar (§3.11): last input only, string-typed,
         // never variadic — and every port before the tail is required, because

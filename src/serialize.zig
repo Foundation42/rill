@@ -78,6 +78,10 @@ pub fn dump(rt: *const eval.Runtime, gpa: std.mem.Allocator) ![]u8 {
                         try one.appendInt(2);
                         try one.appendBytes(v);
                     },
+                    .channel => |v| {
+                        try one.appendInt(3);
+                        try one.appendString(v);
+                    },
                 }
                 try st.appendArray(one.bytes());
             }
@@ -232,6 +236,7 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
                 0 => .{ .path = try asStrIn(a, payload) },
                 1 => .{ .word = try asStrIn(a, payload) },
                 2 => .{ .literal = try asBytesIn(a, payload) },
+                3 => .{ .channel = try asStrIn(a, payload) },
                 else => return error.Malformed,
             });
         }

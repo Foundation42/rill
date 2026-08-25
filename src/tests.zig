@@ -1624,7 +1624,7 @@ test "also: a branch ending in an effect never warns, value or no value" {
 
 test "also: the shapes that cannot mean anything are refused" {
     // A block with no branch passes the value along and does nothing.
-    try expectParseError("plane.hp | also { } | tap t", "empty 'also' block");
+    try expectParseError("plane.hp | also { } | tap t", "empty block");
     // Nothing to branch off.
     try expectParseError("also { set plane.a }", "needs a value to pass along");
     try expectParseError("plane.hp | also { also { set plane.a } }", "needs a value to pass along");
@@ -1632,7 +1632,7 @@ test "also: the shapes that cannot mean anything are refused" {
     // it could never rouse — the silent failure this syntax exists to avoid.
     try expectParseError("plane.hp | also { plane.other | set plane.a } | tap t", "begin with an operator");
     try expectParseError("plane.hp | also { 42 | set plane.a } | tap t", "begin with an operator");
-    try expectParseError("plane.hp | also { set plane.a", "unclosed 'also' block");
+    try expectParseError("plane.hp | also { set plane.a", "unclosed block");
     // `also` is the syntax's word, so it cannot also be a stream's.
     try expectParseError("plane.hp | mul 2 as also", "reserved");
 }
@@ -1996,6 +1996,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "window", .class = .reads }, // time
         .{ .name = "stats", .class = .pure },
         .{ .name = "delay", .class = .reads }, // time
+        .{ .name = "every", .class = .reads }, // time — the metronome; occurrence source, never skippable
         .{ .name = "arm", .class = .reads }, // state
         .{ .name = "disarm", .class = .reads }, // state
         .{ .name = "add", .class = .pure },
@@ -2020,6 +2021,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "set", .class = .effect },
         .{ .name = "notify", .class = .effect },
         .{ .name = "inc", .class = .effect },
+        .{ .name = "cast", .class = .effect }, // writes the world — through the field store, not a path
         .{ .name = "const", .class = .pure },
         .{ .name = "tap", .class = .reads }, // the one that gave the audit away
     };
@@ -2196,4 +2198,309 @@ test "set and notify are the same shape, and that is the point" {
     try testing.expectEqual(@as(usize, 0), set.outputs.len);
     // This is the slot the G2 hash moved for: unbound, but present.
     try testing.expect(set.inputs[1].optional);
+}
+
+// ---------------------------------------------------------------------------
+// rill-casts.md, beat 1 — the `$` sigil, `cast`, `every`, and the block rule
+// generalised. Grammar per the stamped note (cc-note-casts.md §1/§5); the
+// field store itself is the engine's (beat 2) — everything rill core promises
+// is pinned here: what was deposited, when, and what refuses to parse.
+// ---------------------------------------------------------------------------
+
+test "cast: the stamped grammar parses, and every piece lands where declared" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.gate.enemies | rose_above 0 | cast $alarm 1.0 radius 30 at plane.gate.pos decay 2s");
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "cast1").?);
+    try testing.expectEqualStrings("$alarm", n.statics[0].channel);
+    try testing.expectEqual(@as(f64, 30), types.asNumber(n.statics[1].literal).?);
+    // value port bound to the constant, `at` a live plane reference, `decay`
+    // a duration — and port 0 is the piped rousing.
+    try testing.expectEqual(@as(f64, 1.0), types.asNumber(prog.slot(n.inputs[1]).source.literal).?);
+    try testing.expectEqualStrings("plane.gate.pos", prog.slot(n.inputs[2]).source.plane);
+    const d = types.asDuration(prog.slot(n.inputs[3]).source.literal).?;
+    try testing.expectEqual(false, d.frames);
+    try testing.expectEqual(@as(u64, 2_000_000_000), d.count);
+    // A cast is not a path write: nothing for the write list, and therefore
+    // nothing the cycle check could ever trip over — by construction, not by
+    // exemption. That is what `.channel`-not-`.path` bought.
+    try testing.expectEqual(@as(usize, 0), prog.writes.items.len);
+}
+
+test "cast: the colon-kwarg spelling binds the same ports" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.lvl | cast $blight radius: 12 at: plane.origin");
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "cast1").?);
+    try testing.expectEqual(@as(f64, 12), types.asNumber(n.statics[1].literal).?);
+    try testing.expectEqualStrings("plane.origin", prog.slot(n.inputs[2]).source.plane);
+}
+
+test "cast: what refuses to parse, refuses loudly" {
+    // The keyword is what disambiguates; nothing keyword-declared binds
+    // positionally, and nothing positional slips into `at`.
+    try expectParseError("plane.x | cast $f 1 at plane.p", "needs 'radius <value>'");
+    try expectParseError("plane.x | cast $f 1 radius 2", "'at' of 'cast' is not bound");
+    try expectParseError("plane.x | cast $f 1 radius", "expects a value after 'radius'");
+    try expectParseError("plane.x | cast $f 1 5 radius 2 at plane.p", "too many arguments");
+    // A channel wears its sigil, always.
+    try expectParseError("plane.x | cast alarm 1 radius 2 at plane.p", "'$'-sigil");
+    // A keyword typo never binds positionally — the missing keyword is what
+    // gets named, which is where the eye needs to land.
+    try expectParseError("plane.x | cast $f 1 radiu 2 at plane.p", "needs 'radius <value>'");
+    // No bare channel read in v1: a field is read at a standpoint.
+    try expectParseError("$alarm | mul 2 | set plane.x", "standpoint");
+    // The sigil belongs to channels alone.
+    try expectParseError("plane.x | mul 2 as $x", "cannot wear");
+    try expectParseError("use plane.a as $s", "cannot wear");
+    try expectParseError("def $d(x) = x | mul 2", "cannot wear");
+}
+
+test "cast: a channel name is a legal plane-path segment" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.sensors.gate.$alarm | rose_above 0.5 | set plane.ui.alert");
+    defer prog.deinit();
+    try testing.expectEqualStrings("plane.sensors.gate.$alarm", prog.subs.items[0].path);
+}
+
+test "cast: piped, it deposits what flows — and only when the rousing flows" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.lvl | cast $blight radius 12 at plane.origin", .{
+        .{ "plane.lvl", @as(f64, 0.8) },
+        .{ "plane.origin", @as(i64, 7) },
+    });
+    defer fx.deinit();
+    // Tick 0: the seeded value is fresh, so the caster deposits once.
+    try testing.expectEqual(@as(usize, 1), fx.mock.casts.items.len);
+    const c0 = fx.mock.casts.items[0];
+    try testing.expectEqualStrings("$blight", c0.channel);
+    try testing.expectEqual(@as(f64, 0.8), c0.amplitude);
+    try testing.expectEqual(@as(f64, 12), c0.radius);
+    try testing.expect(c0.decay == null);
+    try testing.expectEqual(@as(f64, 7), types.asNumber(c0.pos).?);
+
+    // A change in `at` ALONE is not a cast (§3.8: the payload says what, the
+    // rousing says when). Mutation that bites: rouse on any fresh input and
+    // this counts 2.
+    var pk = struple.Packer.init(testing.allocator);
+    defer pk.deinit();
+    try pk.appendInt(9);
+    try fx.rt.feed(.{ .path = "plane.origin", .value = pk.bytes() });
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 1), fx.mock.casts.items.len);
+
+    // …but the moved position IS what the next rousing casts at: the dot-form
+    // reference is live, a moving caster re-aims without re-rousing.
+    var pv = struple.Packer.init(testing.allocator);
+    defer pv.deinit();
+    try pv.appendF64(0.5);
+    try fx.rt.feed(.{ .path = "plane.lvl", .value = pv.bytes() });
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 2), fx.mock.casts.items.len);
+    try testing.expectEqual(@as(f64, 0.5), fx.mock.casts.items[1].amplitude);
+    try testing.expectEqual(@as(f64, 9), types.asNumber(fx.mock.casts.items[1].pos).?);
+}
+
+test "cast: unpiped, the intensity is both rousing and payload — one deposit, at tick 0" {
+    // The documented surprise (note §1): a bare cast deposits once and leaks
+    // away. A standing caster needs `every` in front of it.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "cast $torchlight 0.8 radius 12 at plane.brazier decay 4s", .{
+        .{ "plane.brazier", @as(i64, 3) },
+    });
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 1), fx.mock.casts.items.len);
+    try testing.expectEqual(@as(f64, 0.8), fx.mock.casts.items[0].amplitude);
+    const d = fx.mock.casts.items[0].decay.?;
+    try testing.expectEqual(@as(u64, 4_000_000_000), d.count);
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 1), fx.mock.casts.items.len);
+}
+
+test "cast: two rousings in one tick are two deposits — occurrences never coalesce" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.horn | cast $alarm 1.0 radius 30 at plane.gate", .{
+        .{ "plane.gate", @as(i64, 1) },
+    });
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), fx.mock.casts.items.len); // no horn yet
+    var pk = struple.Packer.init(testing.allocator);
+    defer pk.deinit();
+    try pk.appendBool(true);
+    try fx.rt.feed(.{ .path = "plane.horn", .value = pk.bytes(), .kind = .occurrence });
+    try fx.rt.feed(.{ .path = "plane.horn", .value = pk.bytes(), .kind = .occurrence });
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 2), fx.mock.casts.items.len);
+    for (fx.mock.casts.items) |c| try testing.expectEqual(@as(f64, 1.0), c.amplitude);
+}
+
+test "cast: a host with no field store fails the node, counted — never a silent drop" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.p", @as(i64, 1));
+    var prog = try parseOk(testing.allocator, &reg, "cast $f 1 radius 2 at plane.p");
+    defer prog.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlaneWithoutFields(), .{});
+    defer rt.deinit();
+    try testing.expectEqual(@as(usize, 0), mock.casts.items.len);
+    try testing.expectEqual(@as(u64, 1), rt.error_count[nodeIdOf(&prog, "cast1").?]);
+}
+
+test "every: fires at mount, then on cadence — and a gap earns ONE firing, not a burst" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "every 2f | inc plane.n 1", .{});
+    defer fx.deinit();
+    const n = struct {
+        fn of(f: *Fixture) f64 {
+            return types.asNumber(f.mock.store.get("plane.n").?).?;
+        }
+    }.of;
+    try testing.expectEqual(@as(f64, 1), n(&fx)); // leading edge at mount
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(f64, 1), n(&fx));
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(f64, 2), n(&fx));
+    try fx.rt.tick(.{ .frame = 3, .time_ns = 3 });
+    try testing.expectEqual(@as(f64, 2), n(&fx));
+    try fx.rt.tick(.{ .frame = 4, .time_ns = 4 });
+    try testing.expectEqual(@as(f64, 3), n(&fx));
+    // The pause: cadence anchors to the last actual firing. A brazier fed by
+    // catch-up bursts would spike ABOVE steady state after every hitch —
+    // deposits the pause never earned. due-plus-period would fire at 11 too;
+    // this pins that it does not.
+    try fx.rt.tick(.{ .frame = 10, .time_ns = 10 });
+    try testing.expectEqual(@as(f64, 4), n(&fx));
+    try fx.rt.tick(.{ .frame = 11, .time_ns = 11 });
+    try testing.expectEqual(@as(f64, 4), n(&fx));
+    try fx.rt.tick(.{ .frame = 12, .time_ns = 12 });
+    try testing.expectEqual(@as(f64, 5), n(&fx));
+}
+
+test "every: the ns lane keeps the same contract" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "every 5s | inc plane.n 1", .{});
+    defer fx.deinit();
+    try tickAt(&fx, 4_999 * ms);
+    try testing.expectEqual(@as(f64, 1), types.asNumber(fx.mock.store.get("plane.n").?).?);
+    try tickAt(&fx, 5_000 * ms);
+    try testing.expectEqual(@as(f64, 2), types.asNumber(fx.mock.store.get("plane.n").?).?);
+}
+
+test "every: a zero period is a storm wearing a duration — refused at the node" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "every 0s | inc plane.n 1", .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(u64, 1), fx.rt.error_count[nodeIdOf(&fx.prog, "every1").?]);
+    try testing.expect(fx.mock.store.get("plane.n") == null);
+}
+
+test "block rule: `every 1f { … }` is the pipe form — same wiring, same behaviour" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "every 1f { inc plane.n 1 }", .{});
+    defer fx.deinit();
+    // Structure: the branch leaves from every's own output slot.
+    const src = fx.prog.node(nodeIdOf(&fx.prog, "every1").?).outputs[0];
+    try testing.expectEqual(src, fx.prog.slot(fx.prog.node(nodeIdOf(&fx.prog, "inc1").?).inputs[0]).source.wire);
+    // Behaviour: the standing-caster idiom stands.
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(f64, 3), types.asNumber(fx.mock.store.get("plane.n").?).?);
+}
+
+test "block rule: the brazier — every driving a standing cast, three lines of no Zig" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "every 1f { cast $torchlight 0.8 radius 12 at plane.brazier decay 4s }", .{
+        .{ "plane.brazier", @as(i64, 3) },
+    });
+    defer fx.deinit();
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 3), fx.mock.casts.items.len);
+    for (fx.mock.casts.items) |c| {
+        try testing.expectEqualStrings("$torchlight", c.channel);
+        try testing.expectEqual(@as(f64, 0.8), c.amplitude);
+    }
+}
+
+test "block rule: any source takes a block, and branches are branches" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.hp {
+        \\    set plane.a
+        \\    set plane.b
+        \\}
+    );
+    defer prog.deinit();
+    const s1 = prog.slot(prog.node(nodeIdOf(&prog, "set1").?).inputs[0]).source;
+    const s2 = prog.slot(prog.node(nodeIdOf(&prog, "set2").?).inputs[0]).source;
+    try testing.expectEqualStrings("plane.hp", s1.plane);
+    try testing.expectEqualStrings("plane.hp", s2.plane);
+}
+
+test "block rule: the also guards carry over, and mid-chain blocks name their spelling" {
+    // A block is a fan-out, not a body — every also-rule holds at the head.
+    try expectParseError("every 1f { }", "empty block");
+    try expectParseError("every 1f { tap t as x }", "no name escapes");
+    try expectParseError("every 1f { plane.x | set plane.a }", "begin with an operator");
+    // Mid-chain, the word is `also` — one spelling per position.
+    try expectParseError("plane.x | mul 2 { set plane.a }", "ride 'also");
+}
+
+test "block rule: a serialized caster survives the round trip, cadence intact" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.brazier", @as(i64, 3));
+    var prog = try parseOk(testing.allocator, &reg,
+        "every 2f { cast $torchlight 0.8 radius 12 at plane.brazier }");
+    defer prog.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    const d1 = try rill.serialize.dump(&rt, testing.allocator);
+    defer testing.allocator.free(d1);
+
+    var prog2 = try rill.serialize.loadProgram(testing.allocator, &reg, d1);
+    defer prog2.deinit();
+    try testing.expectEqualStrings("$torchlight", prog2.node(nodeIdOf(&prog2, "cast1").?).statics[0].channel);
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    try mock2.putValue("plane.brazier", @as(i64, 3));
+    var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
+    defer rt2.deinit();
+    try rill.serialize.restoreState(&rt2, d1);
+    const d2 = try rill.serialize.dump(&rt2, testing.allocator);
+    defer testing.allocator.free(d2);
+    try testing.expectEqualSlices(u8, d1, d2); // G8 holds with the new static kind
+
+    // The restored metronome still knows when it is due: mount fired at
+    // frame 0, so frame 2 is the next firing — restore does not re-fire
+    // tick 0 (a dump is a live snapshot, not a birth certificate).
+    try rt2.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 0), mock2.casts.items.len);
+    try rt2.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 1), mock2.casts.items.len);
+}
+
+test "cast: in an also branch it is an effect — no discard warning" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        "plane.hp | also { cast $dread 0.5 radius 8 at plane.here } | tap seen");
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
 }

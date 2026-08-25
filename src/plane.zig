@@ -31,6 +31,12 @@ pub const Plane = struct {
     /// not sum accumulate writes itself — the queue's promise is one batch in
     /// evaluation order, and two `+1`s applied in order are the same `+2`.
     writeFn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void,
+    /// Field casts (rill-casts.md). Not a `writeFn` kind on purpose: a cast is
+    /// not addressed at a path — it is a deposit into the CASTER's owned
+    /// space, keyed by who is casting, and the receiver-side sum is the only
+    /// read surface. Null = the host has no field store; a mounted `cast`
+    /// then fails loud at the node instead of writing into nowhere.
+    castFn: ?*const fn (ctx: *anyopaque, c: Cast) PlaneError!void = null,
 
     pub fn subscribe(self: Plane, path: []const u8, sub: SubId) PlaneError!void {
         return self.subscribeFn(self.ctx, path, sub);
@@ -44,6 +50,32 @@ pub const Plane = struct {
     pub fn write(self: Plane, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void {
         return self.writeFn(self.ctx, path, val, kind);
     }
+    pub fn cast(self: Plane, c: Cast) PlaneError!void {
+        const f = self.castFn orelse return error.Denied;
+        return f(self.ctx, c);
+    }
+};
+
+/// One field deposit crossing the plane boundary (rill-casts.md §2/§4.1).
+/// The caster's owned space is a bag of these; the host applies its channel's
+/// physics (kernel, clamp, occlusion) and leaks each deposit in fed time.
+/// Anonymity is structural: no caster identity rides here — the host keys the
+/// bag by which program's queue delivered it, and identity reaches a receiver
+/// only if the caster put it in a payload somewhere else.
+pub const Cast = struct {
+    /// Channel name, `$` sigil included (`$alarm`) — the sigil is the name's
+    /// first character on every surface, not surface syntax to be stripped.
+    channel: []const u8,
+    amplitude: f64, // signed: a relic casts negative blight
+    /// Where the deposit lands — struple-encoded, decoded by the host (the
+    /// engine expects a position; a mock just records it). Borrowed for the
+    /// call.
+    pos: []const u8,
+    radius: f64,
+    /// Time constant for this deposit's leak; null = the channel's declared
+    /// default. Per-deposit runtime physics (the §5 reversal): a decay RILL
+    /// would read the path it writes, and §4.4 refuses exactly that.
+    decay: ?types.Duration,
 };
 
 /// A delta the host pushes into the evaluator between ticks. `seq` is the
@@ -93,8 +125,13 @@ pub const MockPlane = struct {
     store: std.StringArrayHashMapUnmanaged([]u8) = .empty,
     subs: std.AutoArrayHashMapUnmanaged(SubId, []u8) = .empty,
     writes: std.ArrayListUnmanaged(Write) = .empty,
+    /// Field deposits, in flush order — the mock's whole field store is this
+    /// log. Summing kernels is the engine's job (beat 2); tests here assert
+    /// what was deposited, which is everything rill core promises.
+    casts: std.ArrayListUnmanaged(CastRec) = .empty,
 
     pub const Write = struct { path: []u8, value: []u8, kind: DeltaKind = .value };
+    pub const CastRec = struct { channel: []u8, amplitude: f64, pos: []u8, radius: f64, decay: ?types.Duration };
 
     pub fn init(gpa: std.mem.Allocator) MockPlane {
         return .{ .gpa = gpa };
@@ -114,6 +151,11 @@ pub const MockPlane = struct {
             self.gpa.free(w.value);
         }
         self.writes.deinit(self.gpa);
+        for (self.casts.items) |c| {
+            self.gpa.free(c.channel);
+            self.gpa.free(c.pos);
+        }
+        self.casts.deinit(self.gpa);
     }
 
     /// Seed or update a stored value (does not generate a delta — tests feed
@@ -143,7 +185,16 @@ pub const MockPlane = struct {
             .unsubscribeFn = unsubscribeThunk,
             .readFn = readThunk,
             .writeFn = writeThunk,
+            .castFn = castThunk,
         };
+    }
+
+    /// The same plane with no field store — for pinning that `cast` fails
+    /// loud (counted at the node) rather than writing into nowhere.
+    pub fn asPlaneWithoutFields(self: *MockPlane) Plane {
+        var p = self.asPlane();
+        p.castFn = null;
+        return p;
     }
 
     fn subscribeThunk(ctx: *anyopaque, path: []const u8, sub: SubId) PlaneError!void {
@@ -174,6 +225,21 @@ pub const MockPlane = struct {
             error.OutOfMemory => error.OutOfMemory,
             else => error.Backend, // a corrupt store value is the backend's fault
         };
+    }
+
+    fn castThunk(ctx: *anyopaque, c: Cast) PlaneError!void {
+        const self: *MockPlane = @ptrCast(@alignCast(ctx));
+        const channel = try self.gpa.dupe(u8, c.channel);
+        errdefer self.gpa.free(channel);
+        const pos = try self.gpa.dupe(u8, c.pos);
+        errdefer self.gpa.free(pos);
+        try self.casts.append(self.gpa, .{
+            .channel = channel,
+            .amplitude = c.amplitude,
+            .pos = pos,
+            .radius = c.radius,
+            .decay = c.decay,
+        });
     }
 
     fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void {

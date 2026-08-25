@@ -244,6 +244,40 @@ default the amount); a change in `by` alone is not a rousing; and the host refus
 accumulate write to a mailbox path, because append and accumulate are different kinds and
 a path is one kind.
 
+**`cast <$channel> [value] radius <r> at <pos> [decay <d>]`** (v0.3, grammar stamped
+2026-08-25 — rill-casts.md) deposits into a field channel: `inc`'s kin in the accumulate
+family, wearing the sink shape unchanged. Port 0 is the rousing; a bound `value` is the
+payload; channel and radius are statics. `at` and `decay` are **keyword ports** — the word
+introduces the value (`radius 12 at s.gate.pos decay 2s`), because positionally
+`cast $alarm 30` cannot say whether 30 is the payload or the radius, and a grammar that
+guesses is worse than one that asks. Keyword-declared arguments never bind positionally;
+the colon spelling (`at: …`) works too.
+
+```
+every 1f { cast $torchlight 0.8 radius 12 at s.brazier.pos decay 4s }
+
+s.gate.enemy_count | rose_above 0
+  | also { cast $alarm 1.0 radius 30 at s.gate.pos decay 2s }
+  | also { cast $alarm 1.0 radius 30 at s.tower.pos decay 2s }
+```
+
+`at` takes a value bound or live — dot-form is a live reference, so a moving caster's
+position updates without re-rousing (a change in `at` alone is not a cast, the same §3.8
+rule every sink port obeys). Casting in several places from one rousing is two `also`
+branches, not a list argument. `decay` is this deposit's leak time-constant, defaulting
+from the channel declaration. **Unpiped, the intensity binds port 0 and is both rousing
+and payload, so a bare `cast $torchlight 0.8 radius 12 at …` deposits once, at tick 0,
+then leaks away** — a standing caster puts a per-tick rousing in front (`every 1f`, §3.12).
+This will surprise the first person who writes a brazier, which is why it is said here.
+
+A cast is an effect but **not a path write**: the channel static never enters the write
+list, and correctly so — a field has no read side inside rill (readings come from a
+standpoint, rill-casts.md §9), so there is no loop for the cycle check to see. The deposit
+crosses the plane boundary on its own vtable arm (`castFn`), commits through the host's
+main-thread drain for deterministic ordering, and per rill-casts.md §11 **stays out of the
+log** — fields replay by re-derivation. `to #tag` (coupling) parses when the tag store
+exists, not before.
+
 ### 3.9 `def` — subgraph operators
 
 ```
@@ -328,6 +362,17 @@ three actual frames, not a faked 50 ms.
   side effect of the gluing rule, ruled acceptable: `2m` was previously two tokens (`2`,
   local `m`) — an accident of lexing, not a promised spelling. Spaced forms still work.
 
+**`every <period>`** (v0.3, stamped 2026-08-25 — rill-casts.md note §5) is the metronome:
+a wheel-driven occurrence **source**, the first operator that emits without being roused.
+It takes no stream input, consumes fed time like the rest of this section, and is
+unskippable (it is an occurrence-emitter). It fires at mount — leading edge, like
+`sample` — then re-arms one period ahead of **each actual firing**: after a gap in fed
+time it fires once and resumes, never bursting to "catch up", because a brazier fed by
+`every 1f` should return to steady state after a pause rather than spike above it with
+deposits the pause never earned. Replay feeds the same time sequence, so determinism is
+untouched either way; this rule is the honest physics. A zero period is refused at the
+node — a metronome with no interval is a storm wearing a duration.
+
 ### 3.13 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:
@@ -395,6 +440,31 @@ trigger the warning" states both halves of the contract in one English word. It 
 reserved word, and the registry refuses to register an operator named with one, because
 the parser recognises `also` before it ever asks `find`: a host row named `also` would
 otherwise register cleanly and then be permanently unreachable.
+
+**The block rule, generalised (v0.3, stamped 2026-08-25 — rill-casts.md note §5).** A
+statement head followed by `{ … }` is the same fan-out with the head as every branch's
+source — `also` was always "a name with a block whose implicit source is that name", and
+the same desugar now applies to any source:
+
+```
+every 1f { S }        ⇒        every 1f as ⟨anon⟩
+                               ⟨anon⟩ | S
+```
+
+Multi-statement blocks are more branches off the same slot; every `also` rule above
+carries over unchanged (operator heads, no `as` escapes, writes join the write list, the
+discard warning, the tail-eats-brace fix). The explicit pipe form `every 1f | cast …`
+stays legal — the block is sugar, the pipe is the truth, exactly as with `also`. **Head
+position only**: mid-chain side branches keep the `also` spelling, one spelling per
+position, and the parser names the fix when a mid-chain `{` appears. Disambiguation from
+record arguments is one token of lookahead — `{name:` opens a record, anything else is a
+block, and no block branch can begin `name:` because a branch head is an operator.
+
+And unlearn #6, for every reader (rill-casts.md §0): **a block is a fan-out, not a
+body.** `every 1f { … }` is the most loop-shaped thing rill has, and statements in it are
+branches — no order between them, each ends in a sink or produces a consumed value. If
+you need sequence inside an `every`, you wanted a pipeline, and the pipeline is the
+spelling.
 
 ---
 
@@ -629,10 +699,11 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 |---|---|
 | flow | `select`, `lerp`, `where`, `partition`, `changed`, `latch` |
 | events | `dropped_below`, `rose_above`, `edge` (value→occurrence adapters; each strict on its own comparison — see below) |
-| temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `arm`, `disarm` (§4.6; durations §3.12) |
+| temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `every`, `arm`, `disarm` (§4.6; durations §3.12) |
 | math | `add sub mul div min max clamp abs floor round`, comparators |
 | record | record construction `{…}`, projection `.field`, `merge` |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
+| field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |
 | util | `const`, `tap` (debug passthrough → log bus) |
 
 **Operator class (audited 2026-08-24).** Every core op declares `pure` / `reads` / `effect`,
@@ -641,7 +712,7 @@ and the load-bearing meaning of `reads` is **"not a writer, not skippable"** —
 The audit found three unskippable shapes besides host-world-readers: **arrival-dependent**
 (`where`, `partition`, `changed`, `latch` ask `in_fresh`, so identical bytes mean emit-or-be-
 silent), **stateful** (the threshold/edge adapters and the gates), and **fed time** (`sample`,
-`debounce`, `throttle`, `cooldown`, `window`, `delay` — ambient by §4.6, never an input).
+`debounce`, `throttle`, `cooldown`, `window`, `delay`, `every` — ambient by §4.6, never an input).
 Plus `tap`, whose entire purpose is the side effect and which was the `pure` that gave the
 audit away: a skipped tap is a debug instrument that lies. The classification is pinned by an
 exhaustive gate test, so a new op cannot inherit `pure` from the field default unnoticed.

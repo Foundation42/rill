@@ -427,6 +427,31 @@ fn evalDelay(ctx: *EvalCtx) EvalError!Emit {
     return emit;
 }
 
+/// `every <period>` — the metronome: a wheel-driven occurrence source, the
+/// first op that emits without being roused. Fires at mount (leading edge,
+/// like `sample`), then re-arms one period ahead of each firing. Cadence is
+/// anchored to the last actual firing, not to an ideal grid: after a gap in
+/// fed time it fires ONCE and resumes, rather than bursting to "catch up" —
+/// a brazier fed by `every 1f` should return to steady state after a pause,
+/// not spike above it delivering deposits the pause never earned. (Replay
+/// feeds the same time sequence, so either rule is deterministic; this one
+/// is the honest physics.) A zero period is refused: a metronome with no
+/// interval is a storm wearing a duration.
+fn evalEvery(ctx: *EvalCtx) EvalError!Emit {
+    const d = try dur(ctx, 0);
+    if (d.count == 0) return error.BadValue;
+    const now = ctx.nowOn(d.frames);
+    const st = readPendState(ctx); // until = next due; empty state reads 0 = due now
+    if (now >= st.until) {
+        const due = now + d.count;
+        try ctx.wake(deadlineAt(d, due));
+        try writePendState(ctx, d.frames, due, "");
+        return emitBool(ctx, true);
+    }
+    try ctx.wake(deadlineAt(d, st.until)); // stale wake: re-arm the truth
+    return Emit.none;
+}
+
 /// `arm` / `disarm` — the explicit latch gate. Pass occurrences while open;
 /// `off` closes, `on` opens (`arm` starts open, `disarm` starts closed).
 /// Controls apply before the passthrough, and `on` beats `off` on a
@@ -630,6 +655,36 @@ fn evalInc(ctx: *EvalCtx) EvalError!Emit {
     return Emit.none;
 }
 
+/// `cast <$channel> [value] radius <r> at <pos> [decay <d>]` — the field
+/// sink (rill-casts.md §6): deposit a scalar into the caster's owned space,
+/// absorbed by whatever is there to absorb it. The sink shape holds — port 0
+/// is the rousing, a bound `value` is the payload — and the two keyword ports
+/// follow the sink rule too: a change in `at` or `decay` alone is not a cast
+/// (a moving caster's position updates live without re-rousing). Unpiped, the
+/// intensity binds port 0 and is both rousing and payload, so a bare
+/// `cast $torchlight 0.8 radius 12 at …` deposits ONCE, at tick 0, then
+/// leaks away — a standing caster puts `every 1f` in front.
+fn evalCast(ctx: *EvalCtx) EvalError!Emit {
+    if (!ctx.in_fresh[0]) return Emit.none;
+    const amp_bytes = ctx.in[1] orelse try raw(ctx, 0);
+    const amplitude = types.asNumber(amp_bytes) orelse return error.BadValue;
+    const pos = try raw(ctx, 2); // `at` — required; a cast lands somewhere
+    const decay: ?types.Duration = if (ctx.in[3]) |b|
+        (types.asDuration(b) orelse return error.BadValue)
+    else
+        null;
+    const radius = types.asNumber(ctx.statics[1].literal) orelse return error.BadValue;
+    if (!(radius > 0)) return error.BadValue;
+    try ctx.cast(.{
+        .channel = ctx.statics[0].channel,
+        .amplitude = amplitude,
+        .pos = pos,
+        .radius = radius,
+        .decay = decay,
+    });
+    return Emit.none;
+}
+
 fn evalConst(ctx: *EvalCtx) EvalError!Emit {
     try splice(ctx, 0, ctx.statics[0].literal);
     return Emit.first;
@@ -662,6 +717,12 @@ const p = struct {
     fn opt(n: []const u8, ty: types.TypeId) registry.Port {
         return .{ .name = n, .ty = ty, .optional = true };
     }
+    fn kwIn(n: []const u8, ty: types.TypeId) registry.Port {
+        return .{ .name = n, .ty = ty, .kw = true };
+    }
+    fn kwOpt(n: []const u8, ty: types.TypeId) registry.Port {
+        return .{ .name = n, .ty = ty, .optional = true, .kw = true };
+    }
 };
 
 const CORE = [_]registry.OpDef{
@@ -684,6 +745,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "window", .inputs = &.{ p.in("in", Tag.any), p.in("span", Tag.duration) }, .outputs = &.{p.val("out", Tag.array)}, .help = "Rolling buffer over fed time, emitted as an array; entries age out on schedule even when the input is quiet.", .class = .reads, .eval = evalWindow },
     .{ .name = "stats", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.record)}, .help = "{max, mean, min, n, stddev} over a numeric array; empty in ⇒ zeros with n = 0.", .eval = evalStats },
     .{ .name = "delay", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.duration) }, .outputs = &.{p.occ("out", Tag.any)}, .help = "Emit each occurrence `by` later; same-tick maturities collapse to the newest.", .class = .reads, .eval = evalDelay },
+    .{ .name = "every", .inputs = &.{p.in("period", Tag.duration)}, .outputs = &.{p.occ("out", Tag.boolean)}, .help = "Occurrence source on a cadence: fires at mount, then once per period of fed time. `every 1f { cast … }` is the standing-caster idiom.", .class = .reads, .eval = evalEvery },
     // `in` is optional on the gates: controls must latch even before the
     // stream first flows — a required port would silently discard an `off`
     // that fired ahead of the first occurrence (the all-inputs guard skips
@@ -731,6 +793,13 @@ const CORE = [_]registry.OpDef{
     // writes, so the cycle check rightly refuses it — which leaves counters
     // inexpressible. A blind delta reads nothing and passes legitimately.
     .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },
+    // The field sink. `channel` is a `.channel` static, not a `.path`, so a
+    // cast never enters the write list — correctly: fields have no read side
+    // inside rill (readings come from a standpoint, §9), so there is no loop
+    // for the cycle check to miss. `at`/`decay` are keyword ports: the word
+    // disambiguates what a positional grammar cannot (`cast $alarm 30` —
+    // payload or radius?).
+    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true } }, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>]`; piped, the input is the rousing.", .class = .effect, .eval = evalCast },
     .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Emit a constant once at mount.", .eval = evalConst },
     .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .help = "Debug passthrough: log the value to the host's log bus.", .class = .reads, .eval = evalTap },
 };

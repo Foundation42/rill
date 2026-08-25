@@ -29,6 +29,17 @@
 //! - Operator lookup tries the two-word form first (`boolean subtract`), so a
 //!   host registry seeded from (verb, subop) command pairs maps one row to
 //!   one operator.
+//! - A statement head followed by `{ … }` is the SAME fan-out with the head
+//!   as the source — the `also` rule generalised to any source (`every 1f
+//!   { cast … }`, rill-casts.md note §5). A `{` in argument position opens a
+//!   record only when it opens like one (`{name:`); otherwise it ends the
+//!   argument list and belongs to the statement. Head position only:
+//!   mid-chain side branches keep the `also` spelling.
+//! - `$name` is a field-channel name, sigil included, one token. It appears
+//!   as `cast`'s channel static and inside plane-path segments
+//!   (`sensors.gate.$alarm`); a BARE `$name` stream is refused with the v1
+//!   ruling in the message (fields are read at a standpoint), and no local
+//!   name, alias, def, port, or operator may wear the sigil.
 //! - `also { … }` is fan-out spelled inline, and it is **pure desugaring**:
 //!   `x | also { S } | rest` is `x as ⟨anon⟩` + `⟨anon⟩ | S` + `⟨anon⟩ | rest`.
 //!   The parser does not even need the anonymous name — the in-flowing value
@@ -156,7 +167,15 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         // `-` opens a name when it does NOT open a negative number — the
         // console's unbind sentinel (`light arche l1 -`) is a word, and
         // rill has no infix minus (subtraction is the `sub` word).
-        if (isNameStart(c) or (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1])))) {
+        // `$` opens a name when a name follows: `$alarm` is one token, a
+        // field-channel name wearing its sigil (rill-casts.md §3). The sigil
+        // is name-LEAD only — a lone `$` stays an inert raw token. (`#` can
+        // never join it this way: `#` opens a comment, a collision the tag
+        // beat will have to rule on before `#garrison` is sayable in rill.)
+        if (isNameStart(c) or
+            (c == '$' and i + 1 < src.len and isNameStart(src[i + 1])) or
+            (c == '-' and (i + 1 >= src.len or !std.ascii.isDigit(src[i + 1]))))
+        {
             const start = i;
             i += 1;
             col += 1;
@@ -416,6 +435,17 @@ const Parser = struct {
         return i < self.toks.len and self.toks[i].kind == .pipe;
     }
 
+    /// At a `{` in argument position: does it open a RECORD (`{name:`) rather
+    /// than a fan-out block? Lookahead only — records must open with a field,
+    /// and no block branch can start `name:` (a branch head is an operator),
+    /// so one token pair decides.
+    fn braceOpensRecord(self: *Parser) bool {
+        var i = self.pos + 1; // past the '{'
+        while (i < self.toks.len and self.toks[i].kind == .newline) : (i += 1) {}
+        return i + 1 < self.toks.len and
+            self.toks[i].kind == .name and self.toks[i + 1].kind == .colon;
+    }
+
     fn autoName(self: *Parser, op_name: []const u8) ![]const u8 {
         const gop = try self.op_counters.getOrPut(self.a(), op_name);
         if (!gop.found_existing) gop.value_ptr.* = 0;
@@ -461,6 +491,7 @@ const Parser = struct {
         const def_tok = self.next(); // "def"
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected operator name after 'def'", .{});
+        if (name_tok.text[0] == '$') return self.fail(name_tok, "'{s}': the '$' sigil names a field channel — an operator cannot wear it", .{name_tok.text});
         if (self.defs.contains(name_tok.text) or self.reg.find(name_tok.text) != null) {
             return self.fail(name_tok, "'{s}' is already defined", .{name_tok.text});
         }
@@ -471,6 +502,7 @@ const Parser = struct {
             const pt = self.next();
             if (pt.kind == .rparen) break;
             if (pt.kind != .name) return self.fail(pt, "expected port name in def signature", .{});
+            if (pt.text[0] == '$') return self.fail(pt, "'{s}': the '$' sigil names a field channel — a port cannot wear it", .{pt.text});
             var ty: types.TypeId = types.Tag.any;
             if (self.peek().kind == .colon) {
                 _ = self.next();
@@ -570,6 +602,7 @@ const Parser = struct {
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected alias name after 'as'", .{});
         if (isReservedWord(name_tok.text)) return self.fail(name_tok, "'{s}' is reserved", .{name_tok.text});
+        if (name_tok.text[0] == '$') return self.fail(name_tok, "'{s}': the '$' sigil names a field channel — an alias cannot wear it", .{name_tok.text});
         if (self.aliases.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' is already bound", .{name_tok.text});
         if (self.program_target.names.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' collides with a stream name", .{name_tok.text});
         if (self.reg.find(name_tok.text) != null or self.defs.contains(name_tok.text)) {
@@ -582,15 +615,30 @@ const Parser = struct {
         try self.aliases.put(self.a(), try self.a().dupe(u8, name_tok.text), path.items);
     }
 
-    /// chain := expr ( "|" (opcall | alsoblock) )* ( "as" namelist )?
+    /// chain := expr block* ( "|" (opcall | alsoblock) )* ( "as" namelist )?
+    ///
+    /// `block*` is the generalised `also` rule (rill-casts.md note §5): a
+    /// statement head followed by `{ … }` fans out into the block's branches,
+    /// with the head as every branch's source — `every 1f { S }` desugars to
+    /// `every 1f as ⟨anon⟩` + `⟨anon⟩ | S`, except no anonymous name is ever
+    /// built (the head's Source is handed to each branch directly, same trick
+    /// as `also`). Head position only: mid-chain side branches ride
+    /// `also { … }`, one spelling per position.
     fn parseStatement(self: *Parser, target: *Target) ParseError!OpResult {
+        const head_tok = self.peek();
         var current = try self.parseExpr(target);
+        while (self.peek().kind == .lbrace) {
+            if (current.outputs.len == 0) {
+                return self.fail(self.peek(), "nothing to fan out — the statement head has no output", .{});
+            }
+            try self.parseAlsoBlock(target, current.outputs[0], head_tok);
+        }
         try self.parseChain(target, &current);
 
         // as namelist
         if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "as")) {
             if (self.block_depth > 0) {
-                return self.fail(self.peek(), "no name escapes an 'also' block — bind the stream before the block, or end the branch with a sink", .{});
+                return self.fail(self.peek(), "no name escapes a block — bind the stream before the block, or end the branch with a sink", .{});
             }
             _ = self.next();
             var bound_names = std.ArrayListUnmanaged([]const u8).empty;
@@ -598,6 +646,7 @@ const Parser = struct {
                 const nt = self.next();
                 if (nt.kind != .name) return self.fail(nt, "expected name after 'as'", .{});
                 if (isReservedWord(nt.text)) return self.fail(nt, "'{s}' is reserved", .{nt.text});
+                if (nt.text[0] == '$') return self.fail(nt, "'{s}': the '$' sigil names a field channel — a stream cannot wear it", .{nt.text});
                 if (target.names.contains(nt.text)) return self.fail(nt, "name '{s}' is already bound (names are single-assignment)", .{nt.text});
                 if (self.aliases.contains(nt.text)) return self.fail(nt, "name '{s}' shadows a use alias", .{nt.text});
                 if (self.reg.find(nt.text) != null or self.defs.contains(nt.text)) {
@@ -621,6 +670,9 @@ const Parser = struct {
         if (end.kind != .newline and end.kind != .eof and
             !(end.kind == .rbrace and self.block_depth > 0))
         {
+            if (end.kind == .lbrace) {
+                return self.fail(end, "a '{{…}}' block hangs off the statement head; mid-chain side branches ride 'also {{ … }}' (a record argument is '{{field: value}}')", .{});
+            }
             return self.fail(end, "unexpected '{s}' — expected end of statement", .{end.text});
         }
         return current;
@@ -674,13 +726,13 @@ const Parser = struct {
             self.skipNewlines();
             const t = self.peek();
             if (t.kind == .rbrace) break;
-            if (t.kind == .eof) return self.fail(also_tok, "unclosed 'also' block — expected '}}'", .{});
+            if (t.kind == .eof) return self.fail(also_tok, "unclosed block — expected '}}'", .{});
             try self.parseBranch(target, src);
             branches += 1;
         }
         _ = self.next(); // }
         if (branches == 0) {
-            return self.fail(also_tok, "empty 'also' block — it would pass the value along and do nothing", .{});
+            return self.fail(also_tok, "empty block — it would pass the value along and do nothing", .{});
         }
     }
 
@@ -708,14 +760,14 @@ const Parser = struct {
             else => true,
         };
         if (is_expr_head) {
-            return self.fail(head, "an 'also' block's branches begin with an operator — the in-flowing value is the block's source", .{});
+            return self.fail(head, "a block's branches begin with an operator — the in-flowing value is the block's source", .{});
         }
         _ = self.next();
         var current = try self.parseOpcall(target, head, src, false);
         try self.parseChain(target, &current);
 
         if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "as")) {
-            return self.fail(self.peek(), "no name escapes an 'also' block — bind the stream before the block, or end the branch with a sink", .{});
+            return self.fail(self.peek(), "no name escapes a block — bind the stream before the block, or end the branch with a sink", .{});
         }
         const end = self.peek();
         if (end.kind != .newline and end.kind != .eof and end.kind != .rbrace) {
@@ -729,7 +781,7 @@ const Parser = struct {
         // is legal and occasionally meant — so it warns and parses on.
         if (current.outputs.len > 0) {
             const writes = if (current.node) |n| self.reg.get(target.nodes.items[n].op).class.writes() else false;
-            if (!writes) try self.warn(head, "also-block discards a value; end with a sink or drop the tail", .{});
+            if (!writes) try self.warn(head, "block discards a value; end with a sink or drop the tail", .{});
         }
     }
 
@@ -768,6 +820,13 @@ const Parser = struct {
                 if (self.aliases.contains(t.text)) {
                     const arg = try self.parsePlaneRef(target);
                     return .{ .outputs = try self.oneSource(arg.source) };
+                }
+                if (t.text[0] == '$') {
+                    // No bare channel read in v1 (rill-casts.md note §3): a
+                    // field is read at a STANDPOINT — a sensor's published
+                    // reading — never as a free-floating stream. This also
+                    // keeps the cycle checker out of the field store.
+                    return self.fail(t, "'{s}' is a field channel — read it at a standpoint (a sensor's published reading), or deposit with 'cast {s} …'", .{ t.text, t.text });
                 }
                 const op_tok = self.next();
                 return self.parseOpcall(target, op_tok, null, false);
@@ -1019,14 +1078,54 @@ const Parser = struct {
             try self.parseArgs(target, &args);
         }
 
-        // Statics are consumed from the leading positional args, in
-        // declaration order — they are configuration, not streams.
+        // Keyword pairing (rill-casts.md note §1): where the op declares
+        // keyword-introduced statics/ports, a bare word naming one binds the
+        // NEXT argument to it — `radius 12 at s.gate.pos decay 2s`. Scoped to
+        // declaring ops only: made global, `add a b` would read as a=b. The
+        // colon spelling (`at: …`) rides the existing kwarg path unchanged.
+        if (opHasKeywords(def)) {
+            var j: usize = 0;
+            while (j < args.items.len) {
+                const ag = args.items[j];
+                if (ag.kind == .word and ag.kw.len == 0 and keywordOf(def, ag.text) != null) {
+                    if (j + 1 >= args.items.len) {
+                        return self.fail(ag.tok, "'{s}' expects a value after '{s}'", .{ op_name, ag.text });
+                    }
+                    if (args.items[j + 1].kw.len > 0) {
+                        return self.fail(ag.tok, "'{s}': '{s}' has no value — the next argument is already '{s}'s", .{ op_name, ag.text, args.items[j + 1].kw });
+                    }
+                    args.items[j + 1].kw = ag.text;
+                    _ = args.orderedRemove(j);
+                    j += 1; // past the value just claimed
+                } else j += 1;
+            }
+        }
+
+        // Statics are configuration, not streams: keyword-declared ones bind
+        // by name, the rest are consumed from the leading positional args in
+        // declaration order.
         var statics = try self.a().alloc(registry.StaticVal, def.statics.len);
-        var arg_idx: usize = 0;
+        const consumed = try self.a().alloc(bool, args.items.len);
+        @memset(consumed, false);
+        var pos_cursor: usize = 0;
         for (def.statics, 0..) |sd, i| {
-            if (arg_idx >= args.items.len) return self.fail(op_tok, "'{s}' needs a {s} argument '{s}'", .{ op_name, @tagName(sd.kind), sd.name });
-            const arg = args.items[arg_idx];
-            arg_idx += 1;
+            var picked: ?Arg = null;
+            if (sd.kw) {
+                for (args.items, 0..) |ag, j| {
+                    if (!consumed[j] and std.mem.eql(u8, ag.kw, sd.name)) {
+                        picked = ag;
+                        consumed[j] = true;
+                        break;
+                    }
+                }
+                if (picked == null) return self.fail(op_tok, "'{s}' needs '{s} <value>'", .{ op_name, sd.name });
+            } else {
+                while (pos_cursor < args.items.len and (consumed[pos_cursor] or args.items[pos_cursor].kw.len > 0)) pos_cursor += 1;
+                if (pos_cursor >= args.items.len) return self.fail(op_tok, "'{s}' needs a {s} argument '{s}'", .{ op_name, @tagName(sd.kind), sd.name });
+                picked = args.items[pos_cursor];
+                consumed[pos_cursor] = true;
+            }
+            const arg = picked.?;
             statics[i] = switch (sd.kind) {
                 .path => blk: {
                     if (arg.kind != .plane_path) return self.fail(arg.tok, "'{s}' expects a plane path for '{s}'", .{ op_name, sd.name });
@@ -1040,9 +1139,19 @@ const Parser = struct {
                     if (arg.kind != .literal) return self.fail(arg.tok, "'{s}' expects a literal for '{s}'", .{ op_name, sd.name });
                     break :blk .{ .literal = arg.source.literal };
                 },
+                .channel => blk: {
+                    if (arg.kind != .word or arg.text.len < 2 or arg.text[0] != '$') {
+                        return self.fail(arg.tok, "'{s}' expects a channel for '{s}' — a '$'-sigil name: {s} $alarm …", .{ op_name, sd.name, op_name });
+                    }
+                    break :blk .{ .channel = try self.a().dupe(u8, arg.text) };
+                },
             };
         }
-        const stream_args = args.items[arg_idx..];
+        var stream_list = std.ArrayListUnmanaged(Arg).empty;
+        for (args.items, 0..) |ag, j| {
+            if (!consumed[j]) try stream_list.append(self.a(), ag);
+        }
+        const stream_args = stream_list.items;
 
         // Bind ports: primary → port 0; kwargs by name; sections → first free
         // boolean port; remaining positionals in declared order.
@@ -1072,8 +1181,11 @@ const Parser = struct {
         }
         for (stream_args) |arg| {
             if (arg.kw.len > 0 or arg.kind == .section) continue;
-            const pi = for (ports, 0..) |_, i| {
-                if (bound[i] == null) break i;
+            // Keyword-declared ports never fill positionally — the word is
+            // what disambiguates them, so a stray positional must not land
+            // there silently.
+            const pi = for (ports, 0..) |port, i| {
+                if (bound[i] == null and !port.kw) break i;
             } else return self.fail(arg.tok, "too many arguments for '{s}' ({d} port(s))", .{ op_name, ports.len });
             bound[pi] = try self.bindArg(arg, ports[pi], op_name);
         }
@@ -1161,6 +1273,27 @@ const Parser = struct {
         return null;
     }
 
+    fn opHasKeywords(def: *const registry.OpDef) bool {
+        for (def.statics) |sd| {
+            if (sd.kw) return true;
+        }
+        for (def.inputs) |port| {
+            if (port.kw) return true;
+        }
+        return false;
+    }
+
+    /// The keyword name if `word` introduces a kw-declared static or port.
+    fn keywordOf(def: *const registry.OpDef, word: []const u8) ?[]const u8 {
+        for (def.statics) |sd| {
+            if (sd.kw and std.mem.eql(u8, sd.name, word)) return sd.name;
+        }
+        for (def.inputs) |port| {
+            if (port.kw and std.mem.eql(u8, port.name, word)) return port.name;
+        }
+        return null;
+    }
+
     fn sourceTy(self: *Parser, target: *Target, src: Source) types.TypeId {
         _ = self;
         return switch (src) {
@@ -1200,6 +1333,14 @@ const Parser = struct {
                 // here, so an unmatched `}` anywhere else is still the loud
                 // error it always was, one frame later at the statement end.
                 .rbrace => if (self.block_depth > 0) return else try args.append(self.a(), try self.parseArgValue(target)),
+                // A `{` is a record argument only when it opens like one
+                // (`{name:`). Anything else is a fan-out block, which belongs
+                // to the statement, not the argument list — this is what lets
+                // `every 1f { cast … }` end `every`'s arguments at the brace.
+                .lbrace => {
+                    if (!self.braceOpensRecord()) return;
+                    try args.append(self.a(), try self.parseArgValue(target));
+                },
                 .name => {
                     if (std.mem.eql(u8, t.text, "as")) return;
                     // kwarg? name ':' value
@@ -1258,7 +1399,7 @@ const Parser = struct {
             // the rest of the LINE, so a one-line `also { … }` hands it the
             // block's own closer — and then everything after the block too,
             // which is where the pipe rule would fire with the later cause.
-            return self.fail(start_tok, "tail port consumed the 'also' block's '}}' — put the tail operator on its own line, or quote the text", .{});
+            return self.fail(start_tok, "tail port consumed the block's '}}' — put the tail operator on its own line, or quote the text", .{});
         } else if (std.mem.indexOfScalar(u8, text, '|') != null) {
             return self.fail(start_tok, "tail port consumed a pipe — quote the locator or restructure", .{});
         }

@@ -1,6 +1,12 @@
 # Casts, Fields, and the `$` Sigil
 
 **Status:** draft for ratification — Chris + Claude, 2026-08-26.
+**Amended 2026-08-25** with the build-time rulings from
+`cc-note-casts.md` (Chris + Claude Chat): §6 grammar pinned, §5
+reversed to per-deposit runtime physics, §4.1 gains the
+bag-of-deposits model, §0 gains unlearn #6, §13 F3 restated. Beat 1
+(`$` sigil, `cast`, `every`, the generalised block rule) is BUILT in
+rill core, same commit as these amendments.
 **Scope:** closes the two gaps found by the external review of `ironwood.md`
 (relative targeting; cross-instance interaction), introduces the fourth
 sigil, and pins the field model. Extends `rill-agents.md` and Ironwood
@@ -71,6 +77,12 @@ early, because readers will not notice they are assuming otherwise:
    rides `also { }`; the main stream carries values only. This
    survived two rounds of probe correction before earning its
    number — readers will write effect-pipelines until told in bold.
+6. **A block is a fan-out, not a body** (added 2026-08-25, note §5).
+   `every 1f { … }` is the most loop-shaped thing rill has, and
+   readers will put ordered steps in it. Statements in a block are
+   branches: no order between them, each ends in a sink or produces
+   a consumed value. If someone needs sequence inside an `every`,
+   they wanted a pipeline, and the pipeline is the spelling.
 
 All five misses point the same direction — toward mutable shared
 state and imperative control flow. That is the direction the language
@@ -231,6 +243,29 @@ the receiver-side sum over live spaces**. Pulse and sustain still
 unify; F1/F2 still hold (they assert values at sample points, which
 was receiver-side all along).
 
+**An owned space is a bag of deposits (stamped 2026-08-25, note §2).**
+Once a cast carries a position (§6's `at` port), a caster's space is
+no longer one kernel at the caster's position: it is a bag of
+`{pos, amplitude, radius, decay, born}`, and the receiver sums the
+live deposits in range. Two things fall out. A brazier depositing per
+tick at a fixed position coalesces into one growing bump, reaching
+steady state where feed equals leak; a screaming raider running
+through the courtyard leaves a trail of bumps that leak
+independently — **a scream lingers where it was screamed.** Pins:
+
+- **Coalescing:** within a tick, deposits from one caster with
+  identical `(pos, radius, decay)` sum their amplitude — the
+  accumulate rule; otherwise they are distinct deposits. Net-zero
+  silenced, as for `inc`.
+- **Summation order** (refining pin 1 below): the receiver sums
+  casters in stable caster-id order, caster-id derived from mount
+  order — not allocation — and deposits within a caster in `born`
+  order. Replay bit-identity depends on it.
+- **Bound named in the ledger, no mechanism:** a bag is bounded by
+  deposit rate × decay time; deposits below the channel's epsilon
+  are culled. If a scene runs away, the error budget is the guard —
+  same sentence as the rounds bound.
+
 **Combination is channel physics; sampling is instrument choice.**
 The canonical value at a point is fixed — sum, per §3 — one truth,
 no per-receiver realities. What varies by receiver is the
@@ -271,24 +306,38 @@ Three pins:
 
 ---
 
-## 5. Decay: a rill first (ruled)
+## 5. Decay: per-deposit runtime physics (re-ruled 2026-08-25)
 
-**Ruling (Chris):** decay is authored as a rill initially. If patterns
-recur, they may later be collapsed into runtime channel physics — the
-same promotion pipeline as `def` → archetype, and the same discipline
-as the sensor-budget knob (designed, recorded, not built until a
-workload earns it).
-
-Mechanical shape, for the implementer:
+**This section originally ruled "decay is authored as a rill first,
+promoted to channel physics only if patterns recur." That ruling is
+reversed** (stamped, note §3), because the rill version cannot be
+built as written — the sketch
 
 ```
 $blight | mul -0.1 | cast $blight
 ```
 
-Read the sum, contribute the negative fraction — a self-loop with a
-one-tick delay, i.e. discrete exponential decay, deterministic in fed
-time. Legal for the same reason counters are: you read last tick's
-sum and deposit into this tick's.
+reads a path it writes, and §4.4 refuses exactly that. The sentence
+"legal for the same reason counters are" was wrong: `inc` passes the
+cycle ban because it is *blind* — no read — and this rill reads. The
+delay operator that would license deliberate feedback does not exist,
+and even with it, an exponential never reaches zero, so a decay rill
+would re-rouse every tick on every caster forever.
+
+**Ruling:** decay lives on the deposit — §6's `decay` port, defaulting
+from the channel declaration (§7). The runtime leaks each bump in fed
+time and culls below the channel's epsilon. This is §7's "eventually
+intrinsic decay" arriving before the rill version was ever built — a
+reversal made because the cycle ban forced it, recorded here rather
+than swapped quietly.
+
+**Corollary (advised in the note, built as v1's rule):** with decay in
+the runtime, no rill has a reason to read its own space, so **the bare
+`$channel` read inside a rill is not built in v1** — the parser
+refuses it with the ruling in the message. Every reading comes from a
+standpoint (`@tom.$dread`, `sensors/gate/$alarm`), exactly as §9
+already rules, and the cycle checker stays out of the field store
+entirely.
 
 ---
 
@@ -301,12 +350,50 @@ ordering fights, mergeable by construction. The read-your-own-write
 ban survives unchanged.
 
 `cast` is the verb, available to instances and to rills alike (a rill
-can be a caster). Grammar sketch, to be pinned at build time:
+can be a caster). **Grammar pinned 2026-08-25 (stamped, note §1),
+built in rill core the same day:**
 
 ```
-cast $blight 0.8 radius 12          # deposit: intensity + extent
-cast $courage 0.5 radius 8 to #garrison    # coupled cast — see §8
+cast <$channel> [value] radius <r> at <pos> [decay <d>]
+
+every 1f { cast $torchlight 0.8 radius 12 at s.brazier.pos decay 4s }
+
+s.gate.enemy_count | rose_above 0
+  | also { cast $alarm 1.0 radius 30 at s.gate.pos decay 2s }
+  | also { cast $alarm 1.0 radius 30 at s.tower.pos decay 2s }
 ```
+
+The §3.8 sink shape, unchanged: port 0 is the rousing, a bound
+`value` is the payload. Channel and radius are statics; `at` and
+`decay` are **keyword ports** (the word introduces the value —
+positionally, `cast $alarm 30` cannot say whether 30 is payload or
+radius, and a grammar that guesses is worse than one that asks):
+
+- **`at <pos>` is a port, bound or live.** A body-bound caster reads
+  its own instance position; a supervisor casts at any position it
+  can read. Dot-form is a live reference, so a moving caster's
+  position updates without re-rousing (a change in payload alone is
+  not a write). Casting in several places from one rousing is two
+  `also` branches — no list argument.
+- **`decay <duration>`**, optional, in the ratified duration grammar
+  (`5s` / `250ms` / `3f`): this deposit's leak time-constant,
+  defaulting from the channel declaration (§7). See §5 for why decay
+  is on the cast at all.
+- **Unpiped, the intensity binds port 0 and is both rousing and
+  payload**, so a bare `cast $torchlight 0.8 radius 12 at …`
+  deposits **once, at tick 0**, then leaks away. A standing caster
+  needs a per-tick rousing in front — `every 1f`. This will surprise
+  the first person who writes a brazier; it is said wherever the
+  grammar is introduced.
+- `to #tag` (coupling, §8) parses when the tag store exists — its
+  beat, not this one.
+
+The deposit crosses the plane boundary on its own vtable arm
+(`castFn`), not a `DeltaKind`: a cast is not addressed at a path — it
+is keyed by who is casting, and the receiver-side sum is the only
+read surface. It commits through the main-thread drain so
+program-write ordering is deterministic, but per §11 **fields stay
+out of the log** — drain yes, log no.
 
 ---
 
@@ -431,8 +518,11 @@ argument, same class, as sensor scans.
 
 - **Weighted coupling** — reserved at §8; the binary receptor ships
   first.
-- **Decay promoted to channel physics** — §5; promote only patterns
-  that recur across authored scenes.
+- **Hard lifetime `for <duration>`** — a step rather than a leak:
+  a pulse that holds full-strength and drops. Deferred until a scene
+  wants one; the `decay` port's shape is where it would sit. (Replaces
+  the old "decay promoted to channel physics" entry — that promotion
+  happened at birth, §5.)
 - **Occlusion-aware propagation** — the solver's
   `Metric.material_attenuation` is the committed-unimplemented arm
   ("how much of the scream survives the wall"); casts are its third
@@ -454,9 +544,11 @@ argument, same class, as sensor scans.
 - **F2 — reversal:** a negative caster holds a positive caster to
   zero along a contour; strengthen one, the contour moves. Asserted
   as values at three sample points, not as prose.
-- **F3 — decay:** the decay rill drains an un-fed field to below
-  threshold in the declared number of ticks; a fed field holds
-  steady-state. Deterministic in fed time; replay byte-identical.
+- **F3 — decay** (restated 2026-08-25 per §5's reversal): an un-fed
+  deposit drops below the channel epsilon within the declared time
+  constant and is culled; a deposit fed by `every 1f` reaches steady
+  state. Deterministic in fed time; replay byte-identical. The
+  mutation: skip the cull and watch the bag grow.
 - **F4 — coupling:** a coupled cast reads as zero to an entity
   without the receptor tag and non-zero with it; granting the tag
   mid-run changes the reading on the next tick.
