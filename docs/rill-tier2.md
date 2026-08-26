@@ -1078,7 +1078,8 @@ has not let anything through that had a customer.
 > `last` on empty** with **`len`** (absence said by the count) and
 > **`last`** (`window 5s | last`), and **`kick`** (flash on hit, shake on
 > impact — the re-probe's biggest finding) and **`adsr`** (a note that is
-> held rather than fired). 34 of 35.
+> held rather than fired) and **`step`** (the sequencer). **35 of 35 —
+> the campaign's words are all in.**
 
 **The admitted set is exactly 24, which is what the recon predicted.**
 The honest reading of "~30 words" is 24 admitted + 5 substrate = 29
@@ -1209,6 +1210,20 @@ host, or the manual rather than the operator table:
   different *shape*, so every consumer changes too. Nothing above changes
   a published shape; a reader who wants the empty case in-band still has
   no spelling for it.
+
+- **FORK — `step`'s output is a VALUE, so a repeated element is one
+  write** (raised 2026-08-26, envelopes item 8). `step` follows `nth`,
+  `choose` and `rand` in emitting a value, and a value stream suppresses
+  identical bytes — so `step … random` drawing the same element twice in
+  a row looks like one draw to everything downstream, and a `loop` over
+  `[1, 1, 2]` emits two things rather than three. Correct for the camera
+  and palette customers, where the output IS a state; wrong for the MIDI
+  one, where two identical notes are two notes. **Trigger:** the first
+  caller that needs the repeat. The fix is an occurrence-emitting twin,
+  not a kind-switching flag — one node, one kind (beat 4's ruling), and
+  `pulse`/`every` is the precedent for how the pair is spelled. **Not
+  decided**, and stated in the manual meanwhile rather than left to be
+  discovered.
 
 - **`| .field` — RULED 2026-08-25** (raised and settled the same day).
   `| .field` is the taught spelling for a field read mid-chain, sugar for

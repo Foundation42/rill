@@ -520,6 +520,49 @@ Both refusals name the index and the length.
 Positions stay records: `[0, 2, 0]` does not coerce to `{x, y, z}`.
 One thing, one spelling.
 
+**Stepping through one, over time.** `nth` and `choose` pick; `step`
+*walks*. Each rousing emits the next element:
+
+```rill
+plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] loop | set plane.lights.key.pos
+plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note
+plane.events.idle | step plane.ui.hints random seed 3 max 5 | set plane.ui.hint
+```
+
+There are two independent choices and one modifier, and they are written
+as bare words:
+
+| word | says |
+|---|---|
+| *(nothing)* | run through once, and the wave ends |
+| `loop` | wrap round and keep going |
+| `bounce` | turn round at each end |
+| `reverse` | start at the end and walk down |
+| `random seed <s>` | draw an element each time, **with replacement** |
+| `shuffle seed <s>` | a fresh permutation each pass, no repeats within one |
+| `max <n>` | stop after `n` emissions, whatever the rest says |
+
+Order (`random`, `shuffle`, or in sequence) and end-behaviour (`loop`,
+`bounce`, or stop) are separate, so `shuffle loop` is a fresh permutation
+every pass and `loop reverse` cycles backwards forever. The combinations
+that cannot mean anything **refuse at mount, naming both words** — two
+orders, two end-behaviours, `reverse` or `bounce` on a random order, and
+a `seed` with nothing to seed.
+
+**The array is live, and the cursor carries.** If the list changes
+mid-sequence the index stays where it is and clamps to the new length: it
+does not restart. A sequence somebody is listening to should not jump
+back to the top because a list got shorter.
+
+**The cursor rides the dump**, so a restored program resumes its
+sequence. A sequencer that started over on restore would be a different
+instrument.
+
+**An ended sequence is ended** — later rousings say nothing, even if the
+list changes underneath. And because the output is a *value*, two
+identical elements in a row are one write; `random` drawing the same
+element twice looks like one draw downstream.
+
 ---
 
 ## 6d. Over arrays — bodies
@@ -1196,6 +1239,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `sort` | `sort <in> [desc] [by (…)]` | **Stable** sort; ties keep input order. Without `by`, elements are their own keys. §6d |
 | `sqrt` | `sqrt <in>` | Square root (IEEE: a negative yields nan). |
 | `stats` | `stats <in>` | `{max, mean, min, n, stddev}` over a numeric array. §6c |
+| `step` | `step <in> <of> [seed <seed>] [max <max>] [loop] [bounce] [reverse] [random] [shuffle]` | Step sequencer: each rousing emits the next element. Runs once unless told otherwise. §6c |
 | `sub` | `sub <a> <b>` | a − b. Broadcasts over a record or an array. |
 | `tag` | `tag <in> <@subject> <#tag>` | Add a subject to a tag. Idempotent; one tag per call. §7 |
 | `take` | `take <in> <n> [from <from>]` | At most `n` elements. A short array is **forgiven** — `nth` past the end is not. §6d |

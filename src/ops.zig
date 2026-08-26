@@ -2059,9 +2059,17 @@ fn hysteresis(comptime falling: bool) fn (*EvalCtx) EvalError!Emit {
 
 /// The array on port 0, unpacked, or a refusal naming the type word.
 fn arrayIn(ctx: *EvalCtx) EvalError![]const u8 {
-    const av = try raw(ctx, 0);
+    return arrayInAt(ctx, 0);
+}
+
+/// …and on any port. `step` is the first array consumer whose array is not
+/// its primary input — its port 0 is the ROUSING — and the port-0 assumption
+/// hid inside `arrayIn` until then: the refusal it produced was a real
+/// refusal, about the right node, saying the wrong thing.
+fn arrayInAt(ctx: *EvalCtx, port: usize) EvalError![]const u8 {
+    const av = try raw(ctx, port);
     if (types.typeOfValue(av) != Tag.array) {
-        return ctx.refuse("{s}: '{s}' is {s}, not an array", .{ ctx.op.name, ctx.portName(0), describeTop(ctx, av) });
+        return ctx.refuse("{s}: '{s}' is {s}, not an array", .{ ctx.op.name, ctx.portName(port), describeTop(ctx, av) });
     }
     return innerOf(ctx, av);
 }
@@ -2499,6 +2507,221 @@ fn blend4(ctx: *EvalCtx, pk: *struple.Packer, w: [4]f64, k: [4][]const u8, path:
             return ctx.refuse("along: a knot is {s}, not a number{s}", .{ describeTop(ctx, kn), whereIn(ctx, path) }));
     }
     try pk.appendF64(acc);
+}
+
+// ---------------------------------------------------------------------------
+// `step` — a step sequencer, modelled on an arpeggiator (envelopes item 8)
+//
+// A rousing in, the NEXT element out. The array is a value like any other, so
+// `step` is what turns a value with several parts into a sequence through
+// them, one rousing at a time.
+//
+// **The modes compose rather than being five alternatives**, and that is a
+// recorded deviation from Chris's wording ("modes as bare-word flags:
+// default runs once and the wave ends; loop, bounce, reverse, random seed <s>,
+// shuffle seed <s>"). His own description of `shuffle` is what argues it: *a
+// fresh permutation per PASS, no repeats within one* — passes are what `loop`
+// means, so `shuffle` and `loop` have to be sayable together or `shuffle` can
+// only ever mean one pass. Once two of them compose, the flat reading is
+// already gone, and `loop reverse` (a camera cycling backwards forever) is a
+// thing a person will want on their first afternoon.
+//
+// So there are two independent choices and one modifier:
+//
+//   ORDER   sequential (default) · `random` (with replacement) · `shuffle`
+//   REPEAT  once (default, and the wave ends) · `loop` · `bounce`
+//   `reverse` — sequential only: start at the end and walk down
+//
+// The combinations that cannot mean anything are REFUSED at mount, naming both
+// words: `random shuffle`, `loop bounce`, `reverse` with either random order,
+// `bounce` with either random order, and a `seed` with no random order to seed.
+// A knob that does nothing is a lie, and `step [1, 2] seed 7` is someone who
+// meant to write a mode.
+// ---------------------------------------------------------------------------
+
+const StepOrder = enum { sequential, random, shuffle };
+const StepRepeat = enum { once, loop, bounce };
+
+/// The cursor, and it rides the dump — a sequencer that restarted on restore
+/// would be a different instrument.
+const StepState = struct {
+    pos: i64 = 0, // sequential: the index. shuffle: the position in the pass.
+    dir: i8 = 1, // +1 or -1; only `bounce` ever turns it round
+    pass: u64 = 0, // completed passes — `shuffle`'s permutation salt
+    emitted: u64 = 0, // total emissions — `max`'s counter and `random`'s draw
+    started: bool = false,
+    done: bool = false,
+
+    const size = 8 + 1 + 8 + 8 + 1 + 1;
+
+    fn read(ctx: *EvalCtx) StepState {
+        const st = ctx.state.items;
+        if (st.len < size) return .{};
+        return .{
+            .pos = @bitCast(std.mem.readInt(u64, st[0..8], .little)),
+            .dir = @bitCast(st[8]),
+            .pass = std.mem.readInt(u64, st[9..17], .little),
+            .emitted = std.mem.readInt(u64, st[17..25], .little),
+            .started = st[25] == 1,
+            .done = st[26] == 1,
+        };
+    }
+
+    fn write(self: StepState, ctx: *EvalCtx) EvalError!void {
+        var buf: [size]u8 = undefined;
+        std.mem.writeInt(u64, buf[0..8], @as(u64, @bitCast(self.pos)), .little);
+        buf[8] = @bitCast(self.dir);
+        std.mem.writeInt(u64, buf[9..17], self.pass, .little);
+        std.mem.writeInt(u64, buf[17..25], self.emitted, .little);
+        buf[25] = @intFromBool(self.started);
+        buf[26] = @intFromBool(self.done);
+        try ctx.setState(&buf);
+    }
+};
+
+/// A whole non-negative number off an optional port, or a refusal naming it.
+fn wholeOpt(ctx: *EvalCtx, port: usize) EvalError!?u64 {
+    if (ctx.in[port] == null) return null;
+    const f = try num(ctx, port);
+    if (!std.math.isFinite(f) or f != @floor(f) or f < 0) {
+        return ctx.refuse("{s}: '{s}' is {d} — a whole number from 0", .{ ctx.op.name, ctx.portName(port), f });
+    }
+    return @intFromFloat(f);
+}
+
+/// The permutation for one pass, derived rather than stored: `shuffle`'s state
+/// is a pass number and a position, never an N-element table. The array is
+/// LIVE, so a stored permutation would be stale the moment it changed length —
+/// and a dump would carry a table that no longer described anything.
+///
+/// Fisher–Yates on `std.Random.DefaultPrng` (xoshiro256++), which is the one
+/// PRNG family (beat 4's pin): `rand`, `shuffle` and this all draw from it,
+/// re-seeded from a counter the way `rand` already does.
+fn passOrder(ctx: *EvalCtx, seed: u64, pass: u64, n: usize) EvalError![]usize {
+    const idx = try ctx.arena.alloc(usize, n);
+    for (idx, 0..) |*v, i| v.* = i;
+    var prng = std.Random.DefaultPrng.init(seed +% pass *% 0x9E3779B97F4A7C15);
+    const rnd = prng.random();
+    var i = n;
+    while (i > 1) {
+        i -= 1;
+        const j = rnd.uintLessThan(usize, i + 1);
+        std.mem.swap(usize, &idx[i], &idx[j]);
+    }
+    return idx;
+}
+
+fn evalStep(ctx: *EvalCtx) EvalError!Emit {
+    const has_loop = ctx.statics[0].word.len > 0;
+    const has_bounce = ctx.statics[1].word.len > 0;
+    const has_reverse = ctx.statics[2].word.len > 0;
+    const has_random = ctx.statics[3].word.len > 0;
+    const has_shuffle = ctx.statics[4].word.len > 0;
+
+    // The refusals, before anything else and therefore at mount: a program
+    // that cannot mean anything should not run for a while first.
+    if (has_random and has_shuffle) {
+        return ctx.refuse("step: 'random' and 'shuffle' are both orders — random draws with replacement, shuffle is a permutation; pick one", .{});
+    }
+    if (has_loop and has_bounce) {
+        return ctx.refuse("step: 'loop' and 'bounce' both say what happens at the end — loop wraps, bounce turns round; pick one", .{});
+    }
+    const randomish = has_random or has_shuffle;
+    const order: StepOrder = if (has_random) .random else if (has_shuffle) .shuffle else .sequential;
+    if (has_reverse and randomish) {
+        return ctx.refuse("step: 'reverse' and '{s}' cannot go together — a random order has no direction to reverse", .{if (has_random) "random" else "shuffle"});
+    }
+    if (has_bounce and randomish) {
+        // `bounce` turns round inside a fixed order. `random` has no ends to
+        // turn round at, and `shuffle` re-draws its order every pass — so
+        // there is nothing stable to walk back through either way.
+        return ctx.refuse("step: 'bounce' and '{s}' cannot go together — bounce turns round inside a fixed order, and a random one has none", .{if (has_random) "random" else "shuffle"});
+    }
+    const repeat: StepRepeat = if (has_loop) .loop else if (has_bounce) .bounce else .once;
+    if (ctx.in[2] != null and !randomish) {
+        return ctx.refuse("step: 'seed' has nothing to seed — a seed only means something with 'random' or 'shuffle'", .{});
+    }
+
+    const seed = (try wholeOpt(ctx, 2)) orelse 0;
+    const max = try wholeOpt(ctx, 3);
+
+    var st = StepState.read(ctx);
+    if (st.done) return Emit.none;
+    // The sequence advances on ROUSINGS. A change to the array is not one:
+    // the array is live, and living is not stepping.
+    if (!ctx.in_fresh[0]) return Emit.none;
+    _ = try raw(ctx, 0);
+
+    const items = try arrayInAt(ctx, 1);
+    var view = struple.view(items);
+    const n = view.count() catch return ctx.refuse("step: '{s}' is a malformed array", .{ctx.portName(1)});
+    // An empty array has nothing to step through, and a value cannot be
+    // invented — the `first` precedent. Silence, not a refusal, and not `done`
+    // either: the array is live and may yet have something in it.
+    if (n == 0) return Emit.none;
+
+    if (max) |m| {
+        if (st.emitted >= m) {
+            st.done = true;
+            try st.write(ctx);
+            return Emit.none;
+        }
+    }
+
+    // The array is LIVE: a cursor into an array that shrank carries and CLAMPS
+    // to the new length. It does not restart — the sequence a person is
+    // listening to should not jump back to the top because a list got shorter.
+    const last: i64 = @intCast(n - 1);
+    if (st.pos > last) st.pos = last;
+    if (st.pos < 0) st.pos = 0;
+
+    const index: usize = switch (order) {
+        .random => blk: {
+            var prng = std.Random.DefaultPrng.init(seed +% st.emitted *% 0x9E3779B97F4A7C15);
+            break :blk prng.random().uintLessThan(usize, n);
+        },
+        .sequential, .shuffle => blk: {
+            if (!st.started) {
+                st.started = true;
+                st.dir = if (has_reverse) -1 else 1;
+                st.pos = if (has_reverse) last else 0;
+            } else {
+                var next = st.pos + st.dir;
+                if (next > last or next < 0) {
+                    switch (repeat) {
+                        .once => {
+                            st.done = true;
+                            try st.write(ctx);
+                            return Emit.none;
+                        },
+                        .loop => {
+                            next = if (st.dir > 0) 0 else last;
+                            st.pass +%= 1; // a new permutation, for `shuffle`
+                        },
+                        .bounce => {
+                            st.dir = -st.dir;
+                            next = st.pos + st.dir;
+                            if (next > last or next < 0) next = st.pos; // n == 1
+                            st.pass +%= 1;
+                        },
+                    }
+                }
+                st.pos = next;
+            }
+            if (order == .shuffle) {
+                const perm = try passOrder(ctx, seed, st.pass, n);
+                break :blk perm[@intCast(st.pos)];
+            }
+            break :blk @intCast(st.pos);
+        },
+    };
+
+    const elem = (view.at(index) catch null) orelse
+        return ctx.refuse("step: '{s}' is a malformed array", .{ctx.portName(1)});
+    st.emitted +%= 1;
+    try st.write(ctx);
+    try splice(ctx, 0, elem);
+    return Emit.first;
 }
 
 /// `along <knots>` — travel a curve through the knots as `t` goes 0..1.
@@ -3033,6 +3256,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "take", .inputs = &.{ p.in("in", Tag.array), p.in("n", Tag.number), p.kwOpt("from", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "At most `n` elements, from `from` — `take 3`. A short array is forgiven; `nth` past the end is not.", .eval = evalTake },
     .{ .name = "transpose", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "AoS ↔ SoA, self-inverse — `{a: [1,2], b: [3,4]}` ↔ `[{a:1,b:3},{a:2,b:4}]`. Ragged input refuses, both sides named.", .eval = evalTranspose },
     .{ .name = "shuffle", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Seeded Fisher–Yates — `shuffle [seed 7] | take 3` is three at random, no repeats. Seed defaults to 0; bit-identical across machines.", .eval = evalShuffle },
+    .{ .name = "step", .inputs = &.{ p.occ("in", Tag.any), p.in("of", Tag.array), p.kwOpt("seed", Tag.number), p.kwOpt("max", Tag.number) }, .statics = &.{ .{ .name = "loop", .kind = .word, .flag = true, .optional = true }, .{ .name = "bounce", .kind = .word, .flag = true, .optional = true }, .{ .name = "reverse", .kind = .word, .flag = true, .optional = true }, .{ .name = "random", .kind = .word, .flag = true, .optional = true }, .{ .name = "shuffle", .kind = .word, .flag = true, .optional = true } }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Step sequencer — `plane.beat | step [60, 64, 67] loop`. Each rousing emits the NEXT element; by default it runs once and the wave ends. Order: sequential (`reverse` walks down) or `random`/`shuffle`; end: `loop`, `bounce`, or stop. `max n` caps emissions.", .eval = evalStep },
     .{ .name = "along", .inputs = &.{ p.in("t", Tag.number), p.in("knots", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Travel a Catmull-Rom curve through the knots as t goes 0..1 — `along [a, b, c]`. Clamps outside 0..1; fewer than two knots refuses.", .eval = evalAlong },
     // tier 2, beat 2b — contracts. One shape literal, two promises.
     .{ .name = "expect", .inputs = &.{p.opt("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .fails_mount = true, .help = "Assert a shape ONCE, at mount — `expect {id: string, distance: number} [exact]`. A mismatch refuses the mount. Costs nothing afterwards; never falls back to a runtime check.", .eval = evalExpect },

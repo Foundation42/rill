@@ -99,6 +99,20 @@ fn feedValue(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8, value:
     try rt.feed(.{ .path = path, .value = enc });
 }
 
+/// Feed an array of whole numbers. `packOne` dispatches on struple's scalar
+/// `append`, which is scalars only; the containers go through `appendArray`
+/// like every other array literal in the language.
+fn feedInts(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8, values: []const i64) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var inner = struple.Packer.init(a);
+    for (values) |v| try inner.appendInt(v);
+    var outer = struple.Packer.init(a);
+    try outer.appendArray(inner.bytes());
+    try rt.feed(.{ .path = path, .value = outer.bytes() });
+}
+
 /// A duration on the wire is `[lane, count]` and nothing else (§2.2), so a
 /// path can carry one — which is what makes `adsr`'s release live, and what
 /// the "next segment, never the one in flight" pin needs to be gated at all.
@@ -2117,6 +2131,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "transpose", .class = .pure },
         .{ .name = "shuffle", .class = .pure }, // seeded: same in, same out
         .{ .name = "along", .class = .pure },
+        .{ .name = "step", .class = .reads }, // a cursor is state
         .{ .name = "pulse", .class = .reads }, // fed time
         .{ .name = "once", .class = .reads }, // own state: fired or not
         .{ .name = "toggle", .class = .reads },
@@ -2813,7 +2828,9 @@ test "the manuals parse: every printed example compiles" {
     // is where a person goes to copy something that works.
     // `adsr` adds no BLOCK: it lands in the same §6b listing, because `kick`
     // and `adsr` are one family and printing them apart would teach them so.
-    try testing.expectEqual(@as(usize, 48), human);
+    // 48 → 49 (envelopes, `step`): §6c gains the sequencer trio — camera
+    // positions on a key, an arpeggio, and a hint picked at random.
+    try testing.expectEqual(@as(usize, 49), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -4145,8 +4162,12 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // 51 → 53, 106 → 110 (envelopes, `adsr`): the held note, with a real
     // before — one register chasing one target, which cannot say "decay to a
     // sustain and stay there" however many words you spend on it.
-    try testing.expectEqual(@as(usize, 53), rill_cells);
-    try testing.expectEqual(@as(usize, 110), total);
+    // 53 → 57, 110 → 117 (envelopes, `step`): the arpeggio, whose BEFORE is
+    // again two programs — a counter through the plane, which is also a corpse
+    // that rides every dump — and the camera cycle, which is the row that
+    // argues for the modes composing.
+    try testing.expectEqual(@as(usize, 57), rill_cells);
+    try testing.expectEqual(@as(usize, 117), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -6581,6 +6602,222 @@ test "`adsr` refuses two time lanes, and a gate that is not a boolean" {
     , .{.{ "plane.input.key", @as(f64, 1) }});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "adsr", "'in'", "not a boolean" });
+}
+
+// ---------------------------------------------------------------------------
+// `step` — the sequencer (envelopes campaign item 8, 2026-08-26)
+// ---------------------------------------------------------------------------
+
+/// Rouse `path` once and read the sequencer's output slot.
+fn stepOnce(fx: *Fixture, path: []const u8, slot: []const u8) !f64 {
+    try feedOcc(&fx.rt, testing.allocator, path);
+    try fx.rt.tick(.{});
+    return types.asNumber(fx.rt.readSlot(slot).?).?;
+}
+
+test "`step`: each rousing emits the next element, and by default it ENDS" {
+    // The end is the hard half to gate, and the first version of this test did
+    // not: a value stream holds its last, so "the sequence ended" and "the
+    // sequence keeps re-emitting its last element" leave the SAME bytes in the
+    // slot — identical output is suppressed, so even a `tally` downstream
+    // cannot tell them apart. The mutation that repeats the last element
+    // survived, and it deserved to.
+    //
+    // The live array is what separates them. Once the sequence has ended,
+    // change the list under the cursor: an ended sequence is silent whatever
+    // the list now says, and one that is still stepping-in-place emits the new
+    // element sitting at its index.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key | step plane.seq | set plane.out
+    , .{ .{ "plane.input.key", true }, .{ "plane.seq", [3]i64{ 10, 20, 30 } } });
+    defer fx.deinit();
+    const out = "programs.p.step1.out.out";
+
+    // Mount is a rousing (the seeded path arrived), so the first element is
+    // already out.
+    try testing.expectEqual(@as(f64, 10), types.asNumber(fx.rt.readSlot(out).?).?);
+    try testing.expectEqual(@as(f64, 20), try stepOnce(&fx, "plane.input.key", out));
+    try testing.expectEqual(@as(f64, 30), try stepOnce(&fx, "plane.input.key", out));
+    try testing.expectEqual(@as(f64, 30), try stepOnce(&fx, "plane.input.key", out));
+
+    // Ended is ended. Three more rousings over a completely different list say
+    // nothing at all, and the sink still holds the 30 it was left with.
+    try feedInts(&fx.rt, testing.allocator, "plane.seq", &.{ 70, 80, 90 });
+    try fx.rt.tick(.{});
+    for (0..3) |_| try testing.expectEqual(@as(f64, 30), try stepOnce(&fx, "plane.input.key", out));
+}
+
+test "`step`: `loop` wraps, `bounce` turns round, `reverse` starts at the end" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.k | step [10, 20, 30] loop | set plane.a
+        \\plane.k | step [10, 20, 30] bounce | set plane.b
+        \\plane.k | step [10, 20, 30] reverse | set plane.c
+    , .{.{ "plane.k", true }});
+    defer fx.deinit();
+    const lp = "programs.p.step1.out.out";
+    const bo = "programs.p.step2.out.out";
+    const rv = "programs.p.step3.out.out";
+
+    var loop_seen = std.ArrayListUnmanaged(f64).empty;
+    defer loop_seen.deinit(testing.allocator);
+    var bounce_seen = std.ArrayListUnmanaged(f64).empty;
+    defer bounce_seen.deinit(testing.allocator);
+    var rev_seen = std.ArrayListUnmanaged(f64).empty;
+    defer rev_seen.deinit(testing.allocator);
+
+    try loop_seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(lp).?).?);
+    try bounce_seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(bo).?).?);
+    try rev_seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(rv).?).?);
+    for (0..5) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.k");
+        try fx.rt.tick(.{});
+        try loop_seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(lp).?).?);
+        try bounce_seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(bo).?).?);
+        try rev_seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(rv).?).?);
+    }
+    try testing.expectEqualSlices(f64, &.{ 10, 20, 30, 10, 20, 30 }, loop_seen.items);
+    try testing.expectEqualSlices(f64, &.{ 10, 20, 30, 20, 10, 20 }, bounce_seen.items);
+    // `reverse` runs once, downward, and then holds its last — 10 four times
+    // over is the wave having ended, not the sequence repeating.
+    try testing.expectEqualSlices(f64, &.{ 30, 20, 10, 10, 10, 10 }, rev_seen.items);
+}
+
+test "`step`: the array is LIVE — the cursor carries and clamps, it does not restart" {
+    // Chris's pin. A sequence a person is listening to must not jump back to
+    // the top because a list got shorter.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.k | step plane.seq loop | set plane.out
+    , .{ .{ "plane.k", true }, .{ "plane.seq", [5]i64{ 10, 20, 30, 40, 50 } } });
+    defer fx.deinit();
+    const out = "programs.p.step1.out.out";
+
+    try testing.expectEqual(@as(f64, 10), types.asNumber(fx.rt.readSlot(out).?).?);
+    for (0..3) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.k");
+        try fx.rt.tick(.{});
+    }
+    try testing.expectEqual(@as(f64, 40), types.asNumber(fx.rt.readSlot(out).?).?); // index 3
+
+    // The list shrinks to two under the cursor. The index clamps to the new
+    // end and CARRIES — the next rousing wraps from there, rather than the
+    // sequence starting over.
+    try feedInts(&fx.rt, testing.allocator, "plane.seq", &.{ 70, 80 });
+    try fx.rt.tick(.{});
+    try testing.expectEqual(@as(f64, 40), types.asNumber(fx.rt.readSlot(out).?).?); // a change is not a rousing
+    try feedOcc(&fx.rt, testing.allocator, "plane.k");
+    try fx.rt.tick(.{});
+    try testing.expectEqual(@as(f64, 70), types.asNumber(fx.rt.readSlot(out).?).?); // clamped to 1, wrapped to 0
+}
+
+test "`step shuffle`: a fresh permutation per pass, no repeats within one" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.k | step [1, 2, 3, 4, 5, 6] shuffle loop seed 7 | set plane.out
+    , .{.{ "plane.k", true }});
+    defer fx.deinit();
+    const out = "programs.p.step1.out.out";
+
+    var pass1: [6]f64 = undefined;
+    var pass2: [6]f64 = undefined;
+    pass1[0] = types.asNumber(fx.rt.readSlot(out).?).?;
+    for (1..12) |i| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.k");
+        try fx.rt.tick(.{});
+        const v = types.asNumber(fx.rt.readSlot(out).?).?;
+        if (i < 6) pass1[i] = v else pass2[i - 6] = v;
+    }
+    // No repeats within a pass: each of the six appears exactly once.
+    for ([_][6]f64{ pass1, pass2 }) |pass| {
+        var seen = [_]bool{false} ** 7;
+        for (pass) |v| {
+            const k: usize = @intFromFloat(v);
+            try testing.expect(!seen[k]);
+            seen[k] = true;
+        }
+    }
+    // …and the second pass is a FRESH permutation, not the first one again.
+    try testing.expect(!std.mem.eql(f64, &pass1, &pass2));
+}
+
+test "`step random`: draws with replacement, seeded, and the seed decorrelates" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 1 | set plane.a
+        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 2 | set plane.b
+        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 1 | set plane.c
+    , .{.{ "plane.k", true }});
+    defer fx.deinit();
+
+    var differed = false;
+    for (0..24) |_| {
+        const a = types.asNumber(fx.rt.readSlot("programs.p.step1.out.out").?).?;
+        const b = types.asNumber(fx.rt.readSlot("programs.p.step2.out.out").?).?;
+        const c = types.asNumber(fx.rt.readSlot("programs.p.step3.out.out").?).?;
+        // Same seed, same stream — bit for bit, in a different node.
+        try testing.expectEqual(a, c);
+        if (a != b) differed = true;
+        try feedOcc(&fx.rt, testing.allocator, "plane.k");
+        try fx.rt.tick(.{});
+    }
+    // …and a different seed is a different stream. `random` never ends on its
+    // own, so 24 draws that all agreed would mean the seed did nothing.
+    try testing.expect(differed);
+}
+
+test "`step`: `max` caps the emissions, whatever the mode says" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.k | step [10, 20, 30] loop max 4 | set plane.out
+    , .{.{ "plane.k", true }});
+    defer fx.deinit();
+    const out = "programs.p.step1.out.out";
+    var seen = std.ArrayListUnmanaged(f64).empty;
+    defer seen.deinit(testing.allocator);
+    try seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(out).?).?);
+    for (0..6) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.k");
+        try fx.rt.tick(.{});
+        try seen.append(testing.allocator, types.asNumber(fx.rt.readSlot(out).?).?);
+    }
+    // Four emissions, then silence — and a value stream holds its last, so the
+    // tail is 10 repeated rather than the loop continuing.
+    try testing.expectEqualSlices(f64, &.{ 10, 20, 30, 10, 10, 10, 10 }, seen.items);
+}
+
+test "`step`: an empty array is silence, not a refusal and not the end" {
+    // The `first` precedent: a value cannot be invented. And NOT `done` —
+    // the array is live and may yet have something in it.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.k | step plane.seq loop | set plane.out
+    , .{ .{ "plane.k", true }, .{ "plane.seq", [0]i64{} } });
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    try testing.expect(fx.rt.readSlot("programs.p.step1.out.out") == null);
+
+    try feedInts(&fx.rt, testing.allocator, "plane.seq", &.{ 11, 22 });
+    try feedOcc(&fx.rt, testing.allocator, "plane.k");
+    try fx.rt.tick(.{});
+    try testing.expectEqual(@as(f64, 11), types.asNumber(fx.rt.readSlot("programs.p.step1.out.out").?).?);
+}
+
+test "`step`: the combinations that cannot mean anything refuse, naming both words" {
+    const cases = [_]struct { src: []const u8, names: []const []const u8 }{
+        .{ .src = "plane.k | step [1, 2] random shuffle | set plane.out", .names = &.{ "random", "shuffle", "pick one" } },
+        .{ .src = "plane.k | step [1, 2] loop bounce | set plane.out", .names = &.{ "loop", "bounce", "pick one" } },
+        .{ .src = "plane.k | step [1, 2] reverse random seed 1 | set plane.out", .names = &.{ "reverse", "random", "no direction" } },
+        .{ .src = "plane.k | step [1, 2] bounce shuffle seed 1 | set plane.out", .names = &.{ "bounce", "shuffle", "fixed order" } },
+        .{ .src = "plane.k | step [1, 2] seed 7 | set plane.out", .names = &.{ "seed", "nothing to seed" } },
+    };
+    for (cases) |c| {
+        var fx: Fixture = undefined;
+        try mountWatched(testing.allocator, &fx, c.src, .{.{ "plane.k", true }});
+        defer fx.deinit();
+        try expectRefusalNames(c.names);
+    }
 }
 
 test "`below`: the FIRST number trips, for both words — the pair's whole claim" {

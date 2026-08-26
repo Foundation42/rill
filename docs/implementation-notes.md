@@ -1432,3 +1432,79 @@ decay that must not swerve, the hold that must follow) and bites both.
 
 The `in` port is a **boolean**, not a number: a gate is held or it is not,
 and `| > 0` is one word away for a path that carries a level.
+
+## `step` — the sequencer (2026-08-26, item 8)
+
+A rousing in, the **next** element out. `nth` and `choose` pick; nothing
+walked.
+
+**The modes COMPOSE rather than being five alternatives, and this is a
+recorded deviation from Chris's wording.** He wrote: *"Modes as bare-word
+flags: default runs once and the wave ends; `loop`, `bounce`, `reverse`,
+`random seed <s>` (with replacement), `shuffle seed <s>` (a fresh
+permutation per pass, no repeats within one)."* His own description of
+`shuffle` is what argues against the flat reading: **a fresh permutation
+per *pass*** — and passes are what `loop` means, so `shuffle` and `loop`
+have to be sayable together or `shuffle` can only ever describe one pass.
+Once two of them compose the flat list is already gone, and `loop
+reverse` — a camera cycling backwards forever — is something a reader
+wants on their first afternoon.
+
+So: two independent choices and one modifier.
+
+    ORDER   sequential (default) · `random` (with replacement) · `shuffle`
+    END     once, and the wave ends (default) · `loop` · `bounce`
+    `reverse` — sequential only: start at the end and walk down
+
+The combinations that cannot mean anything **refuse at mount, naming both
+words**: two orders, two ends, `reverse` or `bounce` on a random order
+(bounce turns round inside a fixed order, and a random one has none), and
+a `seed` with nothing to seed. That last is not pedantry — `step [1, 2]
+seed 7` is someone who meant to write a mode, and a knob that silently
+does nothing is how a language loses trust.
+
+**`shuffle`'s permutation is DERIVED, not stored.** State is a pass number
+and a position; the permutation is Fisher–Yates over `seed +% pass *%
+golden` recomputed per emission. A stored table would be stale the moment
+the live array changed length, and a dump would carry a table describing
+nothing. `random` re-seeds from the emission counter exactly as `rand`
+already does — one PRNG family (beat 4's pin) is kept: `rand`, `shuffle`
+and both of these draw from xoshiro256++.
+
+**The array is live and the cursor carries**, clamped to the new length,
+never restarted (Chris's pin). And cursor, direction, pass and emission
+count are node state, so the sequence **rides the dump**: a sequencer
+that started over on restore would be a different instrument.
+
+**A found bug, and it had been sitting there since beat 3a.** `arrayIn`
+read **port 0** and always had, because every array consumer until now
+took its array as its primary input. `step`'s port 0 is the *rousing*, so
+it refused every program with "'in' is boolean, not an array" — a real
+refusal, about the right node, saying the wrong thing, and invisible
+under `mountFixture` because a refusal there is silent. Split into
+`arrayInAt(ctx, port)` with the assumption named at the site.
+
+**Six mutations, four bitten and two findings — one about the gate, one
+about the mutations.**
+
+- **The gate could not tell silence from repetition.** A value stream
+  holds its last, so "the sequence ended" and "the sequence re-emits its
+  last element forever" leave the same bytes in the slot; identical
+  output is suppressed, so not even a `tally` downstream can separate
+  them. The **live array** is what separates them: once ended, change the
+  list under the cursor and an ended sequence stays silent while a
+  stepping-in-place one emits whatever now sits at its index. The gate
+  now does that, and the mutation bites.
+- **Two of the six mutations were no-ops I had to catch myself** — one
+  wrote a variable that the line below overwrote, one left the `return`
+  in place under the lines it replaced. `mutcheck` reports SURVIVED for a
+  no-op exactly as it does for an unwatched gate, and the polarity that
+  makes it safe against harness failures does not make it safe against a
+  mutation that does not mutate. Read the diff, not just the verdict.
+
+**The output is a VALUE**, matching `nth`, `choose` and `rand`. The
+consequence is stated in the manual rather than hidden: two identical
+elements in a row are one write, so `random` drawing the same element
+twice looks like one draw downstream. An occurrence-output twin is the
+fix if the MIDI stack ever needs it; recorded in `rill-tier2.md` §8 with
+that trigger rather than guessed at now.

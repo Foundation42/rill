@@ -918,6 +918,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `every`, `arm`, `disarm` (§4.6; durations §3.12) |
 | movement | `clock`, `frame` (fed time as a value, since mount), `lfo`, `wave` (0..1 waveforms) — tier 2 beat 1a, §4.8 |
 | registers | `ease`, `ramp`, `hold`, `diff`, `integrate` (op-internal state chasing a target; §4.8) |
+| sequencing | `step <of> [seed <s>] [max <n>] [loop] [bounce] [reverse] [random] [shuffle]` — rousing in, next element out — envelopes campaign 2026-08-26 |
 | envelopes | `kick <attack> <decay>` (occurrence in, one-shot out), `adsr <a> <d> <s> <r>` (boolean gate in, held envelope out; four positional PORTS in the conventional order) — envelopes campaign 2026-08-26 |
 | shaping | `range` (0..1 → interval, clamping), `shape` (0..1 → 0..1 easing curves) |
 | math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
@@ -1019,6 +1020,19 @@ durations of an envelope must be on **one time lane**; a mismatch refuses naming
 both ports, because two consecutive stretches of one timeline cannot be measured in
 different units. (`ease`'s `up`/`down` are alternatives that never run together and
 are therefore exempt.)
+
+**`step`'s modes compose; they are not five alternatives (2026-08-26, recorded as
+a deviation).** Two independent choices — ORDER (sequential, `reverse` walking it
+downward; `random`, with replacement; `shuffle`, a fresh permutation per pass) and
+END (once and the wave ends; `loop`; `bounce`) — because `shuffle`'s own definition
+is *per pass*, and passes are what `loop` means. The combinations with no meaning
+refuse at mount naming both words: two orders, two ends, `reverse` or `bounce` on a
+random order, and a `seed` with nothing to seed.
+
+**The stepped array is LIVE and the cursor carries** (same ruling): a list that
+changes mid-sequence leaves the index where it is, clamped to the new length. It
+does not restart. The cursor, direction, pass number and emission count are node
+state and ride the dump, so a restored program resumes its sequence.
 
 **One node, one kind (same ruling).** `pulse` is a value source (1 for `width`, else 0, once
 per period); `every` is the occurrence source. An operator that both fired an occurrence and

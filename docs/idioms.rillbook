@@ -758,6 +758,55 @@
       "source": "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain"
     },
     {
+      "name": "arpeggio-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## Walk a list, one rousing at a time\n\n`nth` and `choose` PICK; nothing WALKED. The before is a counter through\nthe plane, and it needs two programs for the same reason the flash did — a\nrill may not write a path it also subscribes to — plus a `mod` to wrap it\nand an `inc` that is a blind delta, so nothing can ever read the position\nback except through the plane."
+    },
+    {
+      "name": "arpeggio-before-1",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.music.beat | inc plane.music.arp_i 1"
+    },
+    {
+      "name": "arpeggio-before-2",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.music.arp_i | mod 4 | choose [60, 64, 67, 72] | set plane.audio.note"
+    },
+    {
+      "name": "arpeggio-after-note",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "### after — envelopes ✅\n\nOne line. The cursor lives in the operator, which is legal for the same\nreason a register's does: the cycle ban is about state through the\n*plane*, not about an operator's own state.\n\nThe before also cannot stop, cannot bounce, cannot shuffle, and its\ncounter is a corpse that rides every dump and grows forever — the exact\nthing `integrate`'s required clamp exists to prevent, in a path where\nnothing checks.\n\n**Order and end are separate choices**: `shuffle loop` is a fresh\npermutation every pass, `loop reverse` cycles backwards forever, and the\ncombinations that cannot mean anything refuse at mount naming both words."
+    },
+    {
+      "name": "arpeggio-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note"
+    },
+    {
+      "name": "camera-cycle-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## Cycle camera positions on a key\n\n`step`'s second customer, and the one that argues for the modes composing\nrather than being five alternatives: cycling backwards forever is `loop\nreverse`, and a reader wants it on their first afternoon."
+    },
+    {
+      "name": "camera-cycle-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] loop | set plane.lights.key.pos"
+    },
+    {
       "name": "levels-page",
       "mode": "query",
       "markdown": true,
