@@ -119,6 +119,8 @@ Add `drive` and `expect` to the cell JSON; bump the format version.
   unknown fields through. Also the largest piece of work: a schema, a
   version bump, a JSON driver in `tests.zig`, and the app's own
   round-trip to keep honest.
+- **RULED 2026-08-26: this is the destination**, reached directly from B.
+  The blocker is raised as an ask (§7), not designed around.
 
 ### B — scripts in the gate, cells addressed by NAME
 
@@ -147,13 +149,17 @@ against the book.
   and F5 cannot touch them. A both-ways gate keeps the two files in step.
 - **Against:** two files to keep aligned, and the claim is still not
   beside the cell for a reader.
+- **RULED 2026-08-26: DEAD END — do not build.** Fixing `toDoc` makes A
+  reachable, and a sidecar would be a third place for the same text to
+  drift, in a recon whose central finding is that the text already lives
+  in three places.
 
 ## 4. Recommendation
 
-**B now, C when the scripts outgrow it, A only when Matryoshka's
-`toDoc` is fixed** — and ask for that fix now rather than later, because
-it is four lines in a file nobody is otherwise touching, and every day it
-is not done is a day design A cannot start.
+**RULED: B now, A when the round-trip is lossless, C never.** The ask for
+the `toDoc` fix is raised (§7) rather than designed around — it is four
+lines in a file nobody is otherwise touching, and it is data-loss
+prevention on its own merits now that the format has two writers.
 
 Phased, smallest useful thing first:
 
@@ -199,7 +205,65 @@ stop writing gates.
   the book. `rill-for-agents.md` carries the same vocabulary in a
   different form and is tied to the registry, not to either of these.
 
-## 6. For Chris
+## 6. For Chris — RULED 2026-08-26
+
+All three answered. The build order Chris set is **identity gate →
+after-cell correctness → before cells**, and the notes below record what
+each answer changed.
+
+**Q3 — the manual is the source; the book cites it. BUILT.** *"Evidence
+cites the claim, never the reverse, and the failure message tells you
+which file to fix."* Landed on its own (`9250db0`) with Chris's added
+requirement: the named list is gated **both ways** — every listed row
+matches, *and* the list covers every program appearing in both files.
+Without the second half a new shared program drifts while the gate stays
+green, *"which is the hollow-filter shape we keep paying for."*
+
+**Q2 — raise the Matryoshka ask now; start scripts-in-the-gate
+regardless.** Chris: *"a serialiser that silently drops unrecognised
+fields is data loss in a format with two writers, and rill is now the
+second. Preserve unknown keys — four lines, and the next feature doesn't
+hit the same wall."* Consequences, all of them settled:
+
+- **Design C (the sidecar) is a dead end. Do not build it.** Scripts live
+  in the gate until the round-trip is lossless, then move **into the
+  cell** — design A is the destination, reached directly.
+- The book's header now carries the warning, until the fix lands.
+- **The ask, stated for whoever picks it up** (§7 below).
+
+**Q1 — yes, the before cells get gated, as their own pass after the
+after-cells.** *"An argument nothing runs is prose."* And the bill is
+narrowed, which changes the estimate in §2 materially: **one assertion
+each, of the badness the row itself claims, in the row's own words** —
+night-falls counts flips, flash-on-hit asserts the eval counter never
+flattens, arpeggio asserts the plane path grows. **No timeline longer
+than it takes to show the claim.** F2's "38 hand-written scripts" was
+costed as full reproductions; one assertion each is a fraction of that.
+
+## 7. The Matryoshka ask (raised 2026-08-26)
+
+**`web/apps/rillbook/rillbook.js`, `toDoc()` — preserve unknown cell
+keys.** It currently rebuilds each cell from five named fields, so every
+other key is dropped on save with no error:
+
+```js
+cells: this._cells.map((c) => ({
+  name: c.name, source: …, mode: …, collapsed: …, markdown: …,
+}))
+```
+
+Carry the original cell object's remaining keys through (spread the
+stored cell, then overwrite the five the editor owns). Worth doing on its
+own merits regardless of this campaign: the `.rillbook` format now has
+**two writers** — the app and this repo — and a serialiser that silently
+drops what it does not recognise is data loss between them.
+
+**Trigger for the rest of the work:** when the round-trip is lossless,
+the gate's scripts move out of `tests.zig` and into the cells, where a
+reader of the book sees the claim beside the program and a browser
+runner becomes possible.
+
+## 8. The questions as originally put
 
 1. **Should the `-before` cells be gated on their badness?** I recommend
    yes, and it is phase 3 above. It is the book's strongest evidence and
