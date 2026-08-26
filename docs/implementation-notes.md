@@ -1598,3 +1598,54 @@ book's `array-oldest` cell was caught by the **identity gate first**,
 because that row is shared with the manual. Swapping it in *both* files
 so identity holds leaves only the behaviour gate — and that bites too.
 Two layers, and the outer one fails earlier with a better message.
+
+## The before cells, gated on their badness (2026-08-26, recon phase 3)
+
+Chris: *"An argument nothing runs is prose."* The before cells are the
+campaign's whole case for admitting a word — *this is what the ask cost
+without it* — and they were the last part of the book that was pure
+assertion. A before cell that quietly stopped being bad would mean the
+row no longer needed its word, and nobody would know.
+
+Narrowed on his instruction, and the narrowing is what made the pass
+affordable: **one assertion each, of the badness the row itself claims,
+in the row's own words, and no timeline longer than it takes to show the
+claim.** Not a faithful reproduction of every awkwardness — the claim,
+executed. The recon had costed this as 17 full reproductions; it is four
+short gates.
+
+- **night-falls fires on every crossing.** The row says *"a light level
+  wobbling either side of the threshold at dusk switches the lights on
+  and off repeatedly"*, so the gate counts the writes over the same dusk
+  wobble the after cell is driven through: **three, against the after
+  cell's zero**.
+- **the flash rises and never comes down** (below).
+- **the arpeggio counter grows, unbounded, on the plane** — three hundred
+  beats, three hundred and counting, no wrap and no cap. This is
+  `integrate`'s required clamp argued from the other side: an accumulator
+  living on the plane has nothing to make it stop, and it is saved with
+  the program, so it is a corpse that gets copied.
+- **the held note goes to full — there is no sustain.** One register
+  chases one target; a sustain is a second one. Held, the before sits at
+  1 where the after sits at its 0.7.
+
+**The pass paid for itself before it was written: two of the book's own
+notes claimed a badness that is not there.** Both said `ease` *"never
+quite reaches zero, so it costs a frame forever"*. `ease` **stops** —
+`converged()` at ε, no further wake — and beat 1a has gated exactly that
+since the register family landed. Two wrong sentences, in the file whose
+job is evidence, written by someone who had gated the opposite.
+
+Both corrected in place, with the correction visible rather than
+laundered. And what replaced the first one is considerably worse than
+what it claimed: **nothing ever lowers `hit_gate`.** A rill may not write
+a path it also subscribes to, which is why the workaround is two
+programs — and the second program has no way to put the gate back down.
+So `ease` chases a 1 that never leaves and the flash stays on for good.
+The workaround the re-probe reached for does not merely cost two
+programs; as written it does not turn off.
+
+Three mutations, all bitten: a before cell quietly "fixed" to use
+`below`, a before cell edited to reach the sustain after all, and — as
+corroboration for the correction — `ease` made to stop converging, which
+beat 1a's own register gates catch immediately.

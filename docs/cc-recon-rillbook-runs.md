@@ -5,8 +5,25 @@ running: each cell carries a fed-time script and an asserted outcome, and
 the gate drives the cell's own text against the row's claim. The inverted
 flagship is the argument. Recon first, not a drive-by."***
 
-**Status:** recon, 2026-08-26. Nothing here is built. Five measurements,
-three designs, one recommendation, three questions for Chris at the end.
+**Status:** recon 2026-08-26, **all three questions ruled the same day,
+and phases 1–3 BUILT.** Five measurements, three designs, one
+recommendation, and — at §6 — the rulings and what each one changed.
+
+| phase | | commit |
+|---|---|---|
+| 1 · the identity gate | built, 4 mutations bitten | `9250db0` |
+| 2 · after-cell correctness | built, 6 mutations bitten | `7ea1845` |
+| 3 · the before cells | built, 3 mutations bitten, **2 wrong claims found** | this one |
+| — · scripts in the cell | blocked on the Matryoshka ask (§7) | — |
+| — · the sidecar | ruled a dead end; not built | — |
+
+Phase 3 found two notes in the book claiming a badness that is not
+there: both said `ease` *"never quite reaches zero, so it costs a frame
+forever"*, and `ease` stops at ε — which beat 1a has gated since the
+register family landed. Corrected in place. **F2's estimate was also
+wrong in the other direction**: 38 hand-written scripts assumed full
+reproductions, and Chris's narrowing (one assertion each, of the badness
+the row claims) turned 17 before-cells into four short gates.
 
 ---
 

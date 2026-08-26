@@ -6150,6 +6150,111 @@ test "the book's own text: the leg picks ITS point, not the first one" {
     try testing.expectEqual(@as(f64, 2), types.asNumber(x).?);
 }
 
+// ---------------------------------------------------------------------------
+// The BEFORE cells, gated on their badness (recon phase 3, ruled 2026-08-26).
+//
+// Chris: *"An argument nothing runs is prose."* The before cells are the
+// campaign's whole case for admitting a word — this is what the ask cost
+// without it — and until now they were the only part of the book that was
+// pure assertion. A before cell that quietly stopped being bad would mean the
+// row no longer needs its word, and nobody would know.
+//
+// And the bill is narrowed, on his instruction: **one assertion each, of the
+// badness the row itself claims, in the row's own words, and no timeline
+// longer than it takes to show the claim.** Not a faithful reproduction of
+// every awkwardness — the claim, executed.
+//
+// The pass paid for itself before it was written: two of the book's notes
+// claimed a badness that is not there. Both said `ease` "never quite reaches
+// zero, so it costs a frame forever". `ease` STOPS — `converged()` at ε, and
+// it does not arm another tick. Corrected in the book, and what replaced one
+// of them is considerably worse than what it claimed.
+// ---------------------------------------------------------------------------
+
+/// How many writes the program has made to `path`.
+fn writesTo(fx: *Fixture, path: []const u8) usize {
+    var n: usize = 0;
+    for (fx.mock.writes.items) |w| {
+        if (std.mem.eql(u8, w.path, path)) n += 1;
+    }
+    return n;
+}
+
+test "the book's BEFORE: night-falls fires on every crossing — it chatters" {
+    // The row's own claim: *"a light level wobbling either side of the
+    // threshold at dusk switches the lights on and off repeatedly."* Counted,
+    // over the same dusk wobble the after cell is driven through.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "night-falls-before"), .{.{ "plane.sensors.sky.light", @as(f64, 0.5) }});
+    defer fx.deinit();
+
+    const before_wobble = writesTo(&fx, "plane.lights.court.on");
+    for ([_]f64{ 0.29, 0.31, 0.28, 0.32, 0.27, 0.31 }) |v| {
+        try feedValue(&fx.rt, testing.allocator, "plane.sensors.sky.light", v);
+        try fx.rt.tick(.{});
+    }
+    // Three downward crossings, three writes. The after cell holds still.
+    try testing.expectEqual(@as(usize, 3), writesTo(&fx, "plane.lights.court.on") - before_wobble);
+}
+
+test "the book's BEFORE: the flash rises and NEVER COMES DOWN" {
+    // What this cell's note used to claim was a tail that costs a frame
+    // forever. It is worse than that. Nothing ever lowers `hit_gate` — a rill
+    // may not write a path it also subscribes to, which is why the workaround
+    // is two programs, and the second program has no way to put the gate back
+    // down. So `ease` chases a 1 that never leaves, and the light stays on.
+    //
+    // One assertion: a long time after the hit, the flash is still at full.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "flash-on-hit-before-2"), .{.{ "plane.ui.hit_gate", @as(f64, 1) }});
+    defer fx.deinit();
+    try fx.rt.tick(.{ .time_ns = 30 * sec });
+    try testing.expectApproxEqAbs(@as(f64, 1), types.asNumber(fx.rt.readSlot("programs.p.ease1.out.out").?).?, 1e-3);
+}
+
+test "the book's BEFORE: the arpeggio counter GROWS, unbounded, on the plane" {
+    // Chris named this one: *"arpeggio asserts the plane path grows."* It is
+    // `integrate`'s required clamp argued from the other side — an
+    // accumulator living on the plane has nothing to make it stop, and it is
+    // saved with the program, so it is a corpse that gets copied.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "arpeggio-before-1"), .{.{ "plane.music.beat", true }});
+    defer fx.deinit();
+
+    for (0..300) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.music.beat");
+        try fx.rt.tick(.{});
+    }
+    // Three hundred beats, three hundred and counting — no wrap, no cap. The
+    // `after` cell holds the same cursor inside the operator, where it is
+    // bounded by the array and rides the dump as four small numbers.
+    const held = fx.mock.store.get("plane.music.arp_i") orelse return error.TestUnexpectedResult;
+    try testing.expect(types.asNumber(held).? >= 300);
+}
+
+test "the book's BEFORE: the held note goes to FULL — there is no sustain" {
+    // The row's claim: one register chases one target, so "decay to a sustain
+    // and then stay there" is unsayable however many words you spend. Held,
+    // this cell sits at 1; the after cell sits at its 0.7.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "held-note-before"), .{.{ "plane.input.key_c", true }});
+    defer fx.deinit();
+    try fx.rt.tick(.{ .time_ns = 5 * sec });
+    try testing.expectApproxEqAbs(@as(f64, 1), types.asNumber(fx.rt.readSlot("programs.p.ease1.out.out").?).?, 1e-3);
+}
+
 test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
     // The row that put a correctness column on §4, gated on BOTH of its
     // claims. The first version of this gate watched only the second one — it
