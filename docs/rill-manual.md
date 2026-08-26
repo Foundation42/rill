@@ -416,11 +416,14 @@ a number whose only job was being fallen from.
 | op | does |
 |---|---|
 | `kick <attack> <decay>` | an **occurrence** in: rise to 1 over `attack`, fall to 0 over `decay`, stop |
+| `adsr <a> <d> <s> <r>` | a **gate** in: rise, decay to `s` while it holds, release when it drops |
 
 ```rill
 plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash
 plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount
 plane.events.hit | kick 20ms 400ms | shape out | set plane.ui.hit_flash
+plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain
+plane.sensors.gate.contacts | len | > 0 | adsr 200ms 400ms 0.6 2s | set plane.lights.alert.level
 ```
 
 **A retrigger restarts from where it is, never from zero.** Hits arriving
@@ -438,6 +441,31 @@ envelope in the language.
 stretches of the same timeline measured in different units, and it is
 refused, naming both ports. (`ease`'s `up` and `down` are alternatives
 that never run together, so they do not have this problem.)
+
+**`adsr` is the held one.** `kick` fires and is over; `adsr` watches a
+**gate** — a boolean — and does what the gate does. It rises while the
+gate is held, decays to `sustain`, stays there for as long as you like,
+and releases when the gate drops. Four numbers in the order everyone
+already knows: attack, decay, sustain, release. That order is a cultural
+constant and rill does not get a vote.
+
+**A held sustain costs nothing.** Nothing has to happen while a note is
+held, so nothing is scheduled: the console's evaluation counter sits
+still until the gate moves. An envelope holding for a minute is as cheap
+as a constant.
+
+**Letting go starts from where it is.** Release mid-attack and it falls
+from halfway, not from the peak and not from the sustain — the same rule
+as `kick`'s retrigger, and the same reason.
+
+**A parameter change applies to the next segment; it never retimes the
+one in flight.** Shorten `release` while a note is already falling and
+*that* fall keeps the length it was given; the next one is short. A
+release that retimed itself mid-fall would jump, and a jump is the thing
+this whole family exists to avoid. The one place you can see the seam is
+`sustain`, which is a *hold* rather than a segment and so follows its
+port: move it during the decay and the decay finishes where it was told
+to, then the hold picks up the new value.
 
 **Movement costs every frame, and the cost is visible.** Anything
 downstream of `clock`, `frame` or `lfo` re-evaluates every tick, and a
@@ -1092,6 +1120,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `above` | `above <in> <on> <off>` | Boolean with hysteresis: above `on`, until below `off`. Emits its level at mount. §6f |
 | `abs` | `abs <in>` | Absolute value. |
 | `add` | `add <a> <b>` | a + b. Broadcasts over a record or an array. |
+| `adsr` | `adsr <in> <attack> <decay> <sustain> <release>` | Gate in, envelope out: rise, decay to `sustain` while the gate holds, release when it drops. A held sustain costs nothing. §6b |
 | `along` | `along <t> <knots>` | Travel a smooth curve through the knots as t goes 0..1. Clamps outside; fewer than two knots refuses. §6d |
 | `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a |
 | `arm` | `arm [<in>] [<off>] [<on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). |

@@ -730,6 +730,34 @@
       "source": "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount"
     },
     {
+      "name": "held-note-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## A note that is held, not fired\n\n`kick` fires and is over. Some things are *held*: a key down, an alarm\nstanding, a lever pulled. The before is what that costs without `adsr` —\ntwo registers and a `select`, and it still cannot say \"decay to a sustain\nand then stay there\", because `ease` and `ramp` both chase one target and\na sustain is a second one."
+    },
+    {
+      "name": "held-note-before",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.input.key_c | select 1 0 | ease 10ms down 400ms | set plane.audio.voice.gain"
+    },
+    {
+      "name": "held-note-after-note",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "### after — envelopes ✅\n\nFour numbers in the order everyone already knows. The before rises\ntoward 1 and stays there — there is no decay to a sustain, because one\nregister chases one target — and it never quite reaches zero on the way\nback down, so a released note costs a frame forever.\n\n**A held sustain costs nothing.** Nothing has to happen while a note is\nheld, so nothing is scheduled: the evaluation counter sits still until\nthe gate moves.\n\n**A parameter change applies to the next segment and never retimes the\none in flight** (Chris, 2026-08-26). Shorten `release` while a note is\nalready falling and *that* fall keeps the length it was given. A release\nthat retimed itself mid-fall would jump, and a jump is the thing this\nwhole family exists to avoid."
+    },
+    {
+      "name": "held-note-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain"
+    },
+    {
       "name": "levels-page",
       "mode": "query",
       "markdown": true,

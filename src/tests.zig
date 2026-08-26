@@ -99,6 +99,17 @@ fn feedValue(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8, value:
     try rt.feed(.{ .path = path, .value = enc });
 }
 
+/// A duration on the wire is `[lane, count]` and nothing else (§2.2), so a
+/// path can carry one — which is what makes `adsr`'s release live, and what
+/// the "next segment, never the one in flight" pin needs to be gated at all.
+fn feedDuration(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8, d: types.Duration) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    var p = struple.Packer.init(arena_state.allocator());
+    try types.appendDuration(&p, arena_state.allocator(), d);
+    try rt.feed(.{ .path = path, .value = p.bytes() });
+}
+
 /// Feed an OCCURRENCE — the kind that always propagates, identical bytes and
 /// all. A trigger pulled twice is two pulls.
 fn feedOcc(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8) !void {
@@ -2112,6 +2123,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "tally", .class = .reads },
         .{ .name = "above", .class = .reads }, // hysteresis is state
         .{ .name = "kick", .class = .reads }, // envelope in flight is state
+        .{ .name = "adsr", .class = .reads }, // …and its four-segment cousin
         .{ .name = "below", .class = .reads }, // …and its mirror
         .{ .name = "noise", .class = .reads }, // fed time
         .{ .name = "rand", .class = .reads }, // own draw counter
@@ -2184,6 +2196,7 @@ test "every core op declares whether it may tick" {
         .{ .name = "hold", .ticks = false },
         .{ .name = "pulse", .ticks = true }, // a value source on fed time
         .{ .name = "kick", .ticks = true }, // while the envelope is in flight, and not after
+        .{ .name = "adsr", .ticks = true }, // …while a SEGMENT is in flight; a held sustain costs nothing
         .{ .name = "noise", .ticks = true }, // as long as time is fed
         .{ .name = "wave", .ticks = false }, // pure shaper; ticks if its t does
         .{ .name = "range", .ticks = false },
@@ -2798,6 +2811,8 @@ test "the manuals parse: every printed example compiles" {
     // the shake, and the same flash curved by `shape` — and §11 gains the
     // flash as a recipe, because it is the re-probe's biggest finding and §11
     // is where a person goes to copy something that works.
+    // `adsr` adds no BLOCK: it lands in the same §6b listing, because `kick`
+    // and `adsr` are one family and printing them apart would teach them so.
     try testing.expectEqual(@as(usize, 48), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
@@ -4127,8 +4142,11 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // wrote — and it is TWO cells because it has to be two programs, which is
     // the shape of the workaround rather than a quirk of transcribing it.
     // Plus shake-on-impact, the after that shows why the word is not `flash`.
-    try testing.expectEqual(@as(usize, 51), rill_cells);
-    try testing.expectEqual(@as(usize, 106), total);
+    // 51 → 53, 106 → 110 (envelopes, `adsr`): the held note, with a real
+    // before — one register chasing one target, which cannot say "decay to a
+    // sustain and stay there" however many words you spend on it.
+    try testing.expectEqual(@as(usize, 53), rill_cells);
+    try testing.expectEqual(@as(usize, 110), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -6391,6 +6409,178 @@ test "`kick` refuses two time lanes, naming both ports" {
     , .{.{ "plane.events.hit", true }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "kick", "attack", "decay", "time lanes" });
+}
+
+test "`adsr`: rise, decay to sustain, hold, release" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key | adsr 100ms 200ms 0.5 400ms | set plane.audio.gain
+    , .{.{ "plane.input.key", false }});
+    defer fx.deinit();
+    const out = "programs.p.adsr1.out.out";
+
+    // Gate low at mount: a level publishes on its first evaluation, at rest.
+    try testing.expectEqual(@as(f64, 0), types.asNumber(fx.rt.readSlot(out).?).?);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.input.key", true);
+    try fx.rt.tick(.{ .time_ns = 0 });
+
+    try testing.expectApproxEqAbs(@as(f64, 0.5), try kickAt(&fx, 50_000_000, out), 1e-9); // mid-attack
+    try testing.expectEqual(@as(f64, 1), try kickAt(&fx, 100_000_000, out)); // the peak, exactly
+    try testing.expectApproxEqAbs(@as(f64, 0.75), try kickAt(&fx, 200_000_000, out), 1e-9); // mid-decay
+    try testing.expectEqual(@as(f64, 0.5), try kickAt(&fx, 300_000_000, out)); // the sustain, exactly
+
+    // Held: still 0.5 a long time later.
+    try testing.expectEqual(@as(f64, 0.5), try kickAt(&fx, 5_000_000_000, out));
+
+    // …and the release runs from the sustain, not from 1.
+    try feedValue(&fx.rt, testing.allocator, "plane.input.key", false);
+    try fx.rt.tick(.{ .time_ns = 5_000_000_001 });
+    try testing.expectApproxEqAbs(@as(f64, 0.25), try kickAt(&fx, 5_200_000_000, out), 1e-8);
+    try testing.expectEqual(@as(f64, 0), try kickAt(&fx, 5_400_000_001, out));
+}
+
+test "`adsr`: a HELD SUSTAIN costs nothing — the eval counter goes flat" {
+    // Chris's pin, and it is gated the only way it can be: a value that stays
+    // put looks identical to one being recomputed every frame, so the
+    // assertion has to be about the WORK, not the answer. The badge says what
+    // could cost; the counter says what did.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key | adsr 10ms 20ms 0.5 400ms | set plane.audio.gain
+    , .{.{ "plane.input.key", true }});
+    defer fx.deinit();
+    const out = "programs.p.adsr1.out.out";
+    const aid = nodeIdOf(&fx.prog, "adsr1").?;
+
+    // Reach the sustain…
+    try testing.expectEqual(@as(f64, 0.5), try kickAt(&fx, 50_000_000, out));
+    const settled = fx.rt.eval_count[aid];
+
+    // …and then a second of fed time, in frames, costs not one evaluation.
+    var t: u64 = 100_000_000;
+    while (t <= 1_000_000_000) : (t += 16_000_000) try fx.rt.tick(.{ .time_ns = t });
+    try testing.expectEqual(settled, fx.rt.eval_count[aid]);
+
+    // The transitions DO cost — otherwise a flat counter would prove nothing
+    // more than a node that never ran. "A rather than B", where A ≠ B: the
+    // SAME ticks, at the same cadence, over the same span of fed time.
+    try feedValue(&fx.rt, testing.allocator, "plane.input.key", false);
+    t = 1_016_000_000;
+    while (t <= 1_400_000_000) : (t += 16_000_000) try fx.rt.tick(.{ .time_ns = t });
+    try testing.expect(fx.rt.eval_count[aid] > settled + 20);
+    try testing.expectEqual(@as(f64, 0), try kickAt(&fx, 1_420_000_001, out));
+}
+
+test "`adsr`: a release mid-attack starts from where it is, never from the peak" {
+    // The family's reason for existing: no jumps. Letting go halfway up must
+    // fall from halfway, not from 1 and not from the sustain.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key | adsr 100ms 200ms 0.5 100ms | set plane.audio.gain
+    , .{.{ "plane.input.key", true }});
+    defer fx.deinit();
+    const out = "programs.p.adsr1.out.out";
+
+    const at_release = try kickAt(&fx, 40_000_000, out);
+    try testing.expectApproxEqAbs(@as(f64, 0.4), at_release, 1e-9);
+    try feedValue(&fx.rt, testing.allocator, "plane.input.key", false);
+    try fx.rt.tick(.{ .time_ns = 40_000_001 });
+
+    // Halfway down a 100ms release from 0.4 is 0.2 — and it never rises.
+    try testing.expectApproxEqAbs(@as(f64, 0.2), try kickAt(&fx, 90_000_000, out), 1e-6);
+    try testing.expectEqual(@as(f64, 0), try kickAt(&fx, 140_000_001, out));
+}
+
+test "`adsr`: a live parameter applies to the NEXT segment, never to the one in flight" {
+    // Chris's pin, 2026-08-26 — the same rule `step`'s live array follows when
+    // it carries its index. A release that shortened mid-fall would jump, and
+    // a jump is the thing this whole family exists to avoid.
+    //
+    // Gated where the two readings differ: the release is 400ms, and 200ms in
+    // (level 0.25) the port is changed to 40ms. Retimed, the envelope would be
+    // long finished by 240ms; carried, it is exactly half way.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key | adsr 10ms 10ms 0.5 plane.cfg.release | set plane.audio.gain
+    , .{ .{ "plane.input.key", true }, .{ "plane.cfg.release", [2]i64{ 0, 400_000_000 } } });
+    defer fx.deinit();
+    const out = "programs.p.adsr1.out.out";
+
+    try testing.expectEqual(@as(f64, 0.5), try kickAt(&fx, 30_000_000, out)); // sustained
+    try feedValue(&fx.rt, testing.allocator, "plane.input.key", false);
+    try fx.rt.tick(.{ .time_ns = 30_000_001 });
+    try testing.expectApproxEqAbs(@as(f64, 0.25), try kickAt(&fx, 230_000_000, out), 1e-6); // half way down
+
+    // Shorten the release to a tenth, mid-fall. The segment in flight keeps
+    // the length it was given.
+    try feedDuration(&fx.rt, testing.allocator, "plane.cfg.release", .{ .frames = false, .count = 40_000_000 });
+    try fx.rt.tick(.{ .time_ns = 230_000_001 });
+    try testing.expectApproxEqAbs(@as(f64, 0.125), try kickAt(&fx, 330_000_000, out), 1e-6);
+    try testing.expect(try kickAt(&fx, 420_000_000, out) > 0);
+    try testing.expectEqual(@as(f64, 0), try kickAt(&fx, 430_000_001, out));
+}
+
+test "`adsr`: the sustain LEVEL is live, and the decay in flight keeps its target" {
+    // Two halves of one claim, and the second is the pin drawing its own line.
+    // A live release was the argument for ports over statics; a live sustain
+    // is the same argument, and it went ungated until the mutation that
+    // froze it survived.
+    //
+    // Where they differ: `sustain` is moved twice, once during the DECAY
+    // (which must not swerve — the segment in flight keeps the target it was
+    // given) and once during the HOLD (which must follow, because a hold is
+    // not a segment).
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.input.key | adsr 100ms 400ms plane.cfg.sustain 100ms | set plane.audio.gain
+    , .{ .{ "plane.input.key", true }, .{ "plane.cfg.sustain", @as(f64, 0.5) } });
+    defer fx.deinit();
+    const out = "programs.p.adsr1.out.out";
+
+    // Half way down a 400ms decay from 1 to 0.5 is 0.75.
+    try testing.expectApproxEqAbs(@as(f64, 0.75), try kickAt(&fx, 300_000_000, out), 1e-9);
+
+    // Move the target mid-decay: the segment in flight does not swerve, so at
+    // three quarters it is still 0.625 and not somewhere between.
+    try feedValue(&fx.rt, testing.allocator, "plane.cfg.sustain", @as(f64, 0.1));
+    try fx.rt.tick(.{ .time_ns = 300_000_001 });
+    try testing.expectApproxEqAbs(@as(f64, 0.625), try kickAt(&fx, 400_000_000, out), 1e-6);
+
+    // …and at the decay's END the hold takes over and reads the port, so the
+    // level steps from the target the segment was given to the one that is
+    // there now. That step is the pin read literally and it is the ONLY place
+    // the two readings differ: the segment in flight is never redirected, and
+    // what follows it is never stale. Gated, rather than left as a surprise.
+    try testing.expectEqual(@as(f64, 0.1), try kickAt(&fx, 500_000_000, out));
+
+    // A hold follows its port for as long as it is held.
+    try feedValue(&fx.rt, testing.allocator, "plane.cfg.sustain", @as(f64, 0.2));
+    try fx.rt.tick(.{ .time_ns = 500_000_001 });
+
+    try testing.expectEqual(@as(f64, 0.2), types.asNumber(fx.rt.readSlot(out).?).?);
+    try testing.expectEqual(@as(f64, 0.2), try kickAt(&fx, 900_000_000, out));
+
+    // …and the release then falls from where it actually is, 0.2.
+    try feedValue(&fx.rt, testing.allocator, "plane.input.key", false);
+    try fx.rt.tick(.{ .time_ns = 900_000_001 });
+    try testing.expectApproxEqAbs(@as(f64, 0.1), try kickAt(&fx, 950_000_000, out), 1e-6);
+}
+
+test "`adsr` refuses two time lanes, and a gate that is not a boolean" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.input.key | adsr 10ms 20ms 0.5 3f | set plane.audio.gain
+    , .{.{ "plane.input.key", true }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "adsr", "attack", "release", "time lanes" });
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\plane.input.key | adsr 10ms 20ms 0.5 400ms | set plane.audio.gain
+    , .{.{ "plane.input.key", @as(f64, 1) }});
+    defer fx2.deinit();
+    try expectRefusalNames(&.{ "adsr", "'in'", "not a boolean" });
 }
 
 test "`below`: the FIRST number trips, for both words — the pair's whole claim" {

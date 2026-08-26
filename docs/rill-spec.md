@@ -918,7 +918,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `every`, `arm`, `disarm` (§4.6; durations §3.12) |
 | movement | `clock`, `frame` (fed time as a value, since mount), `lfo`, `wave` (0..1 waveforms) — tier 2 beat 1a, §4.8 |
 | registers | `ease`, `ramp`, `hold`, `diff`, `integrate` (op-internal state chasing a target; §4.8) |
-| envelopes | `kick <attack> <decay>` (occurrence in, one-shot out) — envelopes campaign 2026-08-26 |
+| envelopes | `kick <attack> <decay>` (occurrence in, one-shot out), `adsr <a> <d> <s> <r>` (boolean gate in, held envelope out; four positional PORTS in the conventional order) — envelopes campaign 2026-08-26 |
 | shaping | `range` (0..1 → interval, clamping), `shape` (0..1 → 0..1 easing curves) |
 | math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
 | record | record construction `{…}`, projection `.field`, `merge` |
@@ -1003,6 +1003,11 @@ one in flight (ruled 2026-08-26).** An envelope is a sequence of straight segmen
 and a segment's length is read from its port ONCE, when the segment starts. A
 release that shortened mid-fall would jump, and a jump is what the family exists to
 avoid. The same rule the live `step` array follows when it carries its index.
+
+`adsr`'s **sustain is a hold, not a segment**, so it follows its port live; its
+`a`/`d`/`r` are ports rather than statics because they are durations and rill has
+no duration static kind, and because a live release is worth having. **A held
+sustain arms no wake** — an envelope holding a note costs what a constant costs.
 
 A segment's duration is **how long the segment takes, whatever level it starts
 from** — the `ramp` reading, not the `ease` one — so `kick 20ms 400ms` is twenty

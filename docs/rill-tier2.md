@@ -1077,7 +1077,8 @@ has not let anything through that had a customer.
 > Landed so far: **`below`** (the flagship threshold row), **`first`/
 > `last` on empty** with **`len`** (absence said by the count) and
 > **`last`** (`window 5s | last`), and **`kick`** (flash on hit, shake on
-> impact — the re-probe's biggest finding). 33 of 35.
+> impact — the re-probe's biggest finding) and **`adsr`** (a note that is
+> held rather than fired). 34 of 35.
 
 **The admitted set is exactly 24, which is what the recon predicted.**
 The honest reading of "~30 words" is 24 admitted + 5 substrate = 29

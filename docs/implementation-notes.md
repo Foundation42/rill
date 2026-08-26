@@ -1389,3 +1389,46 @@ never run. An idle envelope has span 0 and `from == to == 0`, so the
 ordinary path already answers 0. That is the `is_body` mistake — a guard
 that reads as a decision and is a decoration — and the ledger says delete
 it with the reason at the site.
+
+## `adsr` — the held envelope (2026-08-26, item 7)
+
+`kick` fires and is over; `adsr` watches a **gate** and does what the gate
+does. Four positional PORTS in the conventional a-d-s-r order — **that
+order is a cultural constant and rill does not get a vote** — with
+`a`/`d`/`r` durations and `s` a level.
+
+**Ports, not statics: CC's lean, ruled by Chris as the deviation from his
+first wording.** Three of the four are durations and rill has no duration
+static kind; and a live release is worth having. That last point paid for
+itself immediately — the pin below is only *gateable* because the release
+can come from a path.
+
+**The pin (Chris, 2026-08-26): a parameter change applies to the NEXT
+segment and never retimes the one in flight.** The same rule `step`'s
+live array follows when it carries its index. Implemented by capturing a
+segment's span in state when it starts, never re-reading it.
+
+**The one place the seam shows, and it is gated rather than left as a
+surprise:** `sustain` is a *hold*, not a segment, so it follows its port
+live. Move it during the decay and the decay finishes at the target it
+was given, then the hold picks up the new value — a step at that boundary,
+exactly one, and only if someone moved a parameter mid-decay. The
+alternative (freezing the sustain at decay's end) makes a live sustain
+impossible, which is most of what ports bought.
+
+**A held sustain arms no wake.** The sustain and idle phases are *rests*,
+not segments: they have no end to reach, so the segment walk stops on
+them and nothing is scheduled. An envelope holding a note costs what a
+constant costs. Gated on the eval counter, because a value that stays put
+looks identical to one being recomputed — and gated in both directions in
+one test, since a flat counter otherwise proves only that the node never
+ran.
+
+**Five mutations. Four bitten, one SURVIVED, and it was a claim with no
+gate at all:** freezing the sustain level. The docs said it was live and
+nothing tested it — the exact shape the re-probe kept finding. The gate
+added for it now covers both halves of the claim in one program (the
+decay that must not swerve, the hold that must follow) and bites both.
+
+The `in` port is a **boolean**, not a number: a gate is held or it is not,
+and `| > 0` is one word away for a path that carries a level.

@@ -907,6 +907,82 @@ fn evalKick(ctx: *EvalCtx) EvalError!Emit {
     return emitF64(ctx, v);
 }
 
+/// `adsr <attack> <decay> <sustain> <release>` — a LEVEL in, an envelope out.
+/// Rise while the gate is held, decay to `sustain`, hold there, release when
+/// the gate drops.
+///
+/// **Ports, not statics** (ruled 2026-08-26, CC's lean recorded as the
+/// deviation from Chris's first wording): `attack`/`decay`/`release` are
+/// durations and rill has no duration static kind, so they are ports in the
+/// conventional a-d-s-r order — **and that order is a cultural constant**, not
+/// a choice this language gets to make. A live release is worth having.
+///
+/// **A held sustain costs nothing.** The sustain phase arms no wake, so an
+/// envelope holding a note is as cheap as a constant. The eval counter is what
+/// says so, and it is what the gate reads: a value that stays put looks
+/// identical to one being recomputed.
+///
+/// The `sustain` LEVEL is live — it is a hold, not a segment, so it follows
+/// its port. A change during the decay lands at the decay's end, because the
+/// segment in flight keeps the target it was given; that is the pin read
+/// literally, and it is the only place the two readings differ.
+fn evalAdsr(ctx: *EvalCtx) EvalError!Emit {
+    const gate = try boolean(ctx, 0);
+    const attack = try dur(ctx, 1);
+    const decay = try dur(ctx, 2);
+    const sustain = try num(ctx, 3);
+    const release = try dur(ctx, 4);
+    try sameLane(ctx, attack, 1, decay, 2);
+    try sameLane(ctx, attack, 1, release, 4);
+
+    const now = ctx.nowOn(attack.frames);
+    var st = EnvState.read(ctx);
+    st.frames = attack.frames;
+    // The sustain level is live, so the held phase carries whatever the port
+    // says now — which keeps `st.level` the single answer to "where is it".
+    if (st.phase == .sustain) {
+        st.from = sustain;
+        st.to = sustain;
+    }
+
+    // The gate's edges, derived from the phase rather than stored beside it:
+    // the envelope is held in exactly the three phases that follow a rise.
+    const held = switch (st.phase) {
+        .attack, .decay, .sustain => true,
+        .idle, .release => false,
+    };
+    if (gate != held) {
+        const from = st.level(now);
+        if (gate) {
+            st.begin(.attack, now, from, 1.0, attack.count);
+        } else {
+            // Release from wherever it is — mid-attack, mid-decay, or held.
+            st.begin(.release, now, from, 0.0, release.count);
+        }
+    }
+
+    while (st.progress(now) >= 1.0) {
+        const ended = st.at +| st.span;
+        switch (st.phase) {
+            .attack => st.begin(.decay, ended, 1.0, sustain, decay.count),
+            .decay => st.begin(.sustain, ended, sustain, sustain, 0),
+            .release => st.begin(.idle, ended, 0, 0, 0),
+            // `sustain` and `idle` are RESTS, not segments: they have no end
+            // to reach, so the walk stops on them. Without this the loop over
+            // a zero span would never terminate.
+            .sustain, .idle => break,
+        }
+    }
+
+    const v = st.level(now);
+    try st.write(ctx);
+    switch (st.phase) {
+        .attack, .decay, .release => try armNextTick(ctx, st.frames),
+        .sustain, .idle => {}, // a held note is as cheap as a constant
+    }
+    return emitF64(ctx, v);
+}
+
 /// `hold <duration>` — take a new value, then ignore further changes for
 /// `duration`. Sample-and-hold. It does NOT tick: nothing needs to happen at
 /// the end of the window, so there is no wake — the next arrival simply finds
@@ -2938,6 +3014,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "tally", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .help = "Running count of arrivals, as a value. Emits 0 at mount; does not survive remount (remount is restart).", .eval = evalTally },
     // envelopes campaign, 2026-08-26 — the register family's missing half
     .{ .name = "kick", .inputs = &.{ p.occ("in", Tag.any), p.in("attack", Tag.duration), p.in("decay", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "One-shot envelope from an occurrence — `plane.events.hit | kick 20ms 400ms`. Rises to 1 over `attack`, falls to 0 over `decay`, stops. A retrigger restarts from the CURRENT level, never from zero.", .eval = evalKick },
+    .{ .name = "adsr", .inputs = &.{ p.in("in", Tag.boolean), p.in("attack", Tag.duration), p.in("decay", Tag.duration), p.in("sustain", Tag.number), p.in("release", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "Gate in, envelope out — `plane.input.key | adsr 10ms 80ms 0.7 400ms`. Rise, decay to `sustain` while the gate holds, release when it drops. A held sustain costs nothing.", .eval = evalAdsr },
     .{ .name = "above", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis — `above 0.3 0.2` is \"above 0.3, until below 0.2\". Emits its level at mount; this is what stops a threshold chattering.", .eval = hysteresis(false) },
     .{ .name = "below", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis, falling — `below 0.2 0.3` is \"below 0.2, until above 0.3\". The first number trips and the second releases, same as `above`. Emits its level at mount.", .eval = hysteresis(true) },
     // tier 2, beat 3a — over arrays, driving a section body per element.
