@@ -5965,6 +5965,191 @@ fn manualRecipe(heading: []const u8) []const u8 {
     return body[0..close];
 }
 
+// ---------------------------------------------------------------------------
+// Driving the BOOK's own text (envelopes item 3 phase 2, ruled 2026-08-26).
+//
+// Chris's order: identity gate → after-cell correctness → before cells. This
+// is the middle one, and it is *the inverted flagship's actual lesson*: a gate
+// that watches the operator is not watching the row. `[{armed: false},
+// {armed: true}] | map (.armed) | reduce (or)` proves `reduce` folds. It does
+// not prove that the book's page called "is any contact armed" says `or` and
+// not `and` — and swapping those leaves the cell parsing perfectly.
+//
+// So these gates take the book's OWN source by name and assert what the ROW
+// claims. One assertion each, in the row's words, and no timeline longer than
+// it takes to show the claim.
+//
+// Scope, and why it is not all forty after-cells: the identity gate above
+// pins 29 statements identical between the manual and the book, so a gate
+// driving the manual's text is already driving the book's. What is left is
+// the cells with no behaviour gate anywhere, and among those the ones whose
+// claim is a SENSE — a direction, an ordering, a which-one — because sense is
+// what parsing cannot see and what the flagship got wrong.
+// ---------------------------------------------------------------------------
+
+/// The book's own text for a named cell. `manualRecipe(heading)`, one file
+/// over: a gate that drives this cannot be asserting something the book does
+/// not say. Slices live as long as `arena`.
+fn bookCell(arena: std.mem.Allocator, name: []const u8) ![]const u8 {
+    const parsed = try std.json.parseFromSlice(BookDoc, arena, @embedFile("idioms.rillbook"), .{ .ignore_unknown_fields = true });
+    for (parsed.value.cells) |c| {
+        if (!std.mem.eql(u8, c.name, name)) continue;
+        if (c.markdown) {
+            std.debug.print("book cell '{s}' is markdown — there is no program to drive\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+        return c.source;
+    }
+    std.debug.print("there is no book cell named '{s}'\n", .{name});
+    return error.TestUnexpectedResult;
+}
+
+test "the book's own text: `nth 0` is the OLDEST reading, `last` is the newest" {
+    // The perfect pair for this lesson: two cells a page apart, and swapping
+    // them leaves both parsing. Driven together over ONE window so the gate
+    // cannot agree with a swap — they must disagree, in the right direction.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src = try std.fmt.allocPrint(arena, "{s}\n{s}", .{
+        try bookCell(arena, "array-oldest"),
+        try bookCell(arena, "most-recent-after"),
+    });
+
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, src, .{.{ "plane.gpu.traversal_ms", @as(f64, 7) }});
+    defer fx.deinit();
+    for ([_]f64{ 3, 9 }, [_]u64{ 1, 2 }) |v, t| {
+        try feedValue(&fx.rt, testing.allocator, "plane.gpu.traversal_ms", v);
+        try fx.rt.tick(.{ .time_ns = t * sec });
+    }
+    const oldest = types.asNumber(fx.rt.readSlot("programs.p.nth1.out.out").?).?;
+    const newest = types.asNumber(fx.rt.readSlot("programs.p.last1.out.out").?).?;
+    try testing.expect(oldest != newest); // "A rather than B", where A ≠ B
+    try testing.expectEqual(@as(f64, 7), oldest);
+    try testing.expectEqual(@as(f64, 9), newest);
+}
+
+test "the book's own text: the loudest recent reading is the MAX, and any-armed is OR" {
+    // Two folds whose row is a superlative. `reduce (min)` and `reduce (and)`
+    // both parse and both fold; only the row says which way round.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "loudest-recent"), .{.{ "plane.gpu.traversal_ms", @as(f64, 4) }});
+    defer fx.deinit();
+    for ([_]f64{ 11, 6 }, [_]u64{ 1, 2 }) |v, t| {
+        try feedValue(&fx.rt, testing.allocator, "plane.gpu.traversal_ms", v);
+        try fx.rt.tick(.{ .time_ns = t * sec });
+    }
+    // The peak is 11 — and it is neither the last reading nor the first, so
+    // neither "hold the newest" nor "hold the oldest" passes this.
+    try testing.expectEqual(@as(f64, 11), types.asNumber(fx.rt.readSlot("programs.p.reduce1.out.out").?).?);
+
+    // `any armed` over one armed contact among unarmed ones: `or` says true,
+    // `and` says false, and the row is called "is ANY contact armed".
+    var fx2: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx2, try bookCell(arena, "any-armed"), .{.{
+        "plane.sensors.gate.contacts",
+        [_]struct { armed: bool }{ .{ .armed = false }, .{ .armed = true }, .{ .armed = false } },
+    }});
+    defer fx2.deinit();
+    try testing.expect(types.asBool(fx2.rt.readSlot("programs.p.reduce1.out.out").?).?);
+}
+
+test "the book's own text: `range` CLAMPS, which is the whole point of that page" {
+    // The cell exists to say `range` is not `lerp`. Its own note says the
+    // modulation chain stays inside the interval you named — so the gate
+    // drives the shaped source past 1 and asserts the exposure did not leave
+    // 0.5..1.5. Nothing about this is visible to a parser.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "range-exit"), .{});
+    defer fx.deinit();
+    var t: u64 = 0;
+    while (t <= 8 * sec) : (t += sec / 8) {
+        try fx.rt.tick(.{ .time_ns = t });
+        const v = types.asNumber(fx.rt.readSlot("programs.p.range1.out.out").?).?;
+        try testing.expect(v >= 0.5 and v <= 1.5);
+    }
+}
+
+test "the book's own text: the charge rises while held and STOPS at its clamp" {
+    // The row is "charge a mechanism while a lever is held, CAPPED". Both
+    // halves, and the cap is the half a parser cannot see.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "charge-after"), .{.{ "plane.keep.lever.held", @as(f64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.integrate1.out.out";
+
+    try fx.rt.tick(.{ .time_ns = 10 * sec });
+    const mid = types.asNumber(fx.rt.readSlot(out).?).?;
+    try testing.expect(mid > 0 and mid < 100); // it is rising, and not there yet
+    try fx.rt.tick(.{ .time_ns = 500 * sec });
+    try testing.expectEqual(@as(f64, 100), types.asNumber(fx.rt.readSlot(out).?).?); // capped, exactly
+}
+
+test "the book's own text: the eased target MOVES TOWARD it, and settles" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "ease-toward-after"), .{.{ "plane.render.grade.exposure_target", @as(f64, 1) }});
+    defer fx.deinit();
+    const out = "programs.p.ease1.out.out";
+    try testing.expectEqual(@as(f64, 1), types.asNumber(fx.rt.readSlot(out).?).?); // mounts AT the reading
+
+    try feedValue(&fx.rt, testing.allocator, "plane.render.grade.exposure_target", @as(f64, 2));
+    try fx.rt.tick(.{ .time_ns = 100 * ms });
+    const part = types.asNumber(fx.rt.readSlot(out).?).?;
+    try testing.expect(part > 1 and part < 2); // toward, and not yet arrived
+    try fx.rt.tick(.{ .time_ns = 5 * sec });
+    try testing.expectApproxEqAbs(@as(f64, 2), types.asNumber(fx.rt.readSlot(out).?).?, 1e-3);
+}
+
+test "the book's own text: the camera cycle RETURNS to its first position" {
+    // The row that argues for the modes composing. `loop` is the claim, and a
+    // cell that ran once and stopped would look identical for three presses.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "camera-cycle-after"), .{.{ "plane.input.key_up", true }});
+    defer fx.deinit();
+    const out = "programs.p.step1.out.out";
+
+    const first = try fieldValue(testing.allocator, fx.rt.readSlot(out).?, "x");
+    defer testing.allocator.free(first);
+    try testing.expectEqual(@as(f64, 0), types.asNumber(first).?);
+    for (0..3) |_| {
+        try feedOcc(&fx.rt, testing.allocator, "plane.input.key_up");
+        try fx.rt.tick(.{});
+    }
+    // Three presses over three positions is back at the start.
+    const again = try fieldValue(testing.allocator, fx.rt.readSlot(out).?, "x");
+    defer testing.allocator.free(again);
+    try testing.expectEqual(@as(f64, 0), types.asNumber(again).?);
+}
+
+test "the book's own text: the leg picks ITS point, not the first one" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, try bookCell(arena, "three-points-partial"), .{.{ "plane.stage.leg", @as(f64, 1) }});
+    defer fx.deinit();
+    const x = try fieldValue(testing.allocator, fx.rt.readSlot("programs.p.choose1.out.out").?, "x");
+    defer testing.allocator.free(x);
+    try testing.expectEqual(@as(f64, 2), types.asNumber(x).?);
+}
+
 test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
     // The row that put a correctness column on §4, gated on BOTH of its
     // claims. The first version of this gate watched only the second one — it

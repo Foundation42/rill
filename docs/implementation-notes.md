@@ -1550,3 +1550,51 @@ occurrences of the flagship line in the manual and there were two, so the
 edit never applied and `mutcheck` dutifully reported SURVIVED on a clean
 tree. The assertion caught it. **Read the diff, not just the verdict** —
 a no-op mutation and an unwatched gate look identical from the outside.
+
+## Driving the book's own text (2026-08-26, recon phase 2)
+
+Chris's build order after the recon: **identity gate → after-cell
+correctness → before cells.** This is the middle one, and it is the
+inverted flagship's actual lesson rather than its symptom.
+
+`bookCell(name)` is `manualRecipe(heading)` one file over: a gate that
+drives it cannot be asserting something the book does not say. The
+existing shape it replaces is the problem in miniature —
+
+```zig
+"[{armed: false}, {armed: true}] | map (.armed) | reduce (or) | set plane.any"
+```
+
+— which proves `reduce` folds, and says nothing about whether the book's
+page called *"is any contact armed"* uses `or` or `and`. Swap them and
+the cell still parses.
+
+**Scope, and why it is not all forty after-cells.** The identity gate
+pins 29 statements byte-identical between the manual and the book, so a
+gate driving the manual's text is already driving the book's — that
+result fell out of phase 1 and shrank phase 2 before it started. What is
+left is the cells with no behaviour gate anywhere, and among those the
+ones whose claim is a **sense**: a direction, an ordering, a which-one.
+Sense is what parsing cannot see and what the flagship got wrong.
+
+Seven gates, one assertion each, in the row's own words:
+
+- **`nth 0` is the oldest reading and `last` is the newest** — the two
+  cells sit a page apart and swapping them leaves both parsing. Driven
+  *together*, over one window, so the gate cannot agree with a swap.
+- **the loudest recent reading is the `max`** — 11 among 4 and 6, so
+  neither "hold the newest" nor "hold the oldest" passes it either.
+- **any-armed is `or`** — one armed contact among unarmed ones.
+- **`range` clamps** — the page exists to say `range` is not `lerp`; the
+  gate drives the shaped source right round and asserts it never leaves
+  the interval named in the cell.
+- **the charge rises and stops at its cap** — both halves of "capped".
+- **the eased target moves toward it and settles.**
+- **the camera cycle returns to its first position** — `loop` is the
+  claim, and a cell that ran once would look identical for three presses.
+
+Six mutations, all bitten, and the layering showed itself: editing the
+book's `array-oldest` cell was caught by the **identity gate first**,
+because that row is shared with the manual. Swapping it in *both* files
+so identity holds leaves only the behaviour gate — and that bites too.
+Two layers, and the outer one fails earlier with a better message.
