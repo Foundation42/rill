@@ -8749,3 +8749,208 @@ test "the operator index: the signature parser reads what the index writes" {
     try testing.expectError(error.UnclosedSlot, parseSignature(arena, "x <a", &name));
     try testing.expectError(error.StrayWord, parseSignature(arena, "x <a> nonsense", &name));
 }
+
+// ── §6a: the intent table, gated on the DECISION rather than on coverage ────
+//
+// The gap this closes, stated plainly: `kick`, `adsr`, `step` and `below`
+// landed in the envelopes campaign with §12 index rows, worked examples and
+// gates — and not one of them reached §6a, the "when you think… / write…"
+// table a reader meets first. The fork that CAUSED that campaign had said so
+// itself ("§6a has a row for *make it breathe* and none for *kick this and let
+// it fall*"), and the row still went missing.
+//
+// §12 is gated on exhaustiveness because it PROMISES to list the vocabulary.
+// §6a promises nothing of the kind — it is curated, its unit is an intent
+// rather than an operator, and several of its rows name no operator at all.
+// Exhaustiveness here would be the wrong assertion: it would force a row for
+// `sqrt`.
+//
+// So this gates the moment of CHOOSING instead. Every taught operator either
+// appears in §6a, or is named below with the reason it does not. Adding a word
+// fails the build until one of those is true — which is the one moment the
+// question is live.
+//
+// The honest objection, recorded rather than argued away: a list like this
+// invites rubber-stamping, and nothing here can tell a considered exemption
+// from a lazy one. True. The pass condition is only "somebody typed this word
+// in one of two places" — weak, but not vacuous, and strictly better than what
+// four words actually got. Ruled 2026-08-26.
+
+/// Taught operators that §6a deliberately does not carry a row for. Grouped by
+/// the reason, because the reason is the thing being asserted.
+const intent_exempt = [_][]const u8{
+    // The MATH family. §6a teaches the family in one row — "math is elementwise
+    // over records and arrays; there is no vector family to learn" — and a
+    // reader reaching for `sqrt` is reaching for a function, not for an idiom.
+    // A row each would drown the table's 35 intents in 20 arithmetic entries.
+    "abs",  "ceil", "cos", "div",  "exp", "floor", "fract", "log", "min", "mod",
+    "pow",  "round", "sign", "sin", "sqrt", "sub",  "tan",  "atan2", "pi", "tau",
+
+    // The COMPARATOR family. "is it dark?" vs "did it get dark?" teaches the
+    // whole family and the state/event distinction that is the actual lesson;
+    // `above`/`below` earned their own row only because hysteresis is a
+    // separate idea a comparator cannot express.
+    "!=", "<=", "=", ">", ">=",
+
+    // Collection SHAPING. §6a's array rows teach the two things that surprise
+    // — broadcasting is map, and an array literal is live and immutable — and
+    // the rest read off their own names. Candidates for promotion if a reader
+    // ever reaches for them and misses: `keep`, `map`, `sort`, `reduce`.
+    "first", "last", "len", "take", "keep", "map", "sort", "reduce", "stats",
+    "partition", "transpose", "shuffle", "sample", "record",
+
+    // SPATIAL helpers. Ordinary functions of two positions; nothing about
+    // reaching for them needs unlearning, which is what §6a is for.
+    "distance", "along", "within",
+
+    // Time, rate and LATCHING. `cooldown`, `throttle` and `hold` are named for
+    // what they do to a stream; `arm`/`disarm`/`toggle`/`latch` are the state
+    // family §7 teaches together, and splitting one out would teach it worse.
+    "cooldown", "throttle", "hold", "edge", "changed", "latch", "toggle",
+    "arm", "disarm", "rose_above", "frame", "wave",
+
+    // CONTRACTS and instruments. `expect`/`match` are author-side assertions
+    // and `tap`/`tally` are for looking at a running program — none of them is
+    // a way of thinking about a problem, which is the table's whole subject.
+    "expect", "match", "tap", "tally", "const",
+
+    // CONDITIONALS whose row points elsewhere ON PURPOSE. "when X, and Y holds"
+    // answers with "the conjunction idiom, below" rather than a spelling,
+    // because the idiom is several lines and compressing it into a cell taught
+    // it wrong — `where` is spelled out in full there. `select` is covered by
+    // "conditions flow; the threshold IS the if". `pulse` is the periodic
+    // sibling the `kick` row names as the WRONG answer, and `every` carries the
+    // metronome it belongs beside.
+    "where", "select", "pulse",
+
+    // The rest, individually: `untag` is the other half of the `tag` row;
+    // `clamp` is named in the `range` row's reason; `shape` and `merge` are
+    // plumbing between shapes; `rand` sits under the `choose` row.
+    "untag", "clamp", "shape", "merge", "rand",
+};
+
+/// Every operator name that appears inside a backticked span in §6a's table.
+/// Backticks only, on purpose: the table's third column is prose ABOUT the
+/// operators ("broadcasting over an array IS map"), and a word discussed in
+/// passing is not a row. A spelling a reader can copy lives in backticks.
+fn intentTableWords(gpa: std.mem.Allocator, doc: []const u8) !std.StringHashMapUnmanaged(void) {
+    var out: std.StringHashMapUnmanaged(void) = .empty;
+    errdefer out.deinit(gpa);
+    var lines = std.mem.splitScalar(u8, doc, '\n');
+    var in_table = false;
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "| when you think")) {
+            in_table = true;
+            continue;
+        }
+        if (!in_table) continue;
+        if (line.len == 0 or line[0] != '|') break; // the table ended
+        if (std.mem.indexOf(u8, line, "|---") != null) continue;
+
+        // The MIDDLE column only — the one that says what to write. Splitting
+        // the row into cells on unescaped pipes, because the third column is
+        // prose ABOUT operators and name-drops them in backticks: the `kick`
+        // row's reason mentions `pulse` and `ease`, and an earlier draft of
+        // this parser scanned the whole row and therefore counted `pulse` as
+        // taught by a sentence explaining why it is the WRONG answer. The
+        // comment above said middle-column; the code did not, and only removing
+        // the kick row to check the gate bit revealed it — it reported `pulse`.
+        var cells: [8][]const u8 = undefined;
+        var ncells: usize = 0;
+        var cell_start: usize = 0;
+        var k: usize = 0;
+        while (k < line.len) : (k += 1) {
+            // += 1 here AND in the loop's continue expression: two characters,
+            // the backslash and the pipe it escapes. Skipping only one left the
+            // escaped pipe to be read as a cell separator, which truncated every
+            // cell containing a `\|` — the middle column of most rows.
+            if (line[k] == '\\') {
+                k += 1;
+                continue;
+            }
+            if (line[k] != '|') continue;
+            if (ncells < cells.len) {
+                cells[ncells] = line[cell_start..k];
+                ncells += 1;
+            }
+            cell_start = k + 1;
+        }
+        if (ncells < 3) continue; // cells[0] is the empty piece before the leading '|'
+        const line_cell = cells[2];
+
+        var i: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, line_cell, i, '`')) |open| {
+            const close = std.mem.indexOfScalarPos(u8, line_cell, open + 1, '`') orelse break;
+            const span = line_cell[open + 1 .. close];
+            // `\|` is an escaped pipe inside a cell, and it is also the pipe an
+            // author copies. Treat it as a separator like any other.
+            var t: usize = 0;
+            while (t < span.len) {
+                while (t < span.len and (std.mem.indexOfScalar(u8, " \t\\|(){}[],", span[t]) != null)) t += 1;
+                const start = t;
+                while (t < span.len and std.mem.indexOfScalar(u8, " \t\\|(){}[],", span[t]) == null) t += 1;
+                if (t > start) try out.put(gpa, span[start..t], {});
+            }
+            i = close + 1;
+        }
+    }
+    return out;
+}
+
+test "§6a: every taught operator is in the intent table, or is named as not belonging there" {
+    const gpa = testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    var words = try intentTableWords(gpa, @embedFile("rill-manual.md"));
+    defer words.deinit(gpa);
+
+    // Rule 1: the table must have been FOUND. A parser that silently matched
+    // nothing would make every operator "not covered", the exempt list would
+    // then be wrong for 36 words, and the failure would look like a doc problem
+    // rather than a parser one. Assert the precondition before the claim.
+    try testing.expect(words.count() > 20);
+
+    for (reg.ops.items) |def| {
+        const substrate = for (untaught_substrate) |u| {
+            if (std.mem.eql(u8, u.name, def.name)) break true;
+        } else false;
+        if (substrate) continue; // never taught, so never an intent
+
+        const covered = words.contains(def.name);
+        var exempt = false;
+        for (intent_exempt) |e| {
+            if (std.mem.eql(u8, e, def.name)) exempt = true;
+        }
+
+        if (!covered and !exempt) {
+            std.debug.print(
+                \\'{s}' is taught, and §6a's table neither carries it nor excuses it.
+                \\
+                \\Decide which, in `docs/rill-manual.md` §6a or in `intent_exempt`:
+                \\  - a reader who wants '{s}' arrives KNOWING WHAT THEY WANT and not
+                \\    what to write ⇒ it wants a row: the intent, the spelling, and
+                \\    the thing that has to be unlearned;
+                \\  - or it reads off its own name, or its family already has a row
+                \\    ⇒ add it to the group in `intent_exempt` whose reason fits.
+                \\
+            , .{ def.name, def.name });
+            return error.TestUnexpectedResult;
+        }
+        if (covered and exempt) {
+            std.debug.print("'{s}' is in §6a AND in intent_exempt — the list has gone stale\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    // The list cannot outlive its words either. An exemption for an operator
+    // that no longer exists is a decision about nothing, and it is exactly what
+    // a rubber-stamped list rots into.
+    for (intent_exempt) |e| {
+        if (reg.find(e) == null) {
+            std.debug.print("intent_exempt names '{s}', which is not a registered operator\n", .{e});
+            return error.TestUnexpectedResult;
+        }
+    }
+}

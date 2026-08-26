@@ -424,8 +424,8 @@ so a half-added channel is refused the way a half-added tenant is.
 The cast supplies intensity and extent; the channel supplies the
 physics. Every physics question has one home.
 
-**As built (2026-08-25):** `chanarche set <$name> <epsilon> <decay_ms>
-[clamp_lo] [clamp_hi]` — the spine's EIGHTH tenant and its first
+**As built (2026-08-25; clamps respelled 2026-08-26):** `chanarche set
+<$name> <epsilon> <decay_ms> [clamp_lo <v>] [clamp_hi <v>]` — the spine's EIGHTH tenant and its first
 archetype-only one (a channel has no placed instance; casters are
 rills, the console, and later entities). Epsilon is the cull floor and
 the floor of meaning; decay_ms is the default e-folding time deposits

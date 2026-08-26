@@ -225,6 +225,7 @@ in steps.
 | "if X and Y" / "if not X" | `\| and`, `\| or`, `\| not` | boolean algebra is three ordinary operators, and they broadcast like the rest of the math |
 | "when X, and Y holds" | the conjunction idiom, below | name the condition as a stream, gate with `where`; a block can't open a source |
 | "is it dark?" vs "did it get dark?" | `< 0.25` vs `dropped_below 0.25` | a comparator is a state; a crossing is an event, fired once on the way through |
+| "on when it gets dark, off when it gets light — and no flicker" | `\| below 0.2 0.3`, `\| above 20 15` | one comparator chatters when the reading sits on the line; hysteresis is two numbers, and the FIRST is the one that trips |
 | "do A, then continue to B" | `X \| also { A } \| B` | side effects branch; the last effect is the main sink |
 | "do A then B" (ordered) | one pipeline, or two branches if independent | a block is fan-out; sequence is a pipe |
 | "count how many times" | `X \| inc plane.n 1` | a blind delta reads nothing, so it's the one write that can't cycle |
@@ -235,6 +236,8 @@ in steps.
 | "how long has this been running?" | `clock` | time is a value you read, not a counter you keep |
 | "smooth this jittery reading" | `\| ease <tau>` | a rill can't chase a target through the plane; a register chases it inside the operator |
 | "fade to the new value" | `\| ramp <over>` | `ease` never quite arrives (and shouldn't); `ramp` has an end and lands on it |
+| "kick this and let it fall" | `\| kick 20ms 400ms` | an occurrence has no level to follow, so `ease` has nothing to chase and `pulse` would repeat; `kick` makes the shape and ENDS |
+| "hold it while the key is down" | `\| adsr 10ms 80ms 0.7 400ms` | the gate dropping IS the release; a held sustain costs nothing, so a note held all day is not a computation |
 | "how fast is it changing?" | `\| diff` | derive it; don't ask the host to publish a velocity field |
 | "count up while this is held" | `\| integrate max <m>` | op-internal state, so no `inc` dance — and the cap is required |
 | "map 0..1 onto a real range" | `\| range lo hi`, not `lerp` | `range` clamps and `lerp` extrapolates; a modulation chain wants the interval it named |
@@ -242,6 +245,7 @@ in steps.
 | "double every reading in the window" | `window 10s \| mul 2` | broadcasting over an array IS map |
 | "pick one of these" | `\| choose [a, b, c]` | a table of choices is a *value*, not a chain of `select`s — read it left to right, edit it in place |
 | "the i-th one" | `\| nth <i>` | `nth` and `choose` are one computation; the difference is which port rouses it |
+| "the NEXT one, each time this fires" | `\| step [a, b, c] loop` | `nth` and `choose` are asked WHICH; `step` is only ever asked *again*, and it keeps the place |
 | "read a field mid-chain" | `\| .field` | a field read used to need a name to hang off; now the chain is the standpoint |
 | "three points typed into a cell" | `[{x: 0, …}, {x: 2, …}, …]` | an array literal is live, immutable, and not a buffer — `[0, 2, 0]` is not a position |
 | "a record built from three computed streams" | `{x: (noise 40ms seed 1), …}` | a field may hold a whole operator call in parens; `( … )` only means a *section* where a consumer asks for one |
@@ -868,9 +872,16 @@ with no dispel mechanism at all: fields add. Nothing carries an
 addressee — a cast is a shout, not a phone call, and whoever is there
 to absorb it, absorbs it.
 
-Channels are declared before anyone casts (in Matryoshka:
-`chanarche set $alarm 0.01 2000 0` — epsilon, default decay in ms,
-optional clamp). Mounting a caster whose channel doesn't exist refuses
+Channels are declared before anyone casts. In Matryoshka that is a console
+line — epsilon, the default decay in ms, and clamps that carry their WORDS
+(adjacent positional clamps made the high one unsayable, and two live callers
+had filled the wrong one):
+
+```console
+chanarche set $alarm 0.01 2000 clamp_lo 0
+```
+
+Mounting a caster whose channel doesn't exist refuses
 the mount and names the node — and so does a coupling to an undeclared
 tag, because a cast can be **coupled**: `to #tag` scopes who absorbs it.
 
@@ -892,7 +903,17 @@ own derivation — authored feedback, one step per frame.
 it samples; neither has an implicit "here."* A standpoint is an **ear**:
 a placed post reading through a declared *sampler* (point or area,
 gradient on or off, a cadence, a clamp), publishing at
-`sensors/<post>/$alarm`. An ear can instead be **bound to an entity**
+`sensors/<post>/$alarm`. The sampler and the post are separate console lines, and the sampler comes
+first — a post bound to a sampler that does not exist reads NOTHING rather
+than defaulting:
+
+```console
+chanarche set $alarm 0.01 2000 clamp_lo 0
+eararche set war-ear $alarm point 0 0 16
+ear place gate 4 0 4 war-ear
+```
+
+An ear can instead be **bound to an entity**
 (`ear bind tom-ear @tom war-ear`): the standpoint then *follows* the
 entity — its registry mirror is the position — and the readings publish
 at the entity's own surface, so `@tom.$alarm` reads what Tom hears. If
@@ -901,7 +922,7 @@ walk in §12's demo is exactly a camera-bound ear crossing a brazier's
 glow. The plain placed form:
 
 ```rill
-plane.sensors.hearth.$torchlight | mul 0.5 | add 0.5 | set plane.render.grade.exposure
+plane.sensors.hearth.$torchlight | range 1 1.5 | set plane.render.grade.exposure
 ```
 
 That is the lamplighter: the lamp literally dims as the fire dies. Two
@@ -1039,7 +1060,7 @@ every 1f { cast $torchlight 0.8 radius 2.5 at plane.sensors.hearth.pos decay 4s 
 ```
 
 ```rill
-plane.sensors.hearth.$torchlight | mul 0.5 | add 0.5 | set plane.render.grade.exposure
+plane.sensors.hearth.$torchlight | range 1 1.5 | set plane.render.grade.exposure
 ```
 
 **The breathing exposure** — the founding example of tier 2, and the

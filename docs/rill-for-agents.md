@@ -245,7 +245,8 @@ first, so `sound play` is one operator.
 ## 4. Fields, in agent terms
 
 - **Channel** (`$name`): declared world-side before any caster mounts
-  (`chanarche set $alarm <epsilon> <decay_ms> [clamp_lo clamp_hi]`).
+  (`chanarche set $alarm <epsilon> <decay_ms> [clamp_lo <v>] [clamp_hi <v>]`
+  — the clamps are keyword ports, independently optional).
   A mounted program whose `cast` names an undeclared channel is
   **refused at mount**, node named.
 - **`cast`** deposits `{pos, amplitude, radius, decay}` into *your*

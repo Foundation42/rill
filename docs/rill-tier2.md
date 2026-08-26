@@ -1177,19 +1177,30 @@ host, or the manual rather than the operator table:
   `where` always do — gated in one program. The camera-shake row went
   from four lines to **one**, under its 2–3 target.
 
-- **FORK — no way to kick an envelope from an event** (raised at close by
-  the ergonomics re-probe). "Flash a light on a hit" and "shake the camera
-  on impact" are most of a week's game-feel work, and rill has three
-  near-misses and no hit: `pulse` decays but is **periodic**; `ease`
-  decays but **follows its input**, and an occurrence carrying 1 gives it
-  a target of 1 with nothing to pull it back; `ramp … from` has a start
-  but only for the **first** tween. The reviewer's answer was two
-  programs, an invented gate path and a 60 ms magic number whose only job
-  is giving `ease` something to fall from. §6a's "thinking in rill" table
-  has a row for *make it breathe* and none for *kick this and let it
-  fall*. Candidate spellings: `envelope <attack> <decay>` on an
-  occurrence, or `ramp <over> to <v>` so a trigger names its destination.
-  **Not decided.**
+- **~~FORK — no way to kick an envelope from an event~~ — RULED 2026-08-26**
+  (raised at close by the ergonomics re-probe, settled by the envelopes
+  campaign). rill had three near-misses and no hit: `pulse` decays but is
+  **periodic**; `ease` decays but **follows its input**, and an occurrence
+  carrying 1 gives it a target of 1 with nothing to pull it back; `ramp …
+  from` has a start but only for the **first** tween. The reviewer's answer
+  was two programs, an invented gate path and a 60 ms magic number whose
+  only job was giving `ease` something to fall from.
+
+  Both candidate spellings were passed over. `kick <attack> <decay>` takes
+  an **occurrence** in and makes the shape itself — no target to name,
+  because a kick's destination is *back where it started* — and `adsr <a>
+  <d> <s> <r>` takes a **gate**, where the drop IS the release. Envelopes
+  items 6 and 7; the customers are the light flash and the camera shake the
+  fork was named for.
+
+  **And the row this fork asked for went missing anyway.** The complaint
+  ended by noting §6a's table had *make it breathe* and no *kick this and
+  let it fall* — and when `kick`, `adsr`, `step` and `below` landed, all
+  four got §12 index rows, worked examples and gates, and **not one of them
+  reached §6a**. Four words, four sections, zero rows on the page a reader
+  meets first. Added 2026-08-26, on noticing this entry still said "not
+  decided" for something that shipped. See the ledger's note on gating a
+  curated table.
 
 - **~~FORK — `first` errors on empty~~ — RULED 2026-08-26** (raised at the
   re-probe, settled in the envelopes campaign). §11's nearest-threat
