@@ -1095,7 +1095,18 @@ const Parser = struct {
             try path.append(self.a(), '.');
             try path.appendSlice(self.a(), seg.text);
         }
-        if (path.items.len == base.len) return self.fail(head, "expected '.' after '{s}'", .{head.text});
+        if (path.items.len == base.len) {
+            // A `use` alias is a path PREFIX, and aliasing a LEAF gives a name
+            // that can never be used — `use plane.environment.ambient_light as
+            // dusk` then `dusk | …`. Every example in both manuals aliases a
+            // namespace, so the constraint is invisible, and `<path> as <name>`
+            // sits beside it looking interchangeable. Found by a no-priors
+            // reader, 2026-08-26; "expected '.'" sent them nowhere.
+            if (!std.mem.eql(u8, head.text, "plane")) {
+                return self.fail(head, "'{s}' is a `use` alias — a path PREFIX, so a field must follow it ('{s}.something'). To name a STREAM instead, bind it with `as`: '{s} as {s}'", .{ head.text, head.text, base, head.text });
+            }
+            return self.fail(head, "expected '.' after '{s}'", .{head.text});
+        }
         return .{ .kind = .plane_path, .source = .{ .plane = path.items }, .ty = types.Tag.any, .text = path.items, .tok = head };
     }
 
@@ -1483,7 +1494,7 @@ const Parser = struct {
             if (arg.kind == .section and def.body > 0) continue;
             const pi = portIndex(ports, arg.kw) orelse return self.fail(arg.tok, "'{s}' has no port '{s}'", .{ op_name, arg.kw });
             if (bound[pi] != null) return self.fail(arg.tok, "port '{s}' of '{s}' bound twice", .{ arg.kw, op_name });
-            bound[pi] = try self.bindArg(arg, ports[pi], op_name);
+            bound[pi] = try self.bindArg(arg, ports[pi], op_name, def, primary != null);
         }
         // Sections. Two mechanisms, and the CONSUMER's declaration decides
         // which — never a lookahead at the section's own text.
@@ -1529,7 +1540,7 @@ const Parser = struct {
             const pi = for (ports, 0..) |port, i| {
                 if (bound[i] == null and !port.kw) break i;
             } else return self.fail(arg.tok, "too many arguments for '{s}' ({d} port(s))", .{ op_name, ports.len });
-            bound[pi] = try self.bindArg(arg, ports[pi], op_name);
+            bound[pi] = try self.bindArg(arg, ports[pi], op_name, def, primary != null);
         }
 
         // A membership sink with nothing rousing it fires ONCE, at tick 0:
@@ -1621,7 +1632,72 @@ const Parser = struct {
     /// narrow: anywhere else an unknown word stays a loud error. And a
     /// `one_of` port checks a bound string literal's membership here, at
     /// wire time — the browser's tab-complete list, finally enforced.
-    fn bindArg(self: *Parser, arg: Arg, port: registry.Port, op_name: []const u8) ParseError!Arg {
+    /// How an operator's arguments are written, in the manual's §12 notation:
+    /// `<name>` is positional, `name <name>` is introduced by that word, and
+    /// `[…]` is optional. Rendered from the registry so a refusal and the
+    /// operator index cannot disagree about the same operator.
+    fn argSpelling(self: *Parser, def: *const registry.OpDef, skip_primary: bool) ParseError![]const u8 {
+        var out = std.ArrayListUnmanaged(u8).empty;
+        for (def.inputs, 0..) |pt, i| {
+            if (i == 0 and skip_primary) continue;
+            out.appendSlice(self.a(), " ") catch return error.OutOfMemory;
+            const w = out.writer(self.a());
+            if (pt.optional and pt.kw) {
+                std.fmt.format(w, "[{s} <{s}>]", .{ pt.name, pt.name }) catch return error.OutOfMemory;
+            } else if (pt.optional) {
+                std.fmt.format(w, "[<{s}>]", .{pt.name}) catch return error.OutOfMemory;
+            } else if (pt.kw) {
+                std.fmt.format(w, "{s} <{s}>", .{ pt.name, pt.name }) catch return error.OutOfMemory;
+            } else {
+                std.fmt.format(w, "<{s}>", .{pt.name}) catch return error.OutOfMemory;
+            }
+        }
+        for (def.statics) |sd| {
+            out.appendSlice(self.a(), " ") catch return error.OutOfMemory;
+            if (sd.flag) {
+                std.fmt.format(out.writer(self.a()), "[{s}]", .{sd.name}) catch return error.OutOfMemory;
+            } else if (sd.kw and sd.optional) {
+                std.fmt.format(out.writer(self.a()), "[{s} <{s}>]", .{ sd.name, sd.name }) catch return error.OutOfMemory;
+            } else if (sd.kw) {
+                std.fmt.format(out.writer(self.a()), "{s} <{s}>", .{ sd.name, sd.name }) catch return error.OutOfMemory;
+            } else {
+                std.fmt.format(out.writer(self.a()), "<{s}>", .{sd.name}) catch return error.OutOfMemory;
+            }
+        }
+        return out.items;
+    }
+
+    /// The arguments this operator DOES take by name, comma-separated, or the
+    /// empty string. The reader's confusion is binary — does this one carry a
+    /// word? — so the refusal answers exactly that, per operator, from the
+    /// declaration rather than from a rule that has exceptions.
+    fn keywordArgs(self: *Parser, def: *const registry.OpDef) ParseError![]const u8 {
+        var out = std.ArrayListUnmanaged(u8).empty;
+        for (def.inputs) |pt| {
+            if (!pt.kw) continue;
+            if (out.items.len > 0) out.appendSlice(self.a(), ", ") catch return error.OutOfMemory;
+            out.appendSlice(self.a(), pt.name) catch return error.OutOfMemory;
+        }
+        for (def.statics) |sd| {
+            if (!sd.kw) continue;
+            if (out.items.len > 0) out.appendSlice(self.a(), ", ") catch return error.OutOfMemory;
+            out.appendSlice(self.a(), sd.name) catch return error.OutOfMemory;
+        }
+        return out.items;
+    }
+
+    /// Does `word` name an argument of `def` that is written WITHOUT its name?
+    fn positionalNamed(def: *const registry.OpDef, word: []const u8) bool {
+        for (def.inputs) |pt| {
+            if (std.mem.eql(u8, pt.name, word)) return !pt.kw;
+        }
+        for (def.statics) |sd| {
+            if (std.mem.eql(u8, sd.name, word)) return !sd.kw and !sd.flag;
+        }
+        return false;
+    }
+
+    fn bindArg(self: *Parser, arg: Arg, port: registry.Port, op_name: []const u8, def: ?*const registry.OpDef, piped: bool) ParseError!Arg {
         var out = arg;
         if (arg.kind == .word) {
             // A sigil-led word reaching a non-string port is a mistake with
@@ -1640,6 +1716,29 @@ const Parser = struct {
                 }
                 if (arg.text.len > 1 and arg.text[0] == '^') {
                     return self.fail(arg.tok, "'{s}' names an archetype — engine-owned; today only `derive set` takes one", .{arg.text});
+                }
+                // A bare word that NAMES A PORT of the operator being called
+                // is not an unknown name — it is the reader writing a
+                // positional argument as a keyword, and "unknown name" sends
+                // them hunting for a missing `as`. Found 2026-08-26 by a
+                // no-priors reader who made this mistake FOUR TIMES in one
+                // program: `kick attack 100ms decay 4s`, `ease tau 2s`, `hold
+                // for 30s`, `step of […]`. They were not guessing — `cast …
+                // radius <r> at <pos> decay <d>`, `take 3 from 1` and
+                // `integrate max 100` all do carry words, and nothing they
+                // read said which do and which do not. Same shape as `sample
+                // 5` → "write it with a unit": name the mistake, give the
+                // spelling. The spelling comes from the registry, in the
+                // manual §12 notation, so the two cannot drift.
+                if (def) |d| {
+                    if (positionalNamed(d, arg.text)) {
+                        const spelling = try self.argSpelling(d, piped);
+                        const kws = try self.keywordArgs(d);
+                        if (kws.len > 0) {
+                            return self.fail(arg.tok, "'{s}' is an argument of '{s}' that is written WITHOUT its name — drop the word: '{s}{s}'. The ones '{s}' does take by name: {s}", .{ arg.text, op_name, op_name, spelling, op_name, kws });
+                        }
+                        return self.fail(arg.tok, "'{s}' is an argument of '{s}' that is written WITHOUT its name — drop the word: '{s}{s}'. '{s}' takes no argument by name", .{ arg.text, op_name, op_name, spelling, op_name });
+                    }
                 }
                 return self.fail(arg.tok, "unknown name '{s}'", .{arg.text});
             }
@@ -2079,7 +2178,7 @@ const Parser = struct {
                 if (std.mem.eql(u8, pd.name, arg.kw)) break i;
             } else return self.fail(arg.tok, "'{s}' has no port '{s}'", .{ tmpl.name, arg.kw });
             if (bound[pi] != null) return self.fail(arg.tok, "port '{s}' of '{s}' bound twice", .{ arg.kw, tmpl.name });
-            bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name);
+            bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name, null, false);
         }
         for (args.items) |arg| {
             if (arg.kw.len > 0) continue;
@@ -2087,7 +2186,7 @@ const Parser = struct {
             const pi = for (tmpl.ports, 0..) |_, i| {
                 if (bound[i] == null) break i;
             } else return self.fail(arg.tok, "too many arguments for '{s}' ({d} port(s))", .{ tmpl.name, tmpl.ports.len });
-            bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name);
+            bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name, null, false);
         }
         const port_sources = try self.a().alloc(Source, tmpl.ports.len);
         for (tmpl.ports, 0..) |pd, i| {

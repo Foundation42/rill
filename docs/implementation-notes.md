@@ -1662,3 +1662,56 @@ Three mutations, all bitten: a before cell quietly "fixed" to use
 `below`, a before cell edited to reach the sustain after all, and — as
 corroboration for the correction — `ease` made to stop converging, which
 beat 1a's own register gates catch immediately.
+
+## Two refusals the parser already knew the answer to (2026-08-26)
+
+A reviewer with no priors wrote one program from the agent manual. Six
+distinct mistakes; **four of them were the same mistake**, and both fixes
+here are the `sample 5` → *"write it with a unit: 5s"* shape: name the
+mistake, give the spelling.
+
+**(1) A positional argument written as a keyword.** `kick attack 100ms
+decay 4s`, `ease tau 2s`, `hold for 30s`, `step of […]` — each answered
+`unknown name 'attack'`, which sends a reader hunting for a missing `as`
+binding. The truth was in the registry at the moment of failure.
+
+They were not guessing. `cast … radius <r> at <pos> decay <d>`, `take 3
+from 1`, `integrate max 100` and `sort by (…)` all DO carry words — and
+**on adjacent lines they wrote `decay 4s` correctly (a keyword port of
+`cast`) and `decay 4s` wrongly (a positional port of `kick`).** Same
+word, two spellings, one program. The inconsistency is the language's.
+
+Now: *"'attack' is an argument of 'kick' that is written WITHOUT its name
+— drop the word: 'kick <attack> <decay>'. 'kick' takes no argument by
+name."* The spelling is rendered from the registry in **§12's notation**,
+so a refusal and the operator index cannot disagree about the same
+operator. Where the operator does take some by name, it says which,
+because the reader's question is binary and per-operator rather than a
+rule with exceptions.
+
+**(2) A `use` alias used as a stream.** `use plane.environment.ambient_light
+as dusk` then `dusk | …` answered `expected '.' after 'dusk'`, which
+names nothing and fixes nothing. A `use` alias is a path **prefix**, so
+aliasing a **leaf** produces a name that can never be used — and every
+example in both manuals aliases a namespace, so the constraint is
+invisible while `<path> as <name>` sits beside it looking interchangeable.
+
+Now: *"'dusk' is a `use` alias — a path PREFIX, so a field must follow it
+('dusk.something'). To name a STREAM instead, bind it with `as`:
+'plane.environment.ambient_light as dusk'."*
+
+**Five mutations, and two of them survived first**, both for the same
+reason — the hint's *guard* was never exercised:
+
+- **`positionalNamed` returning true for keyword ports changed nothing**,
+  because every obvious case has the keyword consumed before it reaches
+  the bind. The reachable one is a keyword's *value* being a word that
+  names another keyword: `noise 40ms seed octaves`. There "drop the word"
+  is wrong advice, and the generic message is right.
+- **Dropping the word from the spelling changed nothing**, because
+  `ease`'s `up`/`down` are *optional* keywords and take a different
+  branch. The only required-and-worded arguments outside `cast` are
+  `integrate`'s clamp — so `integrate in 5` is the case that bites.
+
+Both are the ledger's first line again: the gate must run where A ≠ B,
+and both times the missing thing was the discriminating input.

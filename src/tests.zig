@@ -6336,6 +6336,94 @@ test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
     try testing.expect(!types.asBool(fx.rt.readSlot(hyst).?).?);
 }
 
+// ---------------------------------------------------------------------------
+// Two refusals of the `sample 5` → "write it with a unit: 5s" shape, both
+// found on 2026-08-26 by a reviewer with no priors writing one program from
+// the agent manual. Neither was a bug in the language: both were the parser
+// declining to say the thing it already knew.
+// ---------------------------------------------------------------------------
+
+test "a positional argument written as a keyword names itself, and gives the spelling" {
+    // The reviewer made this mistake FOUR TIMES in one program — `kick attack
+    // 100ms decay 4s`, `ease tau 2s`, `hold for 30s`, `step of […]` — and got
+    // "unknown name 'attack'" every time, which sends a reader hunting for a
+    // missing `as` binding.
+    //
+    // They were not guessing. `cast … radius <r> at <pos> decay <d>`, `take 3
+    // from 1`, `integrate max 100` and `sort by (…)` all DO carry words, and
+    // on adjacent lines they wrote `decay 4s` correctly (a keyword port of
+    // `cast`) and `decay 4s` wrongly (a positional port of `kick`). Same word,
+    // two spellings, one program. The inconsistency is the language's; the
+    // silence was the parser's.
+    try expectParseError("plane.a | kick attack 100ms decay 4s | set plane.b", "'attack' is an argument of 'kick'");
+    try expectParseError("plane.a | kick attack 100ms decay 4s | set plane.b", "kick <attack> <decay>");
+    try expectParseError("plane.a | hold for 30s | set plane.b", "'hold' takes no argument by name");
+
+    // …and where the operator DOES take some by name, it says which — because
+    // the reader's question is binary and per-operator, not a rule with
+    // exceptions.
+    try expectParseError("plane.a | ease tau 2s | set plane.b", "ease <tau> [up <up>] [down <down>]");
+    try expectParseError("plane.a | ease tau 2s | set plane.b", "does take by name: up, down");
+    try expectParseError("plane.a | take n 3 | set plane.b", "does take by name: from");
+
+    // The spelling is rendered from the REGISTRY in §12's notation, so a
+    // refusal and the operator index cannot disagree about the same operator.
+    try expectParseError("noise period 40ms | set plane.b", "noise <period> [octaves <octaves>] [seed <seed>]");
+
+    // A REQUIRED argument that DOES carry a word must show the word in the
+    // spelling. Without a case here, dropping the word from that branch
+    // changed nothing — `ease`'s `up`/`down` are optional and take a different
+    // branch, so every example above agreed with a spelling that had stopped
+    // saying which arguments are keyword. `integrate`'s clamp is the only
+    // required-and-worded argument outside `cast`.
+    try expectParseError("integrate in 5 | set plane.b", "max <max>");
+
+    // …and it does not over-fire, in either direction. A word that is not one
+    // of this operator's arguments is still an unknown name, which is what it
+    // is — and a word that IS one but is written WITH its name must not be
+    // told to drop it. Both had to be gated: "does this word name a
+    // positional argument" is the whole claim, and a check that answered yes
+    // for keyword arguments too passed every case above.
+    try expectParseError("plane.a | mul nonsense | set plane.b", "unknown name 'nonsense'");
+    try expectParseError("plane.a | mul tau | set plane.b", "unknown name 'tau'"); // `tau` is `ease`'s, not `mul`'s
+    // …and a word naming an argument this operator DOES take by name is not
+    // told to drop it: here `octaves` has been written as `seed`'s value, and
+    // "drop the word" would be wrong advice. Gated because a check that
+    // answered yes for keyword arguments too passed every other case above.
+    try expectParseError("noise 40ms seed octaves | set plane.b", "unknown name 'octaves'");
+
+}
+
+test "a `use` alias used as a stream says it is an alias, and points at `as`" {
+    // `use plane.environment.ambient_light as dusk` then `dusk | …` said
+    // "expected '.' after 'dusk'", which names nothing and fixes nothing. A
+    // `use` alias is a path PREFIX, so aliasing a LEAF produces a name that
+    // can never be used — and every example in both manuals aliases a
+    // namespace, so the constraint is invisible while `<path> as <name>` sits
+    // beside it looking interchangeable.
+    try expectParseError(
+        \\use plane.environment.ambient_light as dusk
+        \\dusk | < 0.15 | set plane.b
+    , "'dusk' is a `use` alias");
+    try expectParseError(
+        \\use plane.environment.ambient_light as dusk
+        \\dusk | < 0.15 | set plane.b
+    , "plane.environment.ambient_light as dusk"); // the fix, spelled out
+
+    // The prefix itself still works, and so does the `as` the message names.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\use plane.environment as env
+        \\env.ambient_light | < 0.15 | set plane.dark
+    , .{.{ "plane.environment.ambient_light", @as(f64, 0.1) }});
+    defer fx.deinit();
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.lt1.out.out").?).?);
+
+    // …and `plane` itself keeps the plain message: it is not an alias, and
+    // telling someone to bind `plane` with `as` would be nonsense.
+    try expectParseError("plane | set plane.b", "expected '.' after 'plane'");
+}
+
 test "the wire gate: a container only reaches a port that says it broadcasts" {
     // Beat 1b widened `accepts` globally so `mul {x: 1}` would wire, and that
     // quietly removed wire-time typing from EVERY number port in the language.
