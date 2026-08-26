@@ -1935,3 +1935,221 @@ real and unsprung. Matryoshka's own wire gate — which builds a sample line
 per verb and drives it through the real parser — caught the change too,
 because it was writing bare positionals. A gate that had not followed
 would have gone on driving a spelling nobody uses.
+
+## A per-frame caster's field scales with framerate (2026-08-26)
+
+Found while standing up the camera-tilt integration test in Matryoshka, by
+running the manual's own §4 hearth example through the new `rill-run`.
+
+`cc-note-casts.md` §3 already rules the shape: decay lives on the deposit,
+the runtime leaks each bump in fed time and culls below epsilon, and **"a
+deposit fed by `every 1f` reaches steady state."** All true. What is not
+written anywhere is **what that steady state is**.
+
+Deposits coalesce **within a tick only** — `matryoshka/src/fields.zig`, at
+the `born_ns != now_ns` break: *"deposits are in born order; older ticks are
+sealed."* So a caster re-firing every frame at one position leaves one live
+deposit per frame, each decaying independently, and the sum converges to
+
+    S = amp / (1 − e^(−dt/τ))     ≈  amp · τ/dt   for dt ≪ τ
+
+which is **proportional to framerate**. The manual's
+`cast $torchlight 0.8 radius 2.5 … decay 4s` under `every 1f` settles at
+**≈ 192** at 60 fps — not 0.8. At 30 fps, ≈ 96; at 120 fps, ≈ 384. The same
+scene, the same rill, half the field on a slower machine.
+
+Determinism is not what is broken here: fed time is deterministic and a
+`--fixed-dt` replay is byte-identical, exactly as ruled. What is unstated is
+that the *amplitude an author writes* is not the field they get, and that
+the multiplier is a property of the machine.
+
+**Not blocking, and there is an idiom that sidesteps it.** For a STATIC
+volume, `every 1f` is the wrong shape and `once 1` is the right one: a
+mounted rill may cast with **no decay at all**, because its unmount owns the
+bag — the one thing the console is refused (`commands.zig`: *"a console
+deposit that never leaves has no unmount to take it away"*). One deposit,
+permanent while mounted, gone at unmount, and no framerate in it:
+
+```rill
+once 1 | cast $tilt 1.0 radius 12 at {x: -8, y: 3, z: 0}
+```
+
+`every 1f` remains right for a caster whose POSITION moves — there the
+per-frame bumps are the trail, and the trail is the point.
+
+**RULED 2026-08-26 (Chris), and it was none of the three above.** A caster's
+per-tick deposits at an unchanged position — same radius, same decay, same
+caster, same coupling — **coalesce across ticks, not only within one**. One
+deposit being *refreshed*, not a stack.
+
+Stated as the rule now in `fields.zig`: a deposit is identified by
+`(caster, channel, pos, radius, decay, tag)`. Each tick the caster **states**
+its amplitude there. Within a tick several statements add up to that tick's
+statement; a new tick's statement **replaces** the previous one and restarts
+its decay.
+
+Why this beat the three drafted above:
+
+- **§4's sentence survives intact.** "The value at any point is the sum over
+  everyone's deposits" is still literally true. What changed is how many
+  deposits a *repeated statement* makes, never how they combine — where the
+  drafted option 2 would have had to qualify that sentence.
+- **0.8 means 0.8 on any machine**, with no expected-tick-count divisor
+  anywhere. Fixing the model beat dividing by the symptom.
+- **A moving caster still trails**, untouched, because the position is in the
+  identity. That is what the identity was always for.
+- **The common case got cheaper.** A stationary caster now holds ONE deposit
+  where it held one per frame — the scan is shorter and the memory is a
+  fraction. A trail pays O(trail), which the sampler already pays.
+
+**What it costs, recorded rather than discovered later.** A *leaky integrator
+at one point* — repeated casts at a fixed spot building as a sum of staggered
+exponentials — is no longer expressible. Driven by `every 1f` it was
+framerate-scaled anyway; driven by `every 1s` it was an authored cadence and
+genuinely meant something. It has a better home: **`integrate max <m>`**
+accumulates in op-internal state and casts one amplitude, which is
+framerate-free and is the shape §6a already teaches.
+
+**And `every 1f` stops being the wrong idiom for a standing field.** The
+earlier draft of this note said a static volume wants `once 1`. With the
+ruling, `every 1f { cast … decay 4s }` at a fixed spot is well behaved and
+holds at exactly its amplitude — and it keeps a property `once 1` with no
+decay does not: **stop casting and the field fades over the time constant**,
+which is the brazier demo's whole closing line. Use `once 1` with no decay for
+a volume that should vanish at unmount; `every 1f` for one that should die
+away. The camera-tilt demo wants the former and says so.
+
+### What moved with it
+
+- **`fields.zig`'s F3 gate had to move its mutation.** It fed one position and
+  watched the bag grow to 201 without the cull — but a stationary caster now
+  holds one deposit either way, so that version proved nothing about the cull.
+  The witness is now a caster whose position CHANGES: the trail is bounded by
+  rate × decay, and deleting the cull unbounds it. Straight out of the gate
+  discipline — *a check that is clean only because the code happens to be
+  clean is a check nobody has run*.
+- **F3 gained the assertion the ruling exists for**: the same feed at ten times
+  the rate is the same field, bit for bit. The old model could not have passed
+  it.
+- **The hitch gate changed its observable, and says so.** "After a gap a
+  sustained field dips below steady state and refills" is no longer what
+  happens: the dip during the gap is still there (a field nobody feeds leaks),
+  but the first tick back **restates it in full** rather than climbing over a
+  time constant. The prediction the 830a519 discipline recorded — `every` fires
+  once after a gap and never bursts — is untouched, and "never a spike" is
+  still asserted. The slow refill was an artifact of the stack.
+- **A pin was reversed, and it turned out never to have been enforced.** "The
+  pins: … cross-tick stays distinct" deposited at radius 2.0 where the standing
+  deposit at that spot had radius 6.0, so the two never matched under ANY rule
+  and the assertion passed either way. **Rule 1 again** — it ran where A and B
+  did not differ. Rewritten to the new rule, with the same radius, plus a
+  moving caster to hold the trail property.
+- **The manual's brazier taught a number ~240× off.** `cast $torchlight 0.8 …
+  decay 4s` under `every 1f` settled near 192 at 60 fps. The cast line is
+  unchanged and now correct; its partner needed fixing, because the lamplighter
+  `| mul 0.5 | add 0.5` was tuned against a reading that accumulated to the
+  channel's clamp of 4 — at a true 0.8 it produced 0.9, so **the lamp dimmed
+  when the fire was lit**. Now `| range 1 1.5`: unlit is the 1.0 seed, full fire
+  is 1.5, and `range` is the operator §6a already teaches for mapping 0..1 onto
+  a real interval.
+- **All eight `every 1f` scenes in `casting.zig` audited.** Five assert mount or
+  refusal behaviour and are untouched; the walk demo and the coupled-cast gate
+  still discriminate cleanly against an exact-zero control (the walk reads 0.756
+  where it read ~8). One shrank its headroom and is left alone with this line
+  as the record: THE LOOP's `rose_above 0.5` now sees 0.8 where it saw the
+  clamped 4, so its margin went from about 8× to 1.6×. It still separates a lit
+  field from an unlit one, which is what it is for.
+
+## A refusal that only reaches a bus is silent in practice (2026-08-26)
+
+`cast … at {x: …}` was refused as `bad_position` and the refusal WAS logged —
+`castThunk` calls `consoleLogf`, exactly as designed. But the console log goes
+to the websocket bus, and a `--exec` run, a CI run and a headless test see
+none of it. The observable was two rill programs mounting cleanly, ticking
+forever, and a level horizon.
+
+**A refusal must reach the caller, not only the log.** A bus nobody is
+attached to is not an error channel; it is a place errors go to be quiet. The
+same fault under `rill-run` — which prints every write, cast and tag, and says
+"(nothing)" out loud when there were none — would have been one line of output.
+
+Two things this cost, and both were paid before the cause was found: a
+debugging session spent ruling out the mount, the grants policy, the ear
+binding and the entity id in turn; and a gate that passed for the wrong
+reason. The camera-tilt test asserted the reading was zero at the centre of two
+cancelling volumes — and zero is also what a refused cast, a dangling sampler
+and an unmounted rill all read. It now asserts the deposit COUNT first, which
+is the thing that tells the two zeroes apart.
+
+**Applied here:** `--exec` now prints the reply it used to free and discard,
+so a scripted run can ask a question and hear the answer (`probe`, `rill list`).
+The general form is unbuilt and worth a beat: a mount or eval refusal should
+be available to the caller that caused it — an exit code, a reply, or a
+drainable error list — rather than only to whoever happens to be listening.
+
+## `--fixed-dt` does not pin the rill clock (2026-08-26)
+
+Found by a control run at the close of the camera-tilt integration: the same
+scripted command twice, byte-compared. Two identical runs differed (MAE 18.9
+of 255, ~0.03%) — while an earlier capture in the same scene with **no rills
+mounted** was bit-identical. So the non-determinism arrives with the rills.
+
+`main.zig` feeds the host `rills.tick(.{ .frame = …, .time_ns =
+perf_timer.read() })`. That is elapsed monotonic ns, and the comment beside it
+is careful about the distinction it cares about — "temporal operators consume
+this, never a wall clock; during replay the recorded time substitutes". Replay
+is therefore reproducible, which is the property that was designed for and it
+holds.
+
+What is not stated anywhere is the consequence for a **fresh** run: under
+`--fixed-dt`, the camera path is a pure function of the frame index and the
+flight is identical every time, but `ease 400ms` is not, because it consumes a
+clock that depends on how fast the machine actually ran. A capture of a
+rill-driven effect is reproducible only through the recorded log.
+
+That sits oddly beside `--fixed-dt`'s own help text — *"pin the sim timestep
+(default 60) so a capture is byte-reproducible"* — which is now true of
+everything except the part a rill drives.
+
+**RULED AND BUILT 2026-08-26 (Chris), and the framing is the point:** this is
+**not** a change to the determinism contract. The contract is §4.6's *time is
+fed, never read*, and `perf_timer.read()` under `--fixed-dt` is a read. The
+host was breaking its own rule at the one place the rule is about.
+
+`Rills.fedTimeNs(frame, fixed_hz, elapsed_ns)` — pinned, it returns
+`round(frame × 1e9 / hz)`; unpinned, the elapsed reading passes straight
+through, so a live run is unchanged. Computed FROM the frame index rather than
+accumulated, because an accumulator drifts and 1/60 s is not representable in
+ns: frame 60 at 60 Hz is exactly one second, and always the same integer.
+
+**The audit found a second one, which is why it was worth doing as a pass.**
+`fields.zig`, `casting.zig` and `rills.zig` read no clock at all — every one
+takes fed time as a parameter, so the fields service and the ear scan were
+already right by construction. In `main.zig`, four reads are perf
+instrumentation and should be, and two are `glfwGetTime` for `dt`, already
+pinned. Only two reached the simulation: the host tick, and — one line away
+from a winch that correctly took `fed_now` — **the sensor watch scan**, which
+was handed `perf_timer.read()` directly. Both now ride fed time.
+
+**Gated, and the gate asserts both halves.** `demos/camera-tilt/repro.sh`
+(`zig build repro-tilt`) runs the tilt demo twice and byte-compares — and then
+compares it against the same flight with NO rills mounted, because a build that
+wrote a level horizon every time would pass the first half perfectly.
+Reproducing nothing is not reproducibility. Measured: two runs went from MAE
+18.9 to **byte-identical**, with the lean still landing at MAE 6324 against the
+level flight. Mutating `fedTimeNs` back to reading the clock fails the step.
+
+It is deliberately NOT on `zig build test`: it drives the real renderer and
+needs a GPU and a display, and a gate that skips itself where either is missing
+reports coverage it does not have — the rillbook gate's rule, applied to a step
+that cannot honour it. So it is its own step and you run it.
+
+The caveat this note put in `run.sh` has been **retired** rather than left to
+age: a stale caveat is prose nothing runs.
+
+Also recorded, because it cost twenty minutes: **the running binary was stale.**
+`zig build test` does not write `zig-out/bin/`, and after the `decodePos` fix
+the app kept refusing record positions while every test exercised the fixed
+path. The demo stopped leaning and the suite stayed green — which reads exactly
+like a regression in the code and was a regression in the workflow. `zig build`
+before believing anything a capture says.
