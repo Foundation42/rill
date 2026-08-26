@@ -105,6 +105,28 @@ fn logThunk(_: ?*anyopaque, label: []const u8, val: []const u8) void {
     std.debug.print("     ~ tap {s} = {s}\n", .{ label, fmtValue(val) });
 }
 
+/// An operator refusing is the single most useful thing this runner can tell
+/// you, and it told you NOTHING until now: the chain simply went dead, with the
+/// downstream writes missing and no reason given.
+///
+/// Found using it (2026-08-26). `select`'s condition port is a boolean and an
+/// input control is a NUMBER, so `plane.input.kbd.space | select a b` refuses
+/// every tick — and the symptom was a program that mounted cleanly, reported
+/// its node count, and quietly wrote nothing. Diagnosing that meant splitting
+/// the chain and writing each stage to its own path to find where it stopped,
+/// which is exactly the work this tool exists to save.
+///
+/// `detail` is the operator's own words and `err` is the category; both are
+/// printed, because the category alone ("BadValue") does not say which port of
+/// which node minded.
+fn errorThunk(_: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+    if (ev.detail.len > 0) {
+        std.debug.print("     ! {s} ({s}) refused: {s}\n", .{ ev.node, ev.op, ev.detail });
+    } else {
+        std.debug.print("     ! {s} ({s}) refused: {s}\n", .{ ev.node, ev.op, ev.err });
+    }
+}
+
 fn usage() void {
     std.debug.print(
         \\rill-run — mount a .rill file on the mock plane and watch it run.
@@ -245,6 +267,7 @@ pub fn main() !u8 {
     };
     defer rt.deinit();
     rt.log_fn = logThunk;
+    rt.error_fn = errorThunk;
 
     std.debug.print("mounted '{s}': {d} nodes, {d} slots, {d} subscriptions, {d} writes declared\n", .{
         name, prog.nodeCount(), prog.slotCount(), prog.subs.items.len, prog.writes.items.len,

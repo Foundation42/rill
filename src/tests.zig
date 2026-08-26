@@ -9102,3 +9102,52 @@ test "elementwise: a dumped program carries the same kinds when it is loaded" {
     defer loaded.deinit();
     try testing.expectEqual(registry.PortKind.occurrence, outKind(&loaded, "mul1"));
 }
+
+test "a refusal reaches the error hook with the PORT that minded, in words" {
+    // What `rill-run` prints, and what makes a dead chain diagnosable. A
+    // control on the plane is a NUMBER and `select`'s condition is a boolean,
+    // so this refuses every tick — and the symptom is a program that mounts
+    // cleanly, reports its node count, and quietly writes nothing.
+    //
+    // The words are the gate. "BadValue" names a category; a person needs the
+    // PORT and the operator, which is what turns ten minutes of splitting a
+    // chain apart into reading one line.
+    const Seen = struct {
+        var n: usize = 0;
+        var node: [64]u8 = undefined;
+        var node_len: usize = 0;
+        var detail: [160]u8 = undefined;
+        var detail_len: usize = 0;
+        fn hook(_: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+            n += 1;
+            node_len = @min(ev.node.len, node.len);
+            @memcpy(node[0..node_len], ev.node[0..node_len]);
+            detail_len = @min(ev.detail.len, detail.len);
+            @memcpy(detail[0..detail_len], ev.detail[0..detail_len]);
+        }
+    };
+    Seen.n = 0;
+
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.n", @as(i64, 1));
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.n | select 5 9 | set plane.out
+    , &diag);
+    defer prog.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .error_fn = Seen.hook });
+    defer rt.deinit();
+    try feedValue(&rt, testing.allocator, "plane.n", @as(i64, 2));
+    try rt.tick(.{});
+
+    try testing.expect(Seen.n > 0);
+    try testing.expectEqualStrings("select1", Seen.node[0..Seen.node_len]);
+    // Names the port, not just the category — that is the whole value.
+    const d = Seen.detail[0..Seen.detail_len];
+    try testing.expect(std.mem.indexOf(u8, d, "cond") != null);
+    try testing.expect(std.mem.indexOf(u8, d, "boolean") != null);
+}
