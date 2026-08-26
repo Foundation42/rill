@@ -1034,6 +1034,16 @@ changes mid-sequence leaves the index where it is, clamped to the new length. It
 does not restart. The cursor, direction, pass number and emission count are node
 state and ride the dump, so a restored program resumes its sequence.
 
+**A word marks an argument that could otherwise be mistaken for another (ruled
+2026-08-26).** Ambiguity is the subject; optionality is only its usual cause. So
+`set <path> [value]` needs no word (one optional slot, and a path token is not a
+literal), while `cast`'s three numbers and `integrate`'s required clamp all carry
+one — required or not, each *could* be taken for another argument. `Registry.register`
+refuses **two adjacent wordless optional ports** (`error.AmbiguousOptionals`): that
+is the rule's mechanical form, and it is why `arm <in> <off> <on>` became
+`arm [<in>] [off <off>] [on <on>]`, words on both controls since either may be
+given alone. An operator may carry at most one wordless optional port.
+
 **One node, one kind (same ruling).** `pulse` is a value source (1 for `width`, else 0, once
 per period); `every` is the occurrence source. An operator that both fired an occurrence and
 held a value would be two operators sharing a name, and nothing downstream could tell which

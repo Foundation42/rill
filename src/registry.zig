@@ -457,7 +457,7 @@ pub const OpDef = struct {
 
 pub const OpId = u32;
 
-pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName } || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName, AmbiguousOptionals } || std.mem.Allocator.Error;
 
 /// Words the *syntax* claims, which therefore may not name an operator or an
 /// `as`/`use` binding. The list lives here because the registry owns the
@@ -537,6 +537,27 @@ pub const Registry = struct {
         for (def.statics) |sd| {
             if (sd.flag and !sd.optional) return error.BadStatic;
             if (sd.optional and !sd.kw and !sd.flag) return error.BadStatic;
+        }
+        // …and the same rule for PORTS, which never had one (ruled 2026-08-26,
+        // after an audit of all 121 written arguments).
+        //
+        // **The rule, stated: a word marks an argument that could otherwise be
+        // mistaken for another.** Ambiguity is the subject; optionality is
+        // only its usual cause. That is why `set plane.a 1` needs no word (one
+        // optional slot, and a path token is not a literal), why `cast`'s
+        // three numbers all carry one, and why `integrate`'s required clamp
+        // does too — none of those are exceptions once the rule is about
+        // ambiguity rather than about optionality.
+        //
+        // Two adjacent wordless optionals ARE ambiguous: `arm <in> <off> <on>`
+        // took three, so `arm gate_closed` bound `in` and nothing announced
+        // it. That is the mechanical form of "could be mistaken for another",
+        // and it is refused here rather than watched for, so the next `arm`
+        // cannot be registered — by this repo or by a host.
+        if (def.inputs.len > 1) {
+            for (def.inputs[0 .. def.inputs.len - 1], def.inputs[1..]) |a, b| {
+                if (a.optional and !a.kw and b.optional and !b.kw) return error.AmbiguousOptionals;
+            }
         }
         const id: OpId = @intCast(self.ops.items.len);
         try self.ops.append(self.gpa, def);

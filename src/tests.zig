@@ -6520,6 +6520,178 @@ const broadcasting_ports = [_]struct { op: []const u8, ports: []const []const u8
     .{ .op = ">=", .ports = &.{ "a", "b" } },
 };
 
+// ---------------------------------------------------------------------------
+// The wordless-optional roster (ruled 2026-08-26, after the keyword audit).
+//
+// **The rule: a word marks an argument that could otherwise be mistaken for
+// another.** Ambiguity is the subject; optionality is only its usual cause.
+// Three situations, all named, none of them exceptions any more:
+//
+//   • `set plane.a 1` — one optional slot, and a path token is not a literal,
+//     so there is nothing to mistake it for and no word is needed.
+//   • `cast … radius <r> at <pos>` and `integrate … max <m>` — three numbers
+//     in a row, and a bare clamp that would read as a rate. Both carry words
+//     because both COULD be mistaken, required or not.
+//   • `arm <in> <off> <on>` — three wordless optionals, where `arm gate_closed`
+//     bound `in` and nothing announced it. That was a BUG, not an exception,
+//     and it is now `arm [<in>] [off <off>] [on <on>]`.
+//
+// `Registry.register` refuses two adjacent wordless optionals outright, so the
+// next `arm` cannot be registered — by this repo or by a host. This roster is
+// the other half: the population that remains, named, both ways.
+//
+// The ledger line the audit bought (Chris, 2026-08-26): **a search for
+// exceptions to a rule finds the operators that half-follow it, not the ones
+// that ignore it entirely — audit the whole population, not the mixed cases.**
+// `arm` and `disarm` were never among the twelve "mixed" operators the probe
+// pointed at, because they have no keyword argument at all.
+// ---------------------------------------------------------------------------
+
+/// Every core port that is optional and carries NO word. Each is here because
+/// its operator has exactly one, so nothing can be mistaken for anything.
+const wordless_optionals = [_]struct { op: []const u8, port: []const u8, why: []const u8 }{
+    .{ .op = "set", .port = "value", .why = "the sink payload — one slot, and the path is a path" },
+    .{ .op = "notify", .port = "value", .why = "same shape as `set`" },
+    .{ .op = "cast", .port = "value", .why = "same shape; `cast`'s numbers all carry words" },
+    .{ .op = "arm", .port = "in", .why = "the piped stream; the two controls now carry words" },
+    .{ .op = "disarm", .port = "in", .why = "the piped stream; the two controls now carry words" },
+    .{ .op = "expect", .port = "in", .why = "the piped stream, and the shape is a static" },
+};
+
+/// At most ONE wordless optional port per operator. `register` refuses two
+/// ADJACENT ones; this is the half that catches `op [<a>] <b> [<c>]`, where a
+/// required port sits between them and they are ambiguous all the same —
+/// `op 1 2` cannot say whether it filled a and b or b and c.
+fn atMostOneWordlessOptional(def: *const registry.OpDef) !usize {
+    var wordless: usize = 0;
+    for (def.inputs) |pt| {
+        if (pt.optional and !pt.kw) wordless += 1;
+    }
+    if (wordless > 1) {
+        std.debug.print("'{s}' has {d} wordless optional ports — one of them could be mistaken for another\n", .{ def.name, wordless });
+        return error.TestUnexpectedResult;
+    }
+    return wordless;
+}
+
+test "the ambiguity rule: every wordless optional port is named, and only those are" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    var found: usize = 0;
+    for (reg.ops.items) |def| {
+        found += try atMostOneWordlessOptional(&def);
+        for (def.inputs) |pt| {
+            if (!pt.optional or pt.kw) continue;
+            const listed = for (wordless_optionals) |e| {
+                if (std.mem.eql(u8, e.op, def.name) and std.mem.eql(u8, e.port, pt.name)) break true;
+            } else false;
+            if (!listed) {
+                std.debug.print("'{s}' port '{s}' is optional and carries no word, and is not on the roster\n", .{ def.name, pt.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    // …and the at-most-one check is WITNESSED where it differs, because the
+    // corpus can no longer differ: after the respelling no operator has two,
+    // so loosening the check changed nothing and the mutation survived. The
+    // discriminating case is the one `register` deliberately lets through —
+    // two wordless optionals with a required port between them.
+    const separated = registry.OpDef{
+        .name = "separated",
+        .inputs = &.{
+            .{ .name = "a", .optional = true },
+            .{ .name = "b" },
+            .{ .name = "c", .optional = true },
+        },
+        .outputs = &.{.{ .name = "out" }},
+        .routes = .anywhere,
+        .help = "adjacent-free, ambiguous anyway",
+        .eval = undefined,
+    };
+    _ = try reg.register(separated); // `register` allows it: they are not adjacent
+    try testing.expectError(error.TestUnexpectedResult, atMostOneWordlessOptional(&separated));
+    try testing.expectEqual(@as(usize, 1), try atMostOneWordlessOptional(reg.get(reg.find("set").?)));
+    // Both ways: the audit counted seven wordless optionals excluding the
+    // piped port 0, three of which were sink payloads. The prediction was that
+    // the other four were exactly `arm`/`disarm`'s controls. This is the walk
+    // saying so rather than the count implying it.
+    try testing.expectEqual(wordless_optionals.len, found);
+    for (wordless_optionals) |e| {
+        const id = reg.find(e.op) orelse {
+            std.debug.print("'{s}' is on the wordless-optional roster and is not registered\n", .{e.op});
+            return error.TestUnexpectedResult;
+        };
+        _ = id;
+    }
+}
+
+test "the ambiguity rule is STRUCTURAL: two adjacent wordless optionals are refused" {
+    // Not watched for — refused, at registration, so a host cannot do it
+    // either. This is the mechanical form of "could be mistaken for another".
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    const bad = registry.OpDef{
+        .name = "gate_like_arm",
+        .inputs = &.{
+            .{ .name = "in", .optional = true },
+            .{ .name = "off", .optional = true },
+            .{ .name = "on", .optional = true },
+        },
+        .outputs = &.{.{ .name = "out" }},
+        .routes = .anywhere,
+        .help = "the shape `arm` used to have",
+        .eval = undefined,
+    };
+    try testing.expectError(error.AmbiguousOptionals, reg.register(bad));
+
+    // …and the fix registers cleanly: a word on each control.
+    const good = registry.OpDef{
+        .name = "gate_like_arm",
+        .inputs = &.{
+            .{ .name = "in", .optional = true },
+            .{ .name = "off", .optional = true, .kw = true },
+            .{ .name = "on", .optional = true, .kw = true },
+        },
+        .outputs = &.{.{ .name = "out" }},
+        .routes = .anywhere,
+        .help = "the shape `arm` has now",
+        .eval = undefined,
+    };
+    _ = try reg.register(good);
+
+    // One wordless optional is fine — that is `set plane.a 1`, and the rule
+    // is about ambiguity, not about optionality. "A rather than B", where the
+    // two differ by exactly the thing the rule names.
+    const sink_like = registry.OpDef{
+        .name = "sink_like_set",
+        .inputs = &.{ .{ .name = "in" }, .{ .name = "value", .optional = true } },
+        .outputs = &.{},
+        .routes = .main,
+        .help = "the shape `set` has",
+        .eval = undefined,
+    };
+    _ = try reg.register(sink_like);
+}
+
+test "`arm`'s controls carry their words, and either may be given alone" {
+    // The respelling, driven. Before this, `arm plane.stop` bound `in`.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.e | arm off plane.stop | tap only_off
+        \\plane.e | arm on plane.go | tap only_on
+        \\plane.e | arm off: plane.stop on: plane.go | tap both
+    , .{ .{ "plane.e", true }, .{ "plane.stop", true }, .{ "plane.go", true } });
+    defer fx.deinit();
+    try testing.expect(nodeIdOf(&fx.prog, "arm1") != null);
+    try testing.expect(nodeIdOf(&fx.prog, "arm3") != null);
+
+    // …and the old wordless spelling no longer binds a control by accident.
+    try expectParseError("plane.e | arm plane.stop plane.go | tap t", "too many arguments");
+}
+
 test "the typing gate: the accept set of a port is its declared type's, stated" {
     const T = types.Tag;
     // Every type a wire can carry that is not a host type.

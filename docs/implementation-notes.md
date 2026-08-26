@@ -917,6 +917,18 @@ must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
 
+**Addendum, 2026-08-26, ratified: a search for exceptions to a rule finds
+the operators that HALF-follow it, not the ones that ignore it entirely —
+audit the whole population, not the mixed cases.** The keyword probe
+pointed at the twelve operators mixing positional and keyword arguments,
+because those were the ones where a reader could get it wrong. Ten of
+them turned out to obey the rule exactly. The actual violation was
+`arm`/`disarm` — three wordless optionals in a row, `arm gate_closed`
+binding `in` with nothing announcing it — and they never appeared in the
+twelve **because they have no keyword argument at all**. A mixed case is
+evidence that someone was thinking; the population is where the thing
+nobody thought about lives.
+
 **Addendum, 2026-08-26 (recon phase 3), ratified by Chris as the ledger
 line of the envelopes campaign: documentation is a claim about the code;
 if nothing executes it, it will eventually contradict a gate you already
@@ -1811,8 +1823,40 @@ required-positional plus optional-keyword, which is the rule working.
 on `ease` was the *notation's*, not the language's. Only `cast` and
 `integrate` break it.
 
-**Nothing was respelled.** Recorded for Chris to rule on: whether the
-honest rule is *"a word marks an argument that could otherwise be
-mistaken for another"* (which makes B legal, keeps A's `cast`, and makes
-C a bug), or *"a word marks an optional argument"* (which makes B and C
-both exceptions and A's `integrate` a second one).
+### RULED 2026-08-26
+
+> **A word marks an argument that could otherwise be mistaken for
+> another.** Ambiguity is the subject; optionality is only its usual
+> cause.
+
+That resolves all three situations, and **it leaves no exceptions**:
+
+- **(B) is legal.** `set plane.a 1` has one optional slot and a path
+  token is not a literal, so nothing can be mistaken and no word is
+  needed. `set plane.a value 1` would be worse.
+- **(A) stops being an exception.** `cast`'s three numbers and
+  `integrate`'s clamp carry words because each *could* be mistaken for
+  another argument — required or not. `cast` is no longer "the single
+  named exception"; it is the rule working, and so is `integrate`.
+- **(C) is a BUG.** `arm <in> <off> <on>` is respelled **`arm [<in>]
+  [off <off>] [on <on>]`**, words on both controls since either may be
+  given alone. `disarm` likewise. Breaking, and the corpus was swept the
+  same day — the colon-kwarg form the tests already used (`off: plane.stop`)
+  kept working unchanged.
+
+**Made auditable, not merely written down.** `Registry.register` now
+refuses **two adjacent wordless optional ports** outright
+(`error.AmbiguousOptionals`), so the next `arm` cannot be registered — by
+this repo or by a host. That is the mechanical form of *"could be
+mistaken for another"*.
+
+**And the population is confirmed by the walk rather than inferred from
+the count.** The audit's seven wordless optionals (excluding the piped
+port 0) minus three sink payloads predicted exactly `arm`/`disarm`'s four
+controls; the registry walk now says so, against a named roster of the
+six that remain, both ways. Adjacency is `register`'s test; the walk
+carries the stronger one — **at most one wordless optional per
+operator** — because `op [<a>] <b> [<c>]` is ambiguous with a required
+port between them and `register` lets it through. Today no operator has
+two, which is why loosening that check survived its first mutation: it is
+now witnessed against a synthetic operator of exactly that shape.

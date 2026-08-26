@@ -3108,6 +3108,10 @@ const p = struct {
     fn kwOpt(n: []const u8, ty: types.TypeId) registry.Port {
         return .{ .name = n, .ty = ty, .optional = true, .kw = true };
     }
+    /// An optional, keyword-introduced OCCURRENCE port — `arm`'s controls.
+    fn kwOptOcc(n: []const u8, ty: types.TypeId) registry.Port {
+        return .{ .name = n, .ty = ty, .kind = .occurrence, .optional = true, .kw = true };
+    }
     /// A **broadcasting** number/boolean port: it accepts a record or an array
     /// as well, because the operator it belongs to is elementwise (beat 1b).
     ///
@@ -3157,8 +3161,8 @@ const CORE = [_]registry.OpDef{
     // stream first flows — a required port would silently discard an `off`
     // that fired ahead of the first occurrence (the all-inputs guard skips
     // nodes with a missing required input).
-    .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .class = .reads, .eval = gateEval(true) },
-    .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.optOcc("off", Tag.any), p.optOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .class = .reads, .eval = gateEval(false) },
+    .{ .name = "arm", .inputs = &.{ p.optOcc("in", Tag.any), p.kwOptOcc("off", Tag.any), p.kwOptOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially open: pass occurrences while armed; `off` closes, `on` re-opens (on wins a tie).", .class = .reads, .eval = gateEval(true) },
+    .{ .name = "disarm", .inputs = &.{ p.optOcc("in", Tag.any), p.kwOptOcc("off", Tag.any), p.kwOptOcc("on", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Latch gate, initially closed: silent until `on` arms it; `off` closes again (on wins a tie).", .class = .reads, .eval = gateEval(false) },
     // tier 2, beat 1a — time as a value, waveforms, registers, shaping.
     // `ticks` is declared on every one that may re-arm itself; the badge is
     // derived from it and the live eval counter is shown beside it as proof.

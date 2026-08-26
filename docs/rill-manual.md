@@ -1166,7 +1166,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `adsr` | `adsr <in> <attack> <decay> <sustain> <release>` | Gate in, envelope out: rise, decay to `sustain` while the gate holds, release when it drops. A held sustain costs nothing. §6b |
 | `along` | `along <t> <knots>` | Travel a smooth curve through the knots as t goes 0..1. Clamps outside; fewer than two knots refuses. §6d |
 | `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a |
-| `arm` | `arm [<in>] [<off>] [<on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). |
+| `arm` | `arm [<in>] [off <off>] [on <on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). Both controls carry their word — either may be given alone. |
 | `atan2` | `atan2 <y> <x>` | Angle of (x, y) in radians; `y` is the piped one — `dy \| atan2 dx`. |
 | `below` | `below <in> <on> <off>` | Boolean with hysteresis, falling: below `on`, until above `off`. Emits its level at mount. §6f |
 | `cast` | `cast <in> [<value>] at <at> [decay <decay>] <$channel> radius <radius> [to <#to>]` | Deposit into a field channel. `to` couples delivery to a tag's members. §7 |
@@ -1181,7 +1181,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `debounce` | `debounce <in> <quiet>` | Pass only after a quiet period; storms collapse to their last edge. §6 |
 | `delay` | `delay <in> <by>` | Emit each occurrence `by` later. §6 |
 | `diff` | `diff <in>` | Rate of change per second. Baselines silently; stops ticking at zero. §6b |
-| `disarm` | `disarm [<in>] [<off>] [<on>]` | Latch gate, initially **closed**: silent until `on` arms it. |
+| `disarm` | `disarm [<in>] [off <off>] [on <on>]` | Latch gate, initially **closed**: silent until `on` arms it. Both controls carry their word — either may be given alone. |
 | `distance` | `distance <a> <b>` | Distance between two positions; both `record{x, y, z}`. §6f |
 | `div` | `div <a> <b>` | a / b (IEEE: division by zero yields ±inf). |
 | `dropped_below` | `dropped_below <in> <threshold>` | Fires, with the value, on the way through. First observation baselines silently. §2 |
