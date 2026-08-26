@@ -917,6 +917,27 @@ must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
 
+**Addendum, 2026-08-26, ratified: a rule enforced at the REGISTRY binds
+every host; the same rule as a test binds only its own repo.** Files
+beside *structural, not discipline* — it is that line's reach, stated.
+The wordless-optional refusal went into `Registry.register` rather than
+into `tests.zig`, and on its first run it broke Matryoshka's build and
+found two real traps in a console this repo has never read: adjacent
+clamps where the high one was unsayable, and a `mesh scale m1 2 3` that
+silently meant `(2, 3, 2)`. A test in rill would have proved rill clean
+and said nothing about either. The registry is the seam every host comes
+through, so a rule that lives there is the only kind that travels.
+
+**Addendum, 2026-08-26, ratified: a check that is clean only because the
+codebase happens to be clean is a check nobody has run.** The at-most-one
+wordless-optional walk passed the day it was written and survived being
+loosened to `> 99`, because the respelling had already removed every case
+it could fire on. The fix is a **synthetic witness** — an operator built
+in the test with exactly the shape the check exists to catch. Same family
+as *a gate asserting "A rather than B" must run where A ≠ B*, one level
+up: sometimes the corpus cannot supply the discriminating case at all,
+and the gate has to make one.
+
 **Addendum, 2026-08-26, ratified: a search for exceptions to a rule finds
 the operators that HALF-follow it, not the ones that ignore it entirely —
 audit the whole population, not the mixed cases.** The keyword probe
@@ -1875,7 +1896,16 @@ positive:
   fine), but **`mesh scale m1 2 3` silently meant (2, 3, 2)**.
 
 Both respelled with words on the pairs; the common `mesh scale m1 2`
-is untouched. Matryoshka's own wire gate — which builds a sample line
+is untouched.
+
+**Checked, not assumed: the clamps were NOT half-applied.** An absent
+clamp defaults to ∓∞, so a one-clamp caller gets an open other side
+rather than a wrong number — and both live callers meant exactly that
+(one says so in its own comment: *"lo-clamped, hi defaults open"*). The
+rig **file** format is a separate serialiser (`chanarche <name> <eps>
+<decay> <lo> <hi>`, no subop, both clamps always written) with its own
+reader, so it is untouched by the console verb's respelling. The trap was
+real and unsprung. Matryoshka's own wire gate — which builds a sample line
 per verb and drives it through the real parser — caught the change too,
 because it was writing bare positionals. A gate that had not followed
 would have gone on driving a spelling nobody uses.
