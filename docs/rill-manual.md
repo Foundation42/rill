@@ -605,7 +605,7 @@ where you write down what you did.
 ```rill
 plane.input.key_l | toggle | set plane.lights.key.on
 plane.events.kill | tally | set plane.ui.kills
-plane.world.light | above 0.3 0.2 | not | set plane.lights.street.on
+plane.world.light | below 0.2 0.3 | set plane.lights.street.on
 noise 80ms | range 0.6 1 | set plane.lights.torch.level
 plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
 ```
@@ -616,27 +616,36 @@ plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
 | `once` | pass the first value, then deaf until remount |
 | `toggle` | flip a boolean on each arrival |
 | `tally` | running count of arrivals, as a value |
-| `above <on> <off>` | boolean with **hysteresis**: true past `on`, false past `off` |
+| `above <on> <off>` · `below <on> <off>` | boolean with **hysteresis**: the first number trips, the second releases |
 | `noise <period> [octaves <n>] [seed <s>]` | smooth noise in 0..1 over fed time |
 | `rand [seed <s>]` | a fresh value in 0..1 per rousing |
 | `distance <a> <b>` · `within <a> <b> <r>` | over `record{x, y, z}` on both sides |
 
-**Levels emit at mount; crossings do not.** `above` publishes its level
+**Levels emit at mount; crossings do not.** `above`/`below` publish their level
 straight away, `toggle` its initial `false`, `tally` its `0` — a program
 that reads a level must have one to read on its first evaluation.
 `dropped_below`, `rose_above` and `edge` do the opposite and stay silent
 on their first observation, because a crossing nobody crossed is not an
 event.
 
-**`above` is what stops a threshold chattering.** `above 0.3 0.2` reads
-as "above 0.3, until below 0.2". A plain `< 0.3` on a noisy dusk reading
-switches the lights on and off every frame; the band does not.
+**Hysteresis is what stops a threshold chattering.** `above 0.3 0.2`
+reads as "above 0.3, until below 0.2"; `below 0.2 0.3` as "below 0.2,
+until above 0.3". A plain `< 0.3` on a noisy dusk reading switches the
+lights on and off every frame; the band does not.
 
-**It says ABOVE, so read it aloud before you wire it.** Street lights
-come on when it gets *dark*, so the sense has to be turned over: `above
-0.3 0.2 | not`. Written without the `not` it is a perfectly good
-hysteresis band that lights the street at noon — and that is exactly how
-it was printed here until a reader trying to use it said so.
+**The first number trips and the second releases — in both words.**
+That is the whole reason `below` exists as its own word rather than as
+`above` with the numbers swapped: neither spelling asks you to work out
+which of its two numbers is the bigger one. Each word refuses the
+other's order at mount, naming both numbers, so `below 0.3 0.2` does not
+run and quietly behave like something.
+
+**Which is why street lights want `below`.** They come on when it gets
+*dark*, so the reading has to fall: `plane.world.light | below 0.2 0.3`.
+This recipe was printed here as `above 0.3 0.2` with no `| not` — a
+perfectly good hysteresis band that lights the street at noon — until a
+reader trying to use it said so. `above 0.3 0.2 | not` is the same
+answer the long way round; `below` is the sentence you meant.
 
 **`pulse` is a value and `every` is an occurrence.** One node, one kind.
 `pulse` is the rectangle you shape (`pulse 2s width 60ms | ease 10ms
@@ -922,7 +931,7 @@ once 1 | ramp 2s from 0 | set plane.render.grade.exposure
 **The threshold that does not chatter** — a noisy reading into a switch:
 
 ```rill
-plane.world.light | above 0.3 0.2 | not | set plane.lights.street.on
+plane.world.light | below 0.2 0.3 | set plane.lights.street.on
 ```
 
 **The nearest threat** — a list into one answer:
@@ -1022,6 +1031,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a |
 | `arm` | `arm [<in>] [<off>] [<on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). |
 | `atan2` | `atan2 <y> <x>` | Angle of (x, y) in radians; `y` is the piped one — `dy \| atan2 dx`. |
+| `below` | `below <in> <on> <off>` | Boolean with hysteresis, falling: below `on`, until above `off`. Emits its level at mount. §6f |
 | `cast` | `cast <in> [<value>] at <at> [decay <decay>] <$channel> radius <radius> [to <#to>]` | Deposit into a field channel. `to` couples delivery to a tag's members. §7 |
 | `ceil` | `ceil <in>` | Round toward +inf. |
 | `changed` | `changed <in>` | An occurrence whenever the value actually changes. |

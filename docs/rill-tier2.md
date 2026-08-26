@@ -597,6 +597,16 @@ wrongness or an unverified read have each been settled:
   correctly. Found at close by a no-priors reader; the sense is `| not`,
   and the gate now drives the manual's own recipe text and asserts the
   row's claim rather than the operator's mechanics.
+
+  **Re-spelled 2026-08-26, and this is the row's third spelling.** The
+  envelopes campaign admitted `below <on> <off>`, so the recipe is
+  `plane.world.light | below 0.2 0.3 | set plane.lights.street.on` with
+  no `| not`. Still one line, and now the band and the strict comparator
+  the gate measures it against point the same way — which means a sense
+  error in either shows up as a *disagreement* rather than as two mirrors
+  both flipped. Three spellings for one row is worth recording: the first
+  was wrong, the second was right the long way round, and the third is
+  the sentence a reader would say out loud.
 - *dim the lamp as the fire dies* — re-probed at beat-4 close against
   real `noise`. Holds at 2 lines **and only at 2**: the naked reading
   jitters, and the gate asserts the difference the smoothing line makes
@@ -649,7 +659,7 @@ besides.
 | toggle a light on a keypress | ~~~3~~ **1 ✓** | 1 | ~~`toggle`~~ **landed, beat 4** |
 | count kills | ~~2 programs (`inc` + reader)~~ **1 ✓** | 1 | ~~`tally`~~ **landed, beat 4** |
 | alarm when a raider is within 10m of the gate | ~~needs `distance`~~ **1 ✓** | 1 | ~~`within`~~ **landed, beat 4** |
-| night falls → lights on | ~~1 line, and it chatters at dusk~~ **1 ✓, and gated NOT to chatter** | 1 | ~~`above`~~ **landed, beat 4** — the row that put a correctness column on this list |
+| night falls → lights on | ~~1 line, and it chatters at dusk~~ **1 ✓, and gated NOT to chatter** | 1 | ~~`above`~~ **landed, beat 4**; re-spelled `below 0.2 0.3` 2026-08-26 — the row that put a correctness column on this list, and `below`'s customer |
 | cooldown-guarded order | 1 | 1 | ✓ |
 | swing a light back and forth | ~~~8~~ **1 ✓** | 1 | ~~`lfo tri`, `range`~~ **landed, beat 1a** |
 | follow: keep a light 2m above the player | ~~~3~~ **1 ✓** | 1–2 | ~~record math~~ **landed, beat 1b** |

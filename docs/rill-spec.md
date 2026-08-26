@@ -924,7 +924,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
 | over arrays | `map <body>`, `keep <pred>`, `reduce <body> [init v]` — each drives a SECTION BODY per element; §3.15, tier 2 beat 3a |
 | order & shape | `sort [by <body>] [desc]` (stable), `first`, `take <n> [from <i>]`, `transpose`, `shuffle [seed <s>]`, `along <knots>` — tier 2 beat 3b |
-| events & levels | `pulse` (value source), `once`, `toggle`, `tally`, `above <on> <off>` (hysteresis) — tier 2 beat 4a |
+| events & levels | `pulse` (value source), `once`, `toggle`, `tally`, `above <on> <off>` / `below <on> <off>` (hysteresis) — tier 2 beat 4a; `below` 2026-08-26 |
 | noise & space | `noise <period> [octaves] [seed]`, `rand [seed]`, `distance`, `within` — tier 2 beat 4b |
 | contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
 | plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
@@ -965,12 +965,23 @@ a `fails_mount` operator's refusals are ordinary refusals.
 
 **Levels emit at tick 0; crossings baseline silently (ruled 2026-08-25, tier 2 beat 4).** A
 LEVEL operator publishes its answer on its first evaluation — `above` its hysteresis state
-(`in >= on` is true), `toggle` its initial `false`, `tally` its `0` — because a program that
+(`in >= on` is true), `below` its own (`in <= on`), `toggle` its initial `false`, `tally` its
+`0` — because a program that
 reads a level must have one to read at mount, and "nothing yet" is not a level. A CROSSING
 operator does the opposite: `dropped_below`, `rose_above` and `edge` record their first
 observation and emit nothing, because a crossing nobody crossed is not an event. The two
 rules are complementary, not inconsistent, and which one an operator follows is decided by
 what it publishes.
+
+**The hysteresis pair: the first number trips, the second releases — for both words
+(ruled 2026-08-26).** `above <on> <off>` trips at `on` going up and releases at `off` going
+down; `below <on> <off>` trips at `on` going down and releases at `off` going up. Neither
+spelling asks the reader to work out which of its two numbers is the larger, which is the
+reason `below` is a word rather than `above` with its arguments swapped. Each word therefore
+**refuses the other's order at mount**, naming both numbers: `above` requires its release
+below its trip, `below` above it. The check runs in `eval`, and mount runs tick 0, so it is
+a mount-time refusal (the `along` precedent). Equal numbers are a band of zero width and are
+legal in both words — that is a comparator, and the language has one.
 
 **One node, one kind (same ruling).** `pulse` is a value source (1 for `width`, else 0, once
 per period); `every` is the occurrence source. An operator that both fired an occurrence and

@@ -1774,20 +1774,50 @@ fn evalTally(ctx: *EvalCtx) EvalError!Emit {
 /// level with no value on its first evaluation is not a level, and the
 /// threshold band makes the mount answer a real choice rather than a
 /// crossing's silent baseline.
-fn evalAbove(ctx: *EvalCtx) EvalError!Emit {
-    const v = try num(ctx, 0);
-    const on = try num(ctx, 1);
-    const off = try num(ctx, 2);
-    if (off > on) {
-        return ctx.refuse("above: 'off' ({d}) is above 'on' ({d}) — hysteresis needs the release below the trip", .{ off, on });
-    }
-    const st = ctx.state.items;
-    const was = st.len > 0 and st[0] == 1;
-    const now = if (st.len == 0) v >= on else if (was) v > off else v >= on;
-    if (st.len > 0 and now == was) return Emit.none;
-    try ctx.setState(&.{@intFromBool(now)});
-    try ctx.out[0].appendBool(now);
-    return Emit.first;
+/// The hysteresis pair, one body (`below` admitted 2026-08-26). `falling` is
+/// the whole difference: `above` trips going up and releases going down,
+/// `below` trips going down and releases going up.
+///
+/// **The first number trips and the second releases, for BOTH words** — the
+/// ruling that makes the pair readable. `above 0.3 0.2` is "above 0.3, until
+/// below 0.2"; `below 0.2 0.3` is "below 0.2, until above 0.3". Neither word
+/// asks the reader to remember which of its numbers is the big one, which is
+/// exactly what a mirror spelled `above <off> <on>` would have asked.
+///
+/// So the ORDER CHECK mirrors too, and each word refuses the other's order:
+/// `above` needs its release below its trip, `below` needs it above. Both
+/// numbers are named. The check runs at eval, and mount runs tick 0, so it is
+/// a mount-time refusal — the `along` precedent.
+///
+/// One shared body rather than two, because the failure mode of two is one of
+/// them growing a fix the other never gets; the pair is a mirror or it is two
+/// operators that happen to rhyme.
+fn hysteresis(comptime falling: bool) fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn e(ctx: *EvalCtx) EvalError!Emit {
+            const v = try num(ctx, 0);
+            const on = try num(ctx, 1);
+            const off = try num(ctx, 2);
+            if (if (falling) off < on else off > on) {
+                return ctx.refuse("{s}: 'off' ({d}) is {s} 'on' ({d}) — hysteresis needs the release {s} the trip", .{
+                    ctx.op.name,
+                    off,
+                    if (falling) "below" else "above",
+                    on,
+                    if (falling) "above" else "below",
+                });
+            }
+            const st = ctx.state.items;
+            const was = st.len > 0 and st[0] == 1;
+            const trips = if (falling) v <= on else v >= on;
+            const holds = if (falling) v < off else v > off;
+            const now = if (st.len == 0) trips else if (was) holds else trips;
+            if (st.len > 0 and now == was) return Emit.none;
+            try ctx.setState(&.{@intFromBool(now)});
+            try ctx.out[0].appendBool(now);
+            return Emit.first;
+        }
+    }.e;
 }
 
 // ---------------------------------------------------------------------------
@@ -2722,7 +2752,8 @@ const CORE = [_]registry.OpDef{
     .{ .name = "once", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Pass the first value, then deaf until remount — `once 1 | ramp 2s` fires at mount; piped, it passes the first arrival.", .eval = evalOnce },
     .{ .name = "toggle", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Flip a boolean on each arrival. Emits its initial false at mount and flips from the next arrival on.", .eval = evalToggle },
     .{ .name = "tally", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .help = "Running count of arrivals, as a value. Emits 0 at mount; does not survive remount (remount is restart).", .eval = evalTally },
-    .{ .name = "above", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis — `above 0.3 0.2` is \"above 0.3, until below 0.2\". Emits its level at mount; this is what stops a threshold chattering.", .eval = evalAbove },
+    .{ .name = "above", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis — `above 0.3 0.2` is \"above 0.3, until below 0.2\". Emits its level at mount; this is what stops a threshold chattering.", .eval = hysteresis(false) },
+    .{ .name = "below", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis, falling — `below 0.2 0.3` is \"below 0.2, until above 0.3\". The first number trips and the second releases, same as `above`. Emits its level at mount.", .eval = hysteresis(true) },
     // tier 2, beat 3a — over arrays, driving a section body per element.
     // `.reads` rather than `.pure`: a body may hold BOUND ports of its own
     // (`keep (> plane.threshold)`), so the answer is not a function of this

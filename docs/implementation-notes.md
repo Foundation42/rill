@@ -1207,3 +1207,52 @@ renamed port, a deleted row, a swapped pair, an arity that drops an
 optional port, an optional printed as required, a parser that swallows
 what it does not understand, each of the four `sameItem` clauses, a
 pointer to a section that does not exist, and the pointers going away.
+
+## `below` — the hysteresis pair (2026-08-26, envelopes item 4)
+
+Chris's ruling, and it is a ruling about *reading*, not about behaviour:
+**the first number trips and the second releases, for both words.**
+`above 0.3 0.2` is "above 0.3, until below 0.2"; `below 0.2 0.3` is
+"below 0.2, until above 0.3". That is the entire reason `below` is a word
+rather than `above` with its arguments swapped — `above <off> <on>` would
+have been the same computation and would have asked every reader to work
+out which of the two numbers was the larger before knowing what the line
+did.
+
+So each word **refuses the other's order at mount**, naming both numbers:
+`above` needs its release below its trip, `below` above it. The check
+lives in `eval`, and mount runs tick 0, so it lands at mount — the
+`along` precedent. Equal numbers are a zero-width band and stay legal in
+both words: that is a comparator, and the language has one.
+
+One shared body (`hysteresis(comptime falling: bool)`) rather than two
+functions that rhyme. The failure mode of two is one of them growing a
+fix the other never gets.
+
+**The flagship recipe is now on its third spelling**, and the sequence is
+the argument for the whole item:
+
+1. `above 0.3 0.2 | set …` — shipped, and it lights the street at noon.
+2. `above 0.3 0.2 | not | set …` — right, the long way round.
+3. `below 0.2 0.3 | set …` — the sentence you would say out loud.
+
+It also improved the gate for free. The gate compares the band against
+the strict comparator it replaces (`< 0.3`), and those two now point the
+**same way**: they agree on every reading except the ones the band exists
+to swallow. A sense error in either now shows as a disagreement rather
+than as two mirrors both flipped, which is exactly the failure the
+inversion survived for a whole campaign.
+
+**Five mutations, all bitten — but only after a finding about a gate,
+again, and it is the same ledger line for the third time.** The first
+draft of "the first number trips" fed each operator a value sitting
+exactly ON its first number: 0.3 to `above 0.3 0.2`, 0.2 to `below 0.2
+0.3`. An implementation tripping on its SECOND number passes that,
+because 0.2 ≤ 0.2 and 0.2 ≤ 0.3 are both true — A and B agree there, and
+the mutation walked straight through. The discriminating value is
+*inside* the band: at 0.25 neither word has tripped, and trip-on-second
+makes both read true. One gate, both words, nowhere to hide.
+
+The other four: `below` accepting a backwards order; the level not
+published at mount; the refusal dropping its numbers; and `above` itself
+trip-swapped, which the same pair gate catches.

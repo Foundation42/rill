@@ -2109,6 +2109,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "toggle", .class = .reads },
         .{ .name = "tally", .class = .reads },
         .{ .name = "above", .class = .reads }, // hysteresis is state
+        .{ .name = "below", .class = .reads }, // …and its mirror
         .{ .name = "noise", .class = .reads }, // fed time
         .{ .name = "rand", .class = .reads }, // own draw counter
         .{ .name = "distance", .class = .pure },
@@ -4100,8 +4101,11 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // 92 → 93 (tier-2 close): the closing page. The rill-cell count does not
     // move — the close ratified two spellings and rewrote the cells that used
     // them, rather than adding programs.
+    // 93 → 94 (envelopes, `below`): the note on the flagship's third and last
+    // spelling. `below`'s customer IS that row, so it re-spells a program
+    // rather than adding one — the rill-cell count stays at 45.
     try testing.expectEqual(@as(usize, 45), rill_cells);
-    try testing.expectEqual(@as(usize, 93), total);
+    try testing.expectEqual(@as(usize, 94), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -5857,6 +5861,13 @@ test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
     // Driven from the MANUAL'S OWN TEXT, not a copy of it. Editing the recipe
     // back to its inverted form fails here, which is the whole point: the
     // manual gate proves an example parses, and parsing was never the problem.
+    //
+    // 2026-08-26: the recipe is now `below 0.2 0.3` and the `| not` is gone —
+    // which puts the band and the strict comparator it is compared against the
+    // same way up. That is worth more than the tidiness: the two streams below
+    // now agree on every reading except the ones the band exists to swallow,
+    // so a sense error in either would show as a disagreement rather than as
+    // two mirrors both flipped.
     const recipe = manualRecipe("**The threshold that does not chatter**");
     const src = try std.fmt.allocPrint(testing.allocator, "{s}plane.world.light | < 0.3 | set plane.strict\n", .{recipe});
     defer testing.allocator.free(src);
@@ -5864,7 +5875,7 @@ test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
     try mountFixture(testing.allocator, &fx, src, .{.{ "plane.world.light", @as(f64, 0.5) }});
     defer fx.deinit();
 
-    const hyst = "programs.p.not1.out.out";
+    const hyst = "programs.p.below1.out.out";
     const strict = "programs.p.lt1.out.out";
     // Broad daylight: the street lights are OFF. This is the assertion the
     // first version of this gate had backwards.
@@ -6169,6 +6180,85 @@ test "beat 4a: `above` emits its LEVEL at mount, both ways" {
 
     try testing.expect(types.asBool(fx.rt.readSlot("programs.p.above1.out.out").?).?);
     try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.above2.out.out").?).?);
+}
+
+test "`below`: the FIRST number trips, for both words — the pair's whole claim" {
+    // The ruling (2026-08-26) that made `below` a word instead of `above` with
+    // its numbers swapped: in `above <on> <off>` and `below <on> <off>` alike,
+    // the first number is the trip and the second is the release. A reader
+    // never has to work out which of the two is the bigger one.
+    //
+    // Gated where the two readings DISAGREE, which is the ledger's first line
+    // and which this gate got wrong on its first draft: it fed each operator a
+    // value sitting exactly ON its first number (0.3 to `above 0.3 0.2`, 0.2
+    // to `below 0.2 0.3`) and asserted both were true. An implementation that
+    // trips on its SECOND number passes that, because 0.2 ≤ 0.2 and 0.2 ≤ 0.3
+    // are both true — A and B agree there. The mutation walked straight
+    // through it.
+    //
+    // The discriminating value is INSIDE the band. At 0.25 neither word has
+    // tripped: `above` wants ≥ 0.3 and `below` wants ≤ 0.2. Trip on the second
+    // number instead and both read true — one gate, both words, no agreement
+    // to hide in.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.a | above 0.3 0.2 | set plane.x
+        \\plane.b | below 0.2 0.3 | set plane.y
+    , .{ .{ "plane.a", @as(f64, 0.25) }, .{ "plane.b", @as(f64, 0.25) } });
+    defer fx.deinit();
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.above1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.below1.out.out").?).?);
+
+    // …and the trip itself is inclusive at the first number, both words.
+    try feedValue(&fx.rt, testing.allocator, "plane.a", @as(f64, 0.3));
+    try feedValue(&fx.rt, testing.allocator, "plane.b", @as(f64, 0.2));
+    try fx.rt.tick(.{});
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.above1.out.out").?).?);
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.below1.out.out").?).?);
+}
+
+test "`below`: emits its LEVEL at mount, both ways" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.dark | below 0.2 0.3 | set plane.a
+        \\plane.bright | below 0.2 0.3 | set plane.b
+    , .{ .{ "plane.dark", @as(f64, 0.1) }, .{ "plane.bright", @as(f64, 0.9) } });
+    defer fx.deinit();
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.below1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.below2.out.out").?).?);
+}
+
+test "`below`: the band holds falling, and releases only past the second number" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.v | below 0.2 0.3 | set plane.out
+    , .{.{ "plane.v", @as(f64, 0.5) }});
+    defer fx.deinit();
+    const out = "programs.p.below1.out.out";
+    try testing.expect(!types.asBool(fx.rt.readSlot(out).?).?);
+
+    // Down through the trip, then wobbling in the band: it stays put.
+    for ([_]f64{ 0.19, 0.21, 0.25, 0.29, 0.22 }) |v| {
+        try feedValue(&fx.rt, testing.allocator, "plane.v", v);
+        try fx.rt.tick(.{});
+        try testing.expect(types.asBool(fx.rt.readSlot(out).?).?);
+    }
+    // …and releases at the release, not before it.
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 0.3));
+    try fx.rt.tick(.{});
+    try testing.expect(!types.asBool(fx.rt.readSlot(out).?).?);
+}
+
+test "`below` refuses a release BELOW the trip, and names both numbers" {
+    // The mirror of `above`'s refusal, and the mirror is the point: each word
+    // refuses the other's order. `below 0.3 0.2` is not a program that quietly
+    // behaves like something.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.v | below 0.3 0.2 | set plane.out
+    , .{.{ "plane.v", @as(f64, 0.5) }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "below", "hysteresis", "above the trip", "0.2", "0.3" });
 }
 
 test "beat 4a: `above` refuses a release above the trip" {
