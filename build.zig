@@ -96,6 +96,25 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the demo");
     run_step.dependOn(&run_cmd.step);
 
+    // rill-run: mount ANY .rill file on the mock plane and drive it from the
+    // command line. The demo above is one hardcoded program; this is the one
+    // you reach for when iterating on a spelling or watching a register settle.
+    const runner_mod = b.createModule(.{
+        .root_source_file = b.path("src/run.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    runner_mod.addImport("rill", rill_mod);
+    runner_mod.addImport("struple", struple_mod);
+    const runner = b.addExecutable(.{ .name = "rill-run", .root_module = runner_mod });
+    b.installArtifact(runner);
+
+    const runner_cmd = b.addRunArtifact(runner);
+    runner_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| runner_cmd.addArgs(args);
+    const runner_step = b.step("run-file", "Run a .rill file: zig build run-file -- <file> [opts]");
+    runner_step.dependOn(&runner_cmd.step);
+
     // Tests: src/rill.zig pulls in the acceptance-gate suite from src/tests.zig.
     const tests = b.addTest(.{ .root_module = rill_mod });
     const run_tests = b.addRunArtifact(tests);
