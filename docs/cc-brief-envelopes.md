@@ -13,6 +13,35 @@ waiting on Chris. What is yours is the building and the gates.
 
 ---
 
+## STATUS — BUILT, 2026-08-26
+
+All eight items, in the order Chris fixed. Branch `tier2-recon`, pushed.
+**284 → 316 gates**, registry 97 → 103 operators, **35 of 35 words**.
+Suite green in Debug and ReleaseFast; Matryoshka 907/907 throughout.
+
+| item | | commit |
+|---|---|---|
+| 1 · the typing gate | built, 4 mutations bitten | `0131848` |
+| 2 · the operator index | built, 9 mutations bitten, 2 gate findings | `0131848` |
+| 4 · `below` | built, 5 mutations bitten, 1 gate finding | `c8daa68` |
+| 5 · `first`/`last` empty, `len`, `last` | built, 4 mutations bitten | `345cc73` |
+| 6 · `kick` | built, 6 mutations, 1 survived → gate | `e625b94` |
+| 7 · `adsr` | built, 5 mutations, 1 survived → gate | `ecacc8a` |
+| 8 · `step` | built, 6 mutations, 1 gate finding | `4d65b00` |
+| 3 · the book-runs recon | **recon delivered, nothing built** | `ca9e9d8` |
+
+Waiting on Chris: the recon's §6 — three questions, in
+`docs/cc-recon-rillbook-runs.md`. Nothing else in this brief is
+outstanding.
+
+Deviations recorded rather than taken quietly: `kick` **stops exactly**
+rather than at ε (a linear segment has an end; ε is what an exponential
+needs), and `step`'s **modes compose** rather than being five
+alternatives — argued from Chris's own definition of `shuffle` as *a
+fresh permutation per pass*, since passes are what `loop` means.
+
+---
+
 ## 0. Where you are standing
 
 Tier 2 is **closed and ratified** (`docs/rill-tier2.md`). 284 gates,
