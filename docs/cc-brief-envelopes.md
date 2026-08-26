@@ -72,7 +72,11 @@ The tables are scattered across §6b, §6c, §6d, §6f and §7 and cover maybe
 half the operators actually used in examples."*
 
 **(3) A recon for the idioms book RUNNING** — recon first, not a
-drive-by. Each cell carries a fed-time script and an asserted outcome,
+drive-by. **DONE 2026-08-26: `docs/cc-recon-rillbook-runs.md`.** Five
+measurements, three designs, a phased recommendation, and three questions
+for Chris. The headline finding is that the rillbook web app's `toDoc()`
+drops unknown cell fields on every save, so scripts inside the book would
+be deleted silently by the first person who opens it in the browser. Each cell carries a fed-time script and an asserted outcome,
 and the gate drives **the cell's own text** against the row's claim.
 *The inverted flagship is the argument*: the book cell, the manual recipe
 and the gate all said the same wrong thing, because each was a separate
