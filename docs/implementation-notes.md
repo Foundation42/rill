@@ -917,6 +917,19 @@ must be formatted while that thing is still alive.
 
 ## Gate discipline — asserting "A rather than B" (2026-08-25)
 
+**Addendum, 2026-08-26 (recon phase 3), ratified by Chris as the ledger
+line of the envelopes campaign: documentation is a claim about the code;
+if nothing executes it, it will eventually contradict a gate you already
+have.** Files beside *an argument nothing runs is prose* — and it is the
+sharper half of it. Prose that nobody runs does not merely fail to help:
+it drifts until it says the opposite of something the suite already
+proves. Two notes in `idioms.rillbook` said `ease` *"never quite reaches
+zero, so it costs a frame forever"*. `ease` stops — `converged()` at ε,
+no further wake — and beat 1a has gated exactly that since the register
+family landed. The contradiction had been sitting in the evidence file,
+in sentences written by the person who had gated the opposite, and the
+only thing that found it was pointing a gate at the claim.
+
 **Addendum, 2026-08-25 (tier-2 close): a gate that watches the operator
 is not watching the row.** The beat-4 street-light gate drove the exact
 oscillation where a hysteresis band and a strict comparator disagree, and

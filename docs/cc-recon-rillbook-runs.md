@@ -14,7 +14,8 @@ recommendation, and — at §6 — the rulings and what each one changed.
 | 1 · the identity gate | built, 4 mutations bitten | `9250db0` |
 | 2 · after-cell correctness | built, 6 mutations bitten | `7ea1845` |
 | 3 · the before cells | built, 3 mutations bitten, **2 wrong claims found** | this one |
-| — · scripts in the cell | blocked on the Matryoshka ask (§7) | — |
+| — · the `toDoc` fix | **LANDED** in matryoshka `f45bc3a`, 8 checks, 5 mutations | — |
+| — · scripts in the cell | unblocked; the round-trip is lossless from format 2 | — |
 | — · the sidecar | ruled a dead end; not built | — |
 
 Phase 3 found two notes in the book claiming a badness that is not
@@ -257,7 +258,23 @@ flattens, arpeggio asserts the plane path grows. **No timeline longer
 than it takes to show the claim.** F2's "38 hand-written scripts" was
 costed as full reproductions; one assertion each is a fraction of that.
 
-## 7. The Matryoshka ask (raised 2026-08-26)
+## 7. The Matryoshka ask (raised and LANDED 2026-08-26)
+
+**Done — `matryoshka f45bc3a`.** The shape moved to a DOM-free
+`web/apps/rillbook/rbdoc.mjs`; the editor owns five keys and everything
+else rides through in `extra` (spread *first*, so a stranger cannot
+shadow the name the user is looking at); the marker is **version 2**,
+which *means* "written by a serialiser that preserves unknown keys", with
+v1 still readable and rewritten to v2 on save. The gate is
+`rbdoc.test.mjs` on that repo's `zig build test` — eight checks, five
+mutations, all bitten, the first of them being the original bug restored.
+`node` is new on that test path and fails loudly if absent, because a
+gate that skips itself reports coverage it does not have.
+
+This book is now format 2, and rill's own gate pins it there: the version
+is a claim, not a number.
+
+### The ask as it was raised
 
 **`web/apps/rillbook/rillbook.js`, `toDoc()` — preserve unknown cell
 keys.** It currently rebuilds each cell from five named fields, so every

@@ -4090,8 +4090,12 @@ fn parseBook(gpa: std.mem.Allocator, doc_src: []const u8, reg: *rill.Registry, d
     };
     defer parsed.deinit();
     const doc = parsed.value;
-    if (doc.rillbook != 1) {
-        std.debug.print("{s}: format version {d}, expected 1\n", .{ doc_name, doc.rillbook });
+    // 1 and 2 are both readable — the shape did not change. What version 2
+    // adds is a GUARANTEE about the writer: it preserves keys it does not
+    // recognise. A v1 document may have been through the serialiser that
+    // dropped them and cannot be trusted to still hold what was put in it.
+    if (doc.rillbook != 1 and doc.rillbook != 2) {
+        std.debug.print("{s}: format version {d}, expected 1 or 2\n", .{ doc_name, doc.rillbook });
         return error.TestUnexpectedResult;
     }
 
@@ -4119,6 +4123,17 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
     const rill_cells, const total = try parseBook(testing.allocator, @embedFile("idioms.rillbook"), &reg, "idioms.rillbook");
+
+    // THIS book is version 2 on purpose, and the version is a claim rather
+    // than a number: format 2 says the writer preserves fields it does not
+    // recognise. That guarantee is what lets a cell carry a fed-time script
+    // beside its program without the next browser save deleting it, and it is
+    // gated on the other side of the seam — `rbdoc.test.mjs` in matryoshka,
+    // on that repo's `zig build test`. Pinned here so this book cannot be
+    // written back down to a version whose writer is allowed to lose things.
+    const parsed = try std.json.parseFromSlice(BookDoc, testing.allocator, @embedFile("idioms.rillbook"), .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try testing.expectEqual(@as(u32, 2), parsed.value.rillbook);
     // Both numbers move on purpose. `rill_cells` rises as a beat turns a
     // markdown "after" into a program; `total` rises as asks are added.
     // Opening count (recon, before beat 1a): 12 before-cells, 37 cells.
