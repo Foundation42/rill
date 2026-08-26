@@ -1757,3 +1757,62 @@ bound), and gating those would forbid the manual from showing a mistake.
 Six mutations, all bitten: the ambiguous spelling restored, a required
 keyword's word dropped, two optional keywords' words dropped, the rule
 sentence deleted, and the section renamed.
+
+## Audit: is a keyword always and only an optional argument? (2026-08-26)
+
+Chris asked for this before any spelling changed, and the answer is
+**almost, and the exceptions are not where we were looking.**
+
+**121 arguments a caller writes**, across the core registry (the piped
+port 0 excluded):
+
+| | |
+|---|---|
+| required, positional | 89 |
+| required, **carries a word** | **3** |
+| optional, keyword | 16 |
+| optional, bare-word flag | 6 |
+| optional, **no word** | **7** |
+
+So *"a keyword marks an optional argument, always and only"* is true of
+**111 of 121**. The ten exceptions are three distinct situations:
+
+**(A) Required and worded — 3, and only one is not `cast`.**
+`cast at`, `cast radius` are the named exception Chris already carved
+out: three numbers in a row that are unreadable positionally. The odd one
+out is **`integrate <in> max <max>`** — the clamp is required *and*
+carries a word, and `integrate` is not `cast`. The word is doing real
+work there (`integrate 100` would read as a rate), and it is arguably the
+reason the clamp reads as required rather than as a knob — but under the
+honest rule it is a second exception, and it needs its own ruling or its
+own spelling.
+
+**(B) Optional and wordless, with nothing to be ambiguous about — 3.**
+`set value`, `notify value`, `cast value` — the sink payload. There is
+one optional slot and a path token cannot be confused with a literal, so
+no word is needed and `set plane.a value 1` would be worse. **This
+suggests the rule's real subject is AMBIGUITY, not optionality**: the
+reason optionals carry words is that `cast $alarm 30` cannot say whether
+30 is the payload or the radius, and where that cannot arise the word
+buys nothing.
+
+**(C) Optional and wordless, where ambiguity DOES arise — 4.**
+`arm <in> <off> <on>` and `disarm <in> <off> <on>`: three optional
+positional ports in a row. `arm gate_closed` binds `in`, not `off`, and
+nothing announces which. **This is precisely the trap the keyword rule
+exists to prevent, still open** — and it is not among the twelve mixed
+operators, because `arm` and `disarm` have no keyword at all. The audit's
+most useful result is that the problem was not where the probe pointed.
+
+**And of the twelve "mixed" operators, ten obey the rule exactly** —
+required-positional plus optional-keyword, which is the rule working.
+`ease`, `lfo`, `noise`, `pulse`, `rand`, `ramp`, `reduce`, `shuffle`,
+`step` and `take` are all correct as they stand; the reviewer's failure
+on `ease` was the *notation's*, not the language's. Only `cast` and
+`integrate` break it.
+
+**Nothing was respelled.** Recorded for Chris to rule on: whether the
+honest rule is *"a word marks an argument that could otherwise be
+mistaken for another"* (which makes B legal, keeps A's `cast`, and makes
+C a bug), or *"a word marks an optional argument"* (which makes B and C
+both exceptions and A's `integrate` a second one).
