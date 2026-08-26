@@ -210,7 +210,53 @@ pub const Program = struct {
         const out = try alloc.alloc([]const SlotId, lists.len);
         for (lists, out) |*l, *o| o.* = l.items;
         self.downstream = out;
+        self.carryKinds();
         try self.linkBodies();
+    }
+
+    /// An elementwise operator CARRIES the kind of what is piped into it: an
+    /// occurrence through `mul 2` is still an occurrence.
+    ///
+    /// Ruled 2026-08-26, after Chris bound a muzzle flash to a mouse button and
+    /// then made the obvious edit — "I wanted the flash brighter":
+    ///
+    ///     lmb | rose_above 0.5 | mul 2 | kick 15ms 150ms | set …
+    ///                           ^^^^^
+    ///
+    /// It fired once and never again. `rose_above` emits an occurrence, but
+    /// `mul`'s output slot was declared a VALUE, so `emitSlot`'s "20 to 20 is
+    /// silence" suppressed the second press at the source and the envelope
+    /// downstream never heard it. Every press after the first produced the same
+    /// number, and the same number is not an arrival.
+    ///
+    /// Silence was the wrong answer twice over: the spelling reads correctly,
+    /// and nothing in the language said otherwise. `kick`'s own comment already
+    /// says "an occurrence that repeats is two occurrences" — this makes that
+    /// true through arithmetic as well.
+    ///
+    /// Port 0 is the piped one and `broadcasts` is already how a port declares
+    /// its operator elementwise (beat 1b), so this needs no new marker: the
+    /// same flag that makes the output TYPE follow the input now makes the
+    /// output KIND follow it too. One forward pass suffices because node ids
+    /// are topological, so `occ | mul 2 | add 1 | kick` carries the whole way.
+    ///
+    /// Only a WIRED input carries. A plane subscription's kind is decided per
+    /// delta by the host (a mailbox path delivers occurrences), which a static
+    /// slot cannot know — so `plane.events | mul 2 | kick` still collapses, and
+    /// that is worth its own ruling rather than a guess here.
+    fn carryKinds(self: *Program) void {
+        for (self.nodes.items) |*n| {
+            if (n.inputs.len == 0 or n.outputs.len == 0) continue;
+            const def = self.reg.get(n.op);
+            if (def.inputs.len == 0 or !def.inputs[0].broadcasts) continue;
+            const piped = self.slot(n.inputs[0]);
+            const up = switch (piped.source) {
+                .wire => |sid| sid,
+                else => continue, // a literal or an unwired port stays a value
+            };
+            if (self.slots.items[up].kind != .occurrence) continue;
+            for (n.outputs) |sid| self.slots.items[sid].kind = .occurrence;
+        }
     }
 
     /// Derive every body link from the one that is serialized (`Node.body`).

@@ -2153,3 +2153,56 @@ the app kept refusing record positions while every test exercised the fixed
 path. The demo stopped leaning and the suite stayed green — which reads exactly
 like a regression in the code and was a regression in the workflow. `zig build`
 before believing anything a capture says.
+
+---
+
+## An elementwise operator carries the kind it is piped (2026-08-26)
+
+**Ruled:** an elementwise operator's output KIND follows its piped input.
+`occ | mul 2` is an occurrence; `val | mul 2` is a value.
+
+**Bought by:** Chris bound a muzzle flash to a mouse button in Matryoshka,
+then made the obvious edit — *"I wanted the flash brighter"*:
+
+```rill
+lmb | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.render.grade.bias.exposure
+```
+
+It fired once per mount and never again, silently. `rose_above` emits an
+occurrence, but `mul`'s output slot was declared `.value`, so `emitSlot`'s
+"20 to 20 is silence" suppressed the second press **at the source** and the
+envelope downstream never heard it. Every press after the first carried the
+same number, and the same number is not an arrival.
+
+**Two things made it bad rather than merely wrong.** The spelling reads
+correctly — nothing about `| mul 2 |` suggests it eats repeats. And §2 of the
+manual already said *"Most operators pass the kind through"*, so the
+documentation was right and the implementation was not; nobody could have
+found this by reading.
+
+**Why no new marker was needed.** `Port.broadcasts` already declares a port
+elementwise (beat 1b), and the comment above the math table already said
+"broadcast makes an elementwise operator's OUTPUT KIND follow its input" —
+about the *type*. The same flag now carries the *kind*. Port 0 is the piped
+one.
+
+**Where it lives:** `Program.carryKinds`, one forward pass in `finalize()`.
+Node ids are topological, so a chain (`occ | mul 2 | add 1 | abs`) carries the
+whole way in one sweep. `finalize()` is called on BOTH the parse and the load
+path, so a dumped program and a restored one cannot disagree — the kind is
+derived, not serialised, and there is a gate for that.
+
+**Left undone, deliberately:** only a WIRED input carries. A plane
+subscription's kind is decided per delta by the host (a mailbox path delivers
+occurrences), which a static slot cannot know, so `plane.events | mul 2 | kick`
+still collapses. That wants its own ruling rather than a guess.
+
+**Gate discipline note.** Four mutations, four bitten: not carrying at all;
+carrying unconditionally; carrying for non-elementwise ops; carrying from the
+wrong port. The last two matter because "it works now" is satisfiable by an
+implementation that makes every slot an occurrence, which would delete value
+suppression from the whole language.
+
+**A second finding, free:** `kick` rises to 1 whatever its trigger carries, so
+`mul` *before* an envelope never changed its height. Chris's edit could not
+have made the flash brighter even if it had worked. Scale the envelope.

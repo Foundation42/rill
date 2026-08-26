@@ -2830,7 +2830,12 @@ test "the manuals parse: every printed example compiles" {
     // and `adsr` are one family and printing them apart would teach them so.
     // 48 → 49 (envelopes, `step`): §6c gains the sequencer trio — camera
     // positions on a key, an arpeggio, and a hint picked at random.
-    try testing.expectEqual(@as(usize, 49), human);
+    // 49 → 50 (elementwise kinds): §2 gains the line that carries the ruling —
+    // an occurrence scaled on its way into an envelope. §2 already claimed
+    // "most operators pass the kind through" while `mul` did not, so the
+    // documentation was right and the code was wrong; the example is there so
+    // the claim is now something this gate parses rather than prose.
+    try testing.expectEqual(@as(usize, 50), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -8953,4 +8958,147 @@ test "§6a: every taught operator is in the intent table, or is named as not bel
             return error.TestUnexpectedResult;
         }
     }
+}
+
+// ── an elementwise operator carries the kind it is piped ───────────────────
+
+/// The slot kind of a node's first output, by node name.
+fn outKind(prog: *const rill.Program, node: []const u8) registry.PortKind {
+    const n = prog.node(nodeIdOf(prog, node).?);
+    return prog.slot(n.outputs[0]).kind;
+}
+
+test "elementwise: an occurrence through `mul` is still an occurrence" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.out
+    , &diag);
+    defer prog.deinit();
+
+    // Rule 1: the two kinds must genuinely differ here, or this passes on an
+    // implementation that makes every slot an occurrence.
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "rose_above1"));
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "mul1"));
+    const declared = reg.get(reg.find("mul").?).outputs[0].kind;
+    try testing.expectEqual(registry.PortKind.value, declared);
+}
+
+test "elementwise: a value through `mul` stays a value" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.hp | clamp 0 100 as hp
+        \\hp | mul 2 | set plane.out
+    , &diag);
+    defer prog.deinit();
+    // Carrying the kind must not INVENT one: a value chain is still a value
+    // chain, and `emitSlot`'s "20 to 20 is silence" must still hold for it.
+    try testing.expectEqual(registry.PortKind.value, outKind(&prog, "mul1"));
+    try testing.expectEqual(registry.PortKind.value, outKind(&prog, "clamp1"));
+}
+
+test "elementwise: the kind carries down a CHAIN, not just one hop" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.in | rose_above 0.5 | mul 2 | add 1 | abs | set plane.out
+    , &diag);
+    defer prog.deinit();
+    // Node ids are topological, so one forward pass reaches the end. If it did
+    // not, `abs` would be the value that swallows the repeat instead of `mul`.
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "mul1"));
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "add1"));
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "abs1"));
+}
+
+test "elementwise: a LITERAL-fed operator stays a value" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\const 3 | mul 2 | set plane.out
+    , &diag);
+    defer prog.deinit();
+    try testing.expectEqual(registry.PortKind.value, outKind(&prog, "mul1"));
+}
+
+test "elementwise: the repeat SURVIVES — the flash fires every press, not once" {
+    // The gate this whole ruling was bought with. Chris bound a muzzle flash to
+    // a mouse button, then made the obvious edit — "I wanted the flash
+    // brighter" — and it fired exactly once per mount thereafter, silently.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.in", @as(i64, 0));
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p",
+        \\plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms as env
+    , &diag);
+    defer prog.deinit();
+    const t0: u64 = 1000 * std.time.ns_per_s;
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .now = .{ .time_ns = t0 } });
+    defer rt.deinit();
+    const out = "programs.p.kick1.out.out";
+
+    var t = t0;
+    var peaks: [3]f64 = .{ 0, 0, 0 };
+    for (&peaks) |*peak| {
+        try feedValue(&rt, testing.allocator, "plane.in", @as(i64, 1));
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            t += 16 * ms;
+            try rt.tick(.{ .time_ns = t });
+            peak.* = @max(peak.*, types.asNumber(rt.readSlot(out) orelse "") orelse 0);
+        }
+        try feedValue(&rt, testing.allocator, "plane.in", @as(i64, 0));
+        i = 0;
+        while (i < 18) : (i += 1) {
+            t += 16 * ms;
+            try rt.tick(.{ .time_ns = t });
+            peak.* = @max(peak.*, types.asNumber(rt.readSlot(out) orelse "") orelse 0);
+        }
+    }
+    // Rule 1: the first must fire, or "every press" is vacuous. The ones after
+    // it are the actual claim — before the ruling they were all zero.
+    try testing.expect(peaks[0] > 0.5);
+    try testing.expect(peaks[1] > 0.5);
+    try testing.expect(peaks[2] > 0.5);
+    // ...and to the same height, so these are three flashes rather than one
+    // that never ended.
+    try testing.expectApproxEqAbs(peaks[0], peaks[1], 1e-9);
+    try testing.expectApproxEqAbs(peaks[0], peaks[2], 1e-9);
+}
+
+test "elementwise: a dumped program carries the same kinds when it is loaded" {
+    // `finalize` runs on BOTH paths — parse and load — so a restored program
+    // must not quietly become a value chain again. The kind is DERIVED rather
+    // than serialised, which is why this is worth asserting.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    const src = "plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.out";
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "mul1"));
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    const dumped = try rill.serialize.dump(&rt, testing.allocator);
+    defer testing.allocator.free(dumped);
+    var loaded = try rill.serialize.loadProgram(testing.allocator, &reg, dumped);
+    defer loaded.deinit();
+    try testing.expectEqual(registry.PortKind.occurrence, outKind(&loaded, "mul1"));
 }

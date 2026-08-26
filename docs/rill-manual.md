@@ -64,8 +64,26 @@ Every wire carries one of two kinds of stream:
   twice. An enemy at the gate, then an enemy at the gate again, is two
   enemies — collapsing them would change what happened.
 
-Most operators pass the kind through. A few convert values into
-occurrences on purpose:
+**Arithmetic passes the kind through.** An occurrence through `mul 2`
+is still an occurrence — `kick`'s "twice is twice" survives being
+scaled, offset or clamped on the way:
+
+```rill
+plane.fire | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.flash
+```
+
+This is the same rule that already makes an elementwise operator's
+*type* follow its input (`mul 2` on an array gives an array): what
+comes out of arithmetic is what went in, one step along. It holds for
+every elementwise operator — `add sub mul div min max abs clamp` and
+the rest — and only for a wired input; a plane path's kind is decided
+per delta by the host.
+
+Put arithmetic wherever it reads best, then. `kick` rises to 1
+whatever the trigger carries, so scale the *envelope* if you want a
+bigger flash — `| kick 15ms 150ms | mul 2` — not the trigger.
+
+A few operators convert values into occurrences on purpose:
 
 ```rill
 plane.player.health | dropped_below 20 | notify plane.signals.heartbeat
