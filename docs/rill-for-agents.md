@@ -216,6 +216,10 @@ and is the amount). `cast`'s `at`/`decay` are **keyword ports** — the
 word introduces the value — and `radius` is a keyword static; none of
 the three bind positionally.
 
+Arity and port order for every operator, alphabetically, are in the
+human manual's §12 — one line each, gated against the registry both
+ways, so it is the place to look up a signature rather than guess one.
+
 Hosts inject their own verbs (in Matryoshka, the whole console: 
 `volume set`, `light place`, `camera path`, …). Two-word verbs resolve
 first, so `sound play` is one operator.

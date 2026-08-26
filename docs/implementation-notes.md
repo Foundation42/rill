@@ -1121,3 +1121,89 @@ watch/override surface; only literal-bound or unbound inputs are overridable.
 - Explicitly parked with reasons in the spec (§10): feedback `~`, `<:`/`:>`
   sugar, `match`, budget/coarsening (per-node counters already exist),
   Tidal-style time patterns, lazy select branches.
+
+## The typing gate and the operator index (2026-08-26)
+
+The first two items of the envelopes campaign, and both are structural:
+they exist because of what the tier-2 re-probe found, not because of
+anything the language was missing. Chris fixed their order — the typing
+gate must land *before* the new words, so their ports are covered by it
+from the first commit rather than added to it afterwards.
+
+**(1) The typing gate** (`tests.zig`, "the typing gate: …", three tests).
+Beat 1b widened `types.accepts` globally so `mul {x: 1}` would wire, and
+in the same stroke removed wire-time typing from every `number` port in
+the language. Nothing in the suite noticed for a whole campaign. The fix
+had already landed at tier-2 close (`Port.broadcasts`, opt-in); what
+landed here is the coverage surface that stops it recurring:
+
+- the accept set is stated as a **table** — port type × `broadcasts` →
+  the value types that reach it, sixteen rows — and walked against
+  `types.acceptsPort` for all eight built-ins. Stated as a table on
+  purpose: an expectation shaped like the implementation's `if`s would
+  have been widened in the same edit that widened them.
+- every elementwise port is **named** — 27 operators, 41 ports — and the
+  registry is walked both ways against that roster. Opt-in dies quietly
+  the moment a default flips, and `p.bc` is four characters from `p.in`.
+- two structural halves that need no table: `broadcasts` only ever sits
+  on a `number` or `boolean` port, and never on an output (the flag says
+  what may *arrive*, and nothing arrives at an output).
+
+The limitation is written down at the gate rather than papered over: a
+port bound from a **pipe** is `any` at wire time, because a path has no
+declared type. Wire typing bites on literals and typed wires; a piped
+path is still the eval-time mismatch check's business. That is exactly
+why the roster matters — the literal is all the wire gate ever gets.
+
+Four mutations, all bitten: restoring the global widening (caught twice
+over, by the table and by the three end-to-end parse checks); `p.bc` →
+`p.in` on `mul`'s `b`; `p.in` → `p.bc` on `above`'s trip threshold; and
+the flag appearing on a `duration` port.
+
+**(2) The operator index** — `rill-manual.md` §12, 95 rows. Asked for by
+name at the re-probe: *"an alphabetical operator index with arity and
+port order. The tables are scattered across §6b, §6c, §6d, §6f and §7 and
+cover maybe half the operators actually used in examples."* They were
+being generous. When §12 was written, **twenty-two registered operators
+appeared nowhere in the human manual at all** — `changed`, `latch`,
+`merge`, `min`, `mod`, `atan2`, `pow`, `pi`, `<=`, `>=`, `const`, `tap`
+and every trig function among them.
+
+What the index claims is **arity and port order**, and that is what is
+gated — not surface syntax. Statics are written where their own section
+shows them (`set plane.a 1`, `cast $alarm radius 30 at <ref>`) and are
+listed after the ports so the arity reads at a glance; the legend says
+so. Gate the property the doc claims.
+
+Four gates, and between them the index cannot drift:
+
+- every registered operator appears exactly once, or is on the same
+  `untaught_substrate` list the agent manual's parity gate keeps — and
+  no row invents an operator. (A manual describing a word that was never
+  built is precisely what the re-probe caught, twice.)
+- the printed signature is **parsed** and compared slot by slot against
+  the declaration: port order, optionality, keywords, bare-word flags,
+  section bodies, variadics.
+- byte-order alphabetical, so the six punctuation operators sort ahead
+  of the words and stay together.
+- every `§` pointer in the third column names a heading that exists.
+
+Two findings came out of building it, and both are ledger shapes:
+
+- **The signature parser met `< <a> <b>` and read the comparator as an
+  unterminated slot.** Six operators are spelled in the punctuation the
+  slot syntax uses. The operator name is now taken whole, as the first
+  whitespace-delimited token, before any scanning starts.
+- **The slot comparison was inline in the loop, and dropping its keyword
+  clause SURVIVED.** The corpus is the thing that agrees, so no row in
+  the manual ever differs on any one axis — "A rather than B" was never
+  running anywhere A ≠ B. Extracted as `sameItem` and witnessed one axis
+  at a time in the parser's own test; all four clauses now bite. The
+  ledger line held again, in a gate written by someone who had just
+  re-read it.
+
+Nine mutations across the two items after those fixes, all bitten: a
+renamed port, a deleted row, a swapped pair, an arity that drops an
+optional port, an optional printed as required, a parser that swallows
+what it does not understand, each of the four `sameItem` clauses, a
+pointer to a section that does not exist, and the pointers going away.

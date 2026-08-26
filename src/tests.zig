@@ -5928,6 +5928,237 @@ test "the wire gate: a container only reaches a port that says it broadcasts" {
     try testing.expectEqualSlices(bool, &.{ false, true }, c);
 }
 
+// ---------------------------------------------------------------------------
+// The typing gate (envelopes campaign item 1, ruled 2026-08-26).
+//
+// The wire gate above is three examples. This is the coverage surface behind
+// them. Beat 1b widened `types.accepts` GLOBALLY so `mul {x: 1}` would wire,
+// and in doing so removed wire-time typing from every `number` port in the
+// language — `choose`'s index, `take`'s count, `above`'s thresholds, `within`'s
+// radius all began taking an array and refusing three seconds into the
+// animation instead. No test noticed. What noticed was a reader with no priors
+// working through a printed example that parsed and could never run.
+//
+// So: every port of every core operator, and what its declaration says reaches
+// it. Both halves, both ways, like the class/ticks/fails_mount audits:
+//
+//   (a) the accept set is stated below as a TABLE — for each declared port
+//       type, the value types that reach it — and NOT as an algorithm. This is
+//       the point of the whole gate. A test that restates the implementation's
+//       branches in the implementation's order agrees with a wrong
+//       implementation for exactly the reason it was wrong; beat 1b's widening
+//       was one `if`, and an `if`-shaped expectation would have been widened
+//       with it in the same edit.
+//   (b) every port that broadcasts is NAMED, and every port named broadcasts.
+//       Opt-in is the ruling, and opt-in dies quietly the moment a default
+//       flips. 27 operators, 41 ports, all of them elementwise arithmetic.
+//
+// The limitation, written down rather than papered over: a port bound from a
+// **pipe** is `any` at wire time, because a path has no declared type. Wire
+// typing therefore bites on literals and on typed wires, and a piped path is
+// still the eval-time mismatch check's business. That is *why* (b) matters —
+// the literal is all the wire gate ever gets, and the literal is what beat 1b
+// took away.
+// ---------------------------------------------------------------------------
+
+/// Every core port that is elementwise. Named, so that `broadcasts` cannot
+/// spread by a helper being reached for: `p.bc` is four characters more than
+/// `p.in` and nothing but this list makes the difference visible.
+const broadcasting_ports = [_]struct { op: []const u8, ports: []const []const u8 }{
+    // booleans — the conjunction idiom broadcasts over a record of flags
+    .{ .op = "and", .ports = &.{ "a", "b" } },
+    .{ .op = "or", .ports = &.{ "a", "b" } },
+    .{ .op = "not", .ports = &.{"a"} },
+    // binary arithmetic — `@player.pos | add {x: 0, y: 2, z: 0}`
+    .{ .op = "add", .ports = &.{ "a", "b" } },
+    .{ .op = "sub", .ports = &.{ "a", "b" } },
+    .{ .op = "mul", .ports = &.{ "a", "b" } },
+    .{ .op = "div", .ports = &.{ "a", "b" } },
+    .{ .op = "min", .ports = &.{ "a", "b" } },
+    .{ .op = "max", .ports = &.{ "a", "b" } },
+    .{ .op = "pow", .ports = &.{ "a", "b" } },
+    .{ .op = "mod", .ports = &.{ "a", "b" } },
+    // unary arithmetic
+    .{ .op = "abs", .ports = &.{"in"} },
+    .{ .op = "floor", .ports = &.{"in"} },
+    .{ .op = "ceil", .ports = &.{"in"} },
+    .{ .op = "round", .ports = &.{"in"} },
+    .{ .op = "sign", .ports = &.{"in"} },
+    .{ .op = "fract", .ports = &.{"in"} },
+    .{ .op = "sqrt", .ports = &.{"in"} },
+    .{ .op = "exp", .ports = &.{"in"} },
+    .{ .op = "log", .ports = &.{"in"} },
+    .{ .op = "sin", .ports = &.{"in"} },
+    .{ .op = "cos", .ports = &.{"in"} },
+    .{ .op = "tan", .ports = &.{"in"} },
+    // comparators. `=` and `!=` are NOT here and that is deliberate: they take
+    // `any` on both sides and compare whole encoded values, so a record
+    // reaches them by the wildcard and is compared, not broadcast over.
+    .{ .op = "<", .ports = &.{ "a", "b" } },
+    .{ .op = "<=", .ports = &.{ "a", "b" } },
+    .{ .op = ">", .ports = &.{ "a", "b" } },
+    .{ .op = ">=", .ports = &.{ "a", "b" } },
+};
+
+test "the typing gate: the accept set of a port is its declared type's, stated" {
+    const T = types.Tag;
+    // Every type a wire can carry that is not a host type.
+    const universe = [_]types.TypeId{ T.any, T.number, T.boolean, T.string, T.record, T.bytes, T.array, T.duration };
+
+    const Row = struct { port: types.TypeId, broadcasts: bool, takes: []const types.TypeId };
+    const table = [_]Row{
+        // `any` is the wildcard on the port side; broadcast must not touch it.
+        .{ .port = T.any, .broadcasts = false, .takes = &.{ T.any, T.number, T.boolean, T.string, T.record, T.bytes, T.array, T.duration } },
+        .{ .port = T.any, .broadcasts = true, .takes = &.{ T.any, T.number, T.boolean, T.string, T.record, T.bytes, T.array, T.duration } },
+        // the two elementwise types: containers reach them ONLY when declared
+        .{ .port = T.number, .broadcasts = false, .takes = &.{ T.any, T.number } },
+        .{ .port = T.number, .broadcasts = true, .takes = &.{ T.any, T.number, T.record, T.array } },
+        .{ .port = T.boolean, .broadcasts = false, .takes = &.{ T.any, T.boolean } },
+        .{ .port = T.boolean, .broadcasts = true, .takes = &.{ T.any, T.boolean, T.record, T.array } },
+        // …and nothing else broadcasts, whatever the flag says. A `string`
+        // port that somehow acquired the flag still takes a string, because
+        // there is no elementwise meaning to give it.
+        .{ .port = T.string, .broadcasts = false, .takes = &.{ T.any, T.string } },
+        .{ .port = T.string, .broadcasts = true, .takes = &.{ T.any, T.string } },
+        .{ .port = T.record, .broadcasts = false, .takes = &.{ T.any, T.record } },
+        .{ .port = T.record, .broadcasts = true, .takes = &.{ T.any, T.record } },
+        .{ .port = T.bytes, .broadcasts = false, .takes = &.{ T.any, T.bytes } },
+        .{ .port = T.bytes, .broadcasts = true, .takes = &.{ T.any, T.bytes } },
+        .{ .port = T.array, .broadcasts = false, .takes = &.{ T.any, T.array } },
+        .{ .port = T.array, .broadcasts = true, .takes = &.{ T.any, T.array } },
+        .{ .port = T.duration, .broadcasts = false, .takes = &.{ T.any, T.duration } },
+        .{ .port = T.duration, .broadcasts = true, .takes = &.{ T.any, T.duration } },
+    };
+    // Exhaustive on the port side too: a new built-in type must be given its
+    // row here, in both flavours, before it can be declared on a port.
+    try testing.expectEqual(universe.len * 2, table.len);
+
+    for (table) |row| {
+        for (universe) |val| {
+            const want = for (row.takes) |t| {
+                if (t == val) break true;
+            } else false;
+            const got = types.acceptsPort(row.port, val, row.broadcasts);
+            if (got != want) {
+                std.debug.print("port {s}{s}: value {s} — the table says {}, acceptsPort says {}\n", .{
+                    typeName(row.port), if (row.broadcasts) " (broadcasts)" else "", typeName(val), want, got,
+                });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    // A HOST type is not in the universe and cannot be: the table is minted at
+    // registration. It reaches `any` and itself, and broadcast never invents a
+    // meaning for it — `mesh` is not a container, whatever the port says.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    const mesh = try reg.types.intern("mesh");
+    try testing.expect(types.acceptsPort(T.any, mesh, false));
+    try testing.expect(types.acceptsPort(mesh, mesh, false));
+    try testing.expect(!types.acceptsPort(T.number, mesh, false));
+    try testing.expect(!types.acceptsPort(T.number, mesh, true));
+    try testing.expect(!types.acceptsPort(mesh, T.array, true));
+}
+
+/// Names for the eight built-ins, spelled here rather than read from a live
+/// `TypeTable`, so the failure message of a typing gate does not depend on the
+/// thing being typed.
+fn typeName(id: types.TypeId) []const u8 {
+    return switch (id) {
+        types.Tag.any => "any",
+        types.Tag.number => "number",
+        types.Tag.boolean => "boolean",
+        types.Tag.string => "string",
+        types.Tag.record => "record",
+        types.Tag.bytes => "bytes",
+        types.Tag.array => "array",
+        types.Tag.duration => "duration",
+        else => "host",
+    };
+}
+
+test "the typing gate: every elementwise port is named, and only those are" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    var listed_ports: usize = 0;
+    var declared_ports: usize = 0;
+
+    for (reg.ops.items) |def| {
+        const row: ?[]const []const u8 = for (broadcasting_ports) |e| {
+            if (std.mem.eql(u8, e.op, def.name)) break e.ports;
+        } else null;
+        if (row) |names| listed_ports += names.len;
+
+        for (def.inputs) |port| {
+            const listed = if (row) |names| for (names) |n| {
+                if (std.mem.eql(u8, n, port.name)) break true;
+            } else false else false;
+            if (port.broadcasts) declared_ports += 1;
+            if (port.broadcasts != listed) {
+                std.debug.print("'{s}' port '{s}': declares broadcasts={}, the roster says {}\n", .{ def.name, port.name, port.broadcasts, listed });
+                return error.TestUnexpectedResult;
+            }
+            // Structural, needing no roster: broadcast means "elementwise over
+            // a container", and only `number` and `boolean` have an
+            // elementwise meaning. A flag anywhere else is a typo that would
+            // otherwise do nothing and look deliberate.
+            if (port.broadcasts and port.ty != types.Tag.number and port.ty != types.Tag.boolean) {
+                std.debug.print("'{s}' port '{s}' broadcasts and is {s}\n", .{ def.name, port.name, typeName(port.ty) });
+                return error.TestUnexpectedResult;
+            }
+        }
+        // An OUTPUT never broadcasts: the flag is a statement about what may
+        // arrive, and nothing arrives at an output.
+        for (def.outputs) |port| {
+            if (port.broadcasts) {
+                std.debug.print("'{s}' output '{s}' declares broadcasts\n", .{ def.name, port.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    // Both ways: every name on the roster found a port. A renamed port would
+    // otherwise take its own entry out of service and leave the entry looking
+    // like coverage.
+    if (listed_ports != declared_ports) {
+        std.debug.print("the roster names {d} elementwise ports, the registry declares {d}\n", .{ listed_ports, declared_ports });
+        return error.TestUnexpectedResult;
+    }
+    for (broadcasting_ports) |e| {
+        if (reg.find(e.op) == null) {
+            std.debug.print("'{s}' is on the elementwise roster and is not registered\n", .{e.op});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "the typing gate: every core port is typed from the built-in table" {
+    // Core ops mint no host types — a `mesh` port is the host's to declare.
+    // Said out loud because the accept-set table above is exhaustive over the
+    // built-ins, and it is only exhaustive over the core registry while this
+    // holds.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    for (reg.ops.items) |def| {
+        for (def.inputs) |port| {
+            if (port.ty > types.Tag.duration) {
+                std.debug.print("'{s}' port '{s}' is a host type\n", .{ def.name, port.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+        for (def.outputs) |port| {
+            if (port.ty > types.Tag.duration) {
+                std.debug.print("'{s}' output '{s}' is a host type\n", .{ def.name, port.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
 test "beat 4a: `above` emits its LEVEL at mount, both ways" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
@@ -6564,3 +6795,343 @@ test "manual parity: every core operator is named in the agent manual, or is sub
 }
 
 
+
+// ---------------------------------------------------------------------------
+// The operator index gate (envelopes campaign item 2, 2026-08-26).
+//
+// Asked for by name at the tier-2 re-probe: *"an alphabetical operator index
+// with arity and port order. The tables are scattered across §6b, §6c, §6d,
+// §6f and §7 and cover maybe half the operators actually used in examples."*
+// They were being generous — when §12 was written, twenty-two registered
+// operators appeared NOWHERE in the human manual, `changed`, `latch`, `merge`,
+// `mod`, `atan2` and every trig function among them.
+//
+// The agent manual is gated by `manual parity` because it promises to list the
+// vocabulary. §12 makes the human manual promise the same thing, so it is
+// gated the same way — both directions — plus the part that is new here: the
+// index prints an ARITY, and an arity that drifts is worse than no arity,
+// because it reads like a fact. So the middle column is parsed and checked
+// against the registry declaration slot by slot: port order, optionality,
+// keywords, flags, section bodies, variadics.
+//
+// What §12 claims, and therefore what is gated, is arity and port order — NOT
+// surface syntax. Statics are written where their own section shows them
+// (`set plane.a 1`, `cast $alarm radius 30 at <ref>`) and are listed after the
+// ports so the arity reads at a glance. Gate the property the doc claims.
+// ---------------------------------------------------------------------------
+
+/// One argument slot as the index prints it.
+const SigKind = enum { slot, flag, body, variadic };
+const SigItem = struct {
+    kind: SigKind,
+    name: []const u8 = "", // slot: the name inside `<…>`, sigil included; flag: the word
+    optional: bool = false, // written inside `[…]`
+    kw: []const u8 = "", // the keyword written before it, if any
+};
+
+/// Parse a printed signature — `ease <in> <tau> [up <up>] [down <down>]` — into
+/// its ordered items. Returns the op name through `name_out`.
+fn parseSignature(gpa: std.mem.Allocator, sig: []const u8, name_out: *[]const u8) ![]SigItem {
+    var items: std.ArrayListUnmanaged(SigItem) = .empty;
+    errdefer items.deinit(gpa);
+    var depth: usize = 0;
+    var pending_kw: []const u8 = "";
+
+    // The operator name is the first whitespace-delimited token and is taken
+    // whole, before any scanning: six operators are spelled in the same
+    // punctuation the slot syntax uses (`<`, `<=`, `>=`, `!=`), and a scanner
+    // that met `< <a> <b>` character by character read the comparator as an
+    // unterminated slot and reported the arity of nothing.
+    const head = std.mem.indexOfScalar(u8, sig, ' ') orelse sig.len;
+    name_out.* = sig[0..head];
+    if (name_out.*.len == 0) return error.StrayWord;
+
+    var i: usize = head;
+    while (i < sig.len) {
+        const c = sig[i];
+        switch (c) {
+            ' ' => i += 1,
+            '[' => {
+                depth += 1;
+                i += 1;
+            },
+            ']' => {
+                if (depth == 0) return error.UnbalancedBracket;
+                depth -= 1;
+                i += 1;
+            },
+            '<' => {
+                const j = std.mem.indexOfScalarPos(u8, sig, i, '>') orelse return error.UnclosedSlot;
+                try items.append(gpa, .{ .kind = .slot, .name = sig[i + 1 .. j], .optional = depth > 0, .kw = pending_kw });
+                pending_kw = "";
+                i = j + 1;
+            },
+            '(' => {
+                const j = std.mem.indexOfScalarPos(u8, sig, i, ')') orelse return error.UnclosedSlot;
+                try items.append(gpa, .{ .kind = .body, .optional = depth > 0, .kw = pending_kw });
+                pending_kw = "";
+                i = j + 1;
+            },
+            else => {
+                // `…` is the variadic marker; anything else is a word, and a
+                // word is either the op name, a keyword introducing the next
+                // slot, or — alone inside brackets — a bare-word flag.
+                if (std.mem.startsWith(u8, sig[i..], "…")) {
+                    try items.append(gpa, .{ .kind = .variadic });
+                    i += 3;
+                    continue;
+                }
+                var k = i;
+                while (k < sig.len and sig[k] != ' ' and sig[k] != '[' and sig[k] != ']' and sig[k] != '<' and sig[k] != '(') k += 1;
+                const word = sig[i..k];
+                // Lookahead decides which of the two a word is, and there is
+                // no third: a keyword is followed by what it introduces.
+                var m = k;
+                while (m < sig.len and sig[m] == ' ') m += 1;
+                if (m < sig.len and (sig[m] == '<' or sig[m] == '(')) {
+                    pending_kw = word;
+                } else if (depth > 0 and m < sig.len and sig[m] == ']') {
+                    try items.append(gpa, .{ .kind = .flag, .name = word, .optional = true });
+                } else {
+                    return error.StrayWord;
+                }
+                i = k;
+            },
+        }
+    }
+    if (depth != 0) return error.UnbalancedBracket;
+    return items.toOwnedSlice(gpa);
+}
+
+/// The items the registry says an operator has, in the order §12 prints them:
+/// ports, then statics, then the body, then the variadic marker.
+fn declaredItems(gpa: std.mem.Allocator, def: *const registry.OpDef) ![]SigItem {
+    var items: std.ArrayListUnmanaged(SigItem) = .empty;
+    errdefer items.deinit(gpa);
+    for (def.inputs) |pt| {
+        try items.append(gpa, .{ .kind = .slot, .name = pt.name, .optional = pt.optional, .kw = if (pt.kw) pt.name else "" });
+    }
+    for (def.statics) |s| {
+        if (s.flag) {
+            try items.append(gpa, .{ .kind = .flag, .name = s.name, .optional = true });
+            continue;
+        }
+        const sigil: []const u8 = switch (s.kind) {
+            .channel => "$",
+            .subject => "@",
+            .condition => "#",
+            else => "",
+        };
+        try items.append(gpa, .{
+            .kind = .slot,
+            .name = try std.fmt.allocPrint(gpa, "{s}{s}", .{ sigil, s.name }),
+            .optional = s.optional,
+            .kw = if (s.kw) s.name else "",
+        });
+    }
+    if (def.body > 0) try items.append(gpa, .{ .kind = .body, .optional = def.body_kw.len > 0, .kw = def.body_kw });
+    if (def.variadic) try items.append(gpa, .{ .kind = .variadic });
+    return items.toOwnedSlice(gpa);
+}
+
+/// Two slots — one printed, one declared — are the same slot.
+///
+/// Named rather than written inline in the loop below, because the ledger's
+/// first line applies to it: a gate asserting "A rather than B" must RUN
+/// somewhere A ≠ B. The corpus never differs (the corpus is the thing that
+/// agrees), so dropping a clause from this comparison changed nothing and the
+/// mutation survived. Extracted, it is witnessed one axis at a time in the
+/// parser's own test.
+fn sameItem(a: SigItem, b: SigItem) bool {
+    return a.kind == b.kind and std.mem.eql(u8, a.name, b.name) and
+        a.optional == b.optional and std.mem.eql(u8, a.kw, b.kw);
+}
+
+/// The rows of §12, in printed order, with the backticks stripped.
+const IndexRow = struct { name: []const u8, sig: []const u8 };
+
+fn indexRows(gpa: std.mem.Allocator, doc: []const u8) ![]IndexRow {
+    var rows: std.ArrayListUnmanaged(IndexRow) = .empty;
+    errdefer rows.deinit(gpa);
+
+    const heading = "## 12. The operator index";
+    const start = std.mem.indexOf(u8, doc, heading) orelse return error.NoIndex;
+    var lines = std.mem.splitScalar(u8, doc[start..], '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "| `")) continue;
+        var cells = std.mem.splitScalar(u8, line[1..], '|');
+        const c0 = std.mem.trim(u8, cells.next() orelse continue, " ");
+        const c1 = std.mem.trim(u8, cells.next() orelse continue, " ");
+        if (c0.len < 3 or c1.len < 3) continue;
+        try rows.append(gpa, .{ .name = std.mem.trim(u8, c0, "`"), .sig = std.mem.trim(u8, c1, "`") });
+    }
+    return rows.toOwnedSlice(gpa);
+}
+
+test "the operator index: every operator is listed once, alphabetically, and nothing else is" {
+    const gpa = testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    const rows = try indexRows(gpa, @embedFile("rill-manual.md"));
+    defer gpa.free(rows);
+
+    // Every registered operator appears, unless it is untaught substrate —
+    // the same list the agent manual's parity gate keeps, so the two manuals
+    // cannot disagree about what a reader is meant to be able to write.
+    for (reg.ops.items) |def| {
+        const substrate = for (untaught_substrate) |u| {
+            if (std.mem.eql(u8, u.name, def.name)) break true;
+        } else false;
+        var seen: usize = 0;
+        for (rows) |r| {
+            if (std.mem.eql(u8, r.name, def.name)) seen += 1;
+        }
+        if (substrate and seen != 0) {
+            std.debug.print("'{s}' is untaught substrate and is in the index\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+        if (!substrate and seen != 1) {
+            std.debug.print("'{s}' appears {d} time(s) in the operator index, want 1\n", .{ def.name, seen });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // …and the other way: no row invents an operator. A word that used to
+    // exist is the worst kind of index entry — the re-probe found a manual
+    // describing `last`, which had never been built.
+    for (rows) |r| {
+        if (reg.find(r.name) == null) {
+            std.debug.print("the operator index lists '{s}', which is not registered\n", .{r.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+    // Alphabetical is the index's only navigational promise. Byte order, so
+    // the comparators sort ahead of the words and stay together.
+    var prev: []const u8 = "";
+    for (rows) |r| {
+        if (prev.len > 0 and !std.mem.lessThan(u8, prev, r.name)) {
+            std.debug.print("the index is out of order: '{s}' follows '{s}'\n", .{ r.name, prev });
+            return error.TestUnexpectedResult;
+        }
+        prev = r.name;
+    }
+}
+
+test "the operator index: every section it points at exists" {
+    // The third column sends the reader somewhere. §5a was in the first draft
+    // of this index and there is no §5a — the conjunction idiom is taught in
+    // §6a, and the wrong pointer was written from memory of the AGENT manual,
+    // which numbers its sections differently. A cross-reference is a claim.
+    const doc = @embedFile("rill-manual.md");
+    const start = std.mem.indexOf(u8, doc, "## 12. The operator index").?;
+    var seen: usize = 0;
+    var i = start;
+    while (std.mem.indexOfPos(u8, doc, i, "§")) |at| {
+        var k = at + 2; // `§` is two bytes
+        while (k < doc.len and (std.ascii.isAlphanumeric(doc[k]))) k += 1;
+        const ref = doc[at + 2 .. k];
+        var buf: [32]u8 = undefined;
+        const heading = try std.fmt.bufPrint(&buf, "\n## {s}. ", .{ref});
+        if (std.mem.indexOf(u8, doc, heading) == null) {
+            std.debug.print("the index points at §{s}, which is not a heading\n", .{ref});
+            return error.TestUnexpectedResult;
+        }
+        seen += 1;
+        i = k;
+    }
+    // The pointers are the reason the column is worth reading; an index that
+    // quietly stopped carrying them would pass every check above.
+    if (seen < 40) {
+        std.debug.print("§12 carries only {d} section pointers\n", .{seen});
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "the operator index: every printed arity is the declared one, slot by slot" {
+    const gpa = testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    const rows = try indexRows(gpa, @embedFile("rill-manual.md"));
+    defer gpa.free(rows);
+
+    for (rows) |r| {
+        const def = reg.get(reg.find(r.name).?);
+        var printed_name: []const u8 = "";
+        const printed = parseSignature(arena, r.sig, &printed_name) catch |e| {
+            std.debug.print("'{s}': signature `{s}` does not parse ({s})\n", .{ r.name, r.sig, @errorName(e) });
+            return error.TestUnexpectedResult;
+        };
+        const want = try declaredItems(arena, def);
+
+        if (!std.mem.eql(u8, printed_name, def.name)) {
+            std.debug.print("'{s}': the signature opens with '{s}'\n", .{ r.name, printed_name });
+            return error.TestUnexpectedResult;
+        }
+        if (printed.len != want.len) {
+            std.debug.print("'{s}': the index prints {d} slot(s), the registry declares {d}\n", .{ r.name, printed.len, want.len });
+            return error.TestUnexpectedResult;
+        }
+        for (printed, want, 0..) |got, exp, i| {
+            if (!sameItem(got, exp)) {
+                std.debug.print("'{s}' slot {d}: index says {s} '{s}'{s}{s}{s}, registry says {s} '{s}'{s}{s}{s}\n", .{
+                    r.name,             i,
+                    @tagName(got.kind), got.name,
+                    if (got.optional) " optional" else "",
+                    if (got.kw.len > 0) " kw " else "",
+                    got.kw,             @tagName(exp.kind),
+                    exp.name,           if (exp.optional) " optional" else "",
+                    if (exp.kw.len > 0) " kw " else "",
+                    exp.kw,
+                });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "the operator index: the signature parser reads what the index writes" {
+    // The gate above is only as good as this parser, and a parser that
+    // silently drops what it does not understand would report a perfect index
+    // forever. So: the four shapes it must read, and the three it must refuse.
+    const gpa = testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var name: []const u8 = "";
+
+    const items = try parseSignature(arena, "sort <in> [desc] [by (…)]", &name);
+    try testing.expectEqualStrings("sort", name);
+    try testing.expectEqual(@as(usize, 3), items.len);
+    try testing.expectEqualStrings("in", items[0].name);
+    try testing.expect(!items[0].optional);
+    try testing.expectEqualStrings("desc", items[1].name);
+    try testing.expect(items[1].optional);
+    try testing.expectEqual(SigKind.body, items[2].kind);
+    try testing.expectEqualStrings("by", items[2].kw);
+
+    const kw = try parseSignature(arena, "ease <in> <tau> [up <up>]", &name);
+    try testing.expectEqualStrings("up", kw[2].kw);
+    try testing.expect(kw[2].optional);
+    try testing.expectEqualStrings("", kw[1].kw);
+
+    // …and the comparison the gate is built on, one axis at a time. Every one
+    // of these differs; none of them can differ in the manual, which is why
+    // they are here and not there.
+    const slot = SigItem{ .kind = .slot, .name = "n" };
+    try testing.expect(sameItem(slot, slot));
+    try testing.expect(!sameItem(slot, .{ .kind = .flag, .name = "n" }));
+    try testing.expect(!sameItem(slot, .{ .kind = .slot, .name = "m" }));
+    try testing.expect(!sameItem(slot, .{ .kind = .slot, .name = "n", .optional = true }));
+    try testing.expect(!sameItem(slot, .{ .kind = .slot, .name = "n", .kw = "from" }));
+
+    try testing.expectError(error.UnbalancedBracket, parseSignature(arena, "x [<a>", &name));
+    try testing.expectError(error.UnclosedSlot, parseSignature(arena, "x <a", &name));
+    try testing.expectError(error.StrayWord, parseSignature(arena, "x <a> nonsense", &name));
+}
