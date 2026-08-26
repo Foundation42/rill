@@ -1715,3 +1715,45 @@ reason — the hint's *guard* was never exercised:
 
 Both are the ledger's first line again: the gate must run where A ≠ B,
 and both times the missing thing was the discriminating input.
+
+## The agent manual adopts §12's notation (2026-08-26)
+
+Ruled by Chris after the no-priors probe. The table wrote `ease in tau
+[up t] [down t]`, and nothing in that notation says `tau` is written on
+its own while `up` is written after the word `up`. A reader made the
+resulting mistake **four times in one program**.
+
+Every signature in §3 is now in the operator index's notation — `<slot>`
+positional, `word <slot>` introduced by that word, `[…]` optional, `(…)`
+a section body — and two riders came with the ruling:
+
+**The rule is stated above the table, not just implied by the notation:**
+*arguments are positional unless a word is shown; don't add a word that
+is not there, don't drop one that is.*
+
+**The temporal, event and register rows carry KINDS** — `v→v`, `o→o`,
+`v→o`, `o→v`, and a bare `→o` for a source. Chris's example is the
+argument: `plane.x | dropped_below 5 | hold 30s` **compiles**, and
+`dropped_below` emits an occurrence while `hold` takes a value, so the
+hold has nothing to hold on to. Kinds are not checked at parse, so the
+table was the only place a reader could have learned it, and it did not
+say.
+
+**The gate holds the table to both halves of the rule**, scoped to §3 —
+§5 shows *wrong* spellings on purpose (`lerp a b t` with all three
+bound), and gating those would forbid the manual from showing a mistake.
+
+- **No operator name may be followed by a bare word that names one of its
+  own positional arguments.** `ease in tau` fails; `ease <in> <tau>`
+  passes; `integrate <in> max <max>` passes, because `max` really is
+  written with its word.
+- **A slot whose argument IS introduced by a word must show it.** This
+  half was added after `integrate <in> <max>` — bracketed, and with the
+  word silently dropped — passed everything else. Chris's rule has two
+  directions and the first gate only watched one.
+- Plus the rule sentences themselves, and a floor on the row count so a
+  renamed section cannot make the scan vacuous.
+
+Six mutations, all bitten: the ambiguous spelling restored, a required
+keyword's word dropped, two optional keywords' words dropped, the rule
+sentence deleted, and the section renamed.

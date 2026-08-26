@@ -7885,6 +7885,157 @@ fn namedInCode(doc: []const u8, name: []const u8) bool {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// The agent manual's operator table writes arguments in §12's notation
+// (ruled 2026-08-26, after a no-priors reader made the same mistake four
+// times in one program).
+//
+// The rule the table now states above itself: **arguments are positional
+// unless a word is shown; don't add a word, don't drop one that's there.**
+// This gate holds the table to it in the direction that can be checked
+// mechanically — no operator name may be followed by a BARE word that names
+// one of its own positional arguments. `ease in tau` fails; `ease <in> <tau>`
+// passes; `integrate <in> max <max>` passes, because `max` really is written
+// with its word.
+//
+// Scoped to §3's table. §5 shows WRONG spellings on purpose (`lerp a b t`
+// with all three bound), and gating those would forbid the manual from
+// showing a mistake — which is most of what that section is for.
+// ---------------------------------------------------------------------------
+
+/// Is `word` an argument of `def` introduced by its own name?
+fn keywordArgName(def: *const registry.OpDef, word: []const u8) bool {
+    for (def.inputs) |pt| {
+        if (std.mem.eql(u8, pt.name, word)) return pt.kw;
+    }
+    for (def.statics) |sd| {
+        if (std.mem.eql(u8, sd.name, word)) return sd.kw;
+    }
+    return false;
+}
+
+/// Is `word` an argument of `def` written WITHOUT its name?
+fn positionalArgName(def: *const registry.OpDef, word: []const u8) bool {
+    for (def.inputs) |pt| {
+        if (std.mem.eql(u8, pt.name, word)) return !pt.kw;
+    }
+    for (def.statics) |sd| {
+        if (std.mem.eql(u8, sd.name, word)) return !sd.kw and !sd.flag;
+    }
+    return false;
+}
+
+test "the agent manual's table writes arguments in the operator index's notation" {
+    const gpa = testing.allocator;
+    var reg = try rill.Registry.init(gpa);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    const doc = @embedFile("rill-for-agents.md");
+    const start = std.mem.indexOf(u8, doc, "## 3. The operator table") orelse return error.TestUnexpectedResult;
+    const end = std.mem.indexOfPos(u8, doc, start, "\n## ") orelse doc.len;
+    const table = doc[start..end];
+
+    var rows: usize = 0;
+    var lines = std.mem.splitScalar(u8, table, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "| ") or std.mem.startsWith(u8, line, "|---")) continue;
+        rows += 1;
+        // Walk each inline-code span, token by token. A token is a bracketed
+        // slot (`<name>`), a bare word, or one punctuation character.
+        var in_span = false;
+        var span_start: usize = 0;
+        for (line, 0..) |c, i| {
+            if (c != '`') continue;
+            if (!in_span) {
+                in_span = true;
+                span_start = i + 1;
+                continue;
+            }
+            in_span = false;
+            const span = line[span_start..i];
+            var prev_op: ?*const registry.OpDef = null;
+            var span_op: ?*const registry.OpDef = null;
+            var prev_word: []const u8 = "";
+            var first_token = true;
+            var j: usize = 0;
+            while (j < span.len) {
+                if (span[j] == '<') {
+                    // A slot. The OTHER half of the rule lives here: an
+                    // argument that IS written with a word must show it, and
+                    // `integrate <in> <max>` — bracketed, but with the word
+                    // dropped — passed every check until this was added.
+                    const close = std.mem.indexOfScalarPos(u8, span, j, '>') orelse span.len - 1;
+                    const slot = std.mem.trim(u8, span[j + 1 .. close], "$@#");
+                    if (span_op) |def| {
+                        if (keywordArgName(def, slot) and !std.mem.eql(u8, prev_word, slot)) {
+                            std.debug.print(
+                                \\rill-for-agents.md §3 writes `{s}` — '{s}' is an argument of
+                                \\'{s}' that IS introduced by its own word, and the table has
+                                \\dropped it. Write `{s} <{s}>`. Don't add a word that is not
+                                \\there; don't drop one that is.
+                                \\
+                            , .{ span, slot, def.name, slot, slot });
+                            return error.TestUnexpectedResult;
+                        }
+                    }
+                    prev_op = null;
+                    prev_word = "";
+                    j = close + 1;
+                    continue;
+                }
+                if (!std.ascii.isAlphanumeric(span[j]) and span[j] != '_') {
+                    j += 1;
+                    continue;
+                }
+                var k = j;
+                while (k < span.len and (std.ascii.isAlphanumeric(span[k]) or span[k] == '_')) k += 1;
+                const word = span[j..k];
+                if (first_token) {
+                    span_op = if (reg.find(word)) |id| reg.get(id) else null;
+                    first_token = false;
+                }
+                prev_word = word;
+                if (prev_op) |def| {
+                    if (positionalArgName(def, word)) {
+                        std.debug.print(
+                            \\rill-for-agents.md §3 writes `{s} {s}` — '{s}' is an argument of
+                            \\'{s}' that is written WITHOUT its name, so the table must show it
+                            \\bracketed: `{s} <{s}> …`. Arguments are positional unless a word
+                            \\is shown; a bare name here reads as a keyword and is the mistake a
+                            \\reviewer made four times in one program.
+                            \\  in: `{s}`
+                            \\
+                        , .{ def.name, word, word, def.name, def.name, word, span });
+                        return error.TestUnexpectedResult;
+                    }
+                }
+                prev_op = if (reg.find(word)) |id| reg.get(id) else null;
+                j = k;
+            }
+        }
+    }
+    // The table cannot quietly stop being scanned: an empty or renamed section
+    // would make every check above vacuously true.
+    if (rows < 15) {
+        std.debug.print("§3's table has {d} rows — the scan found almost nothing\n", .{rows});
+        return error.TestUnexpectedResult;
+    }
+
+    // The rule itself is stated, not just obeyed. A notation nobody explains
+    // is how the reader got here.
+    for ([_][]const u8{
+        "Arguments are positional unless a word is shown",
+        "do not drop one",
+        "what it takes and",
+    }) |needle| {
+        if (std.mem.indexOf(u8, table, needle) == null) {
+            std.debug.print("§3 no longer states: \"{s}\"\n", .{needle});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 test "manual parity: every core operator is named in the agent manual, or is substrate on purpose" {
     const gpa = testing.allocator;
     var reg = try rill.Registry.init(gpa);
