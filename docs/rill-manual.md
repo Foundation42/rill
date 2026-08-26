@@ -446,6 +446,7 @@ have several parts.
 | `nth <i>` | the i-th element, 0-based — the array rouses it |
 | `choose <i> <array>` | the same, with the index piped — the index rouses it |
 | `stats` | {max, mean, min, n, stddev} over a numeric array |
+| `len` | how many elements — this is how you say *none* |
 
 `nth` and `choose` are one computation with the hot port swapped, the
 way `lfo` is `clock | wave` in one node. Which port is the rousing is a
@@ -522,7 +523,7 @@ plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3
 | op | does |
 |---|---|
 | `sort [by <body>] [desc]` | **stable** — ties keep their input order. Without `by`, the elements are their own keys |
-| `first` | the leading element; empty is an error |
+| `first` · `last` | the leading and trailing element; an empty array is **silence** |
 | `take <n> [from <i>]` | at most `n` elements; a short array is **forgiven** |
 | `transpose` | record of arrays ↔ array of records, self-inverse |
 | `shuffle [seed <s>]` | seeded Fisher–Yates; seed defaults to 0, identical on every machine |
@@ -534,6 +535,29 @@ of a list of two is sensible, and the answer is those two. `nth 5`
 promises *the sixth element* — if there isn't one, the program asked for
 something that does not exist. A count can be satisfied; a value cannot
 be invented.
+
+**`first` and `last` go quiet on an empty array**, and that is the same
+rule from the other end. They name an *end*, not a position, and an empty
+list simply has none — so the wave ends there, the way `where` ends one
+it does not pass. No contacts at the gate is the ordinary state of a
+sensor, and the ordinary state of the world should not spend a program's
+error budget. `nth 0` on the same empty array still refuses, because
+naming position zero is a claim that there is one.
+
+**So absence is said by the count.** Nothing is invented and no sentinel
+is smuggled in: if a downstream reader needs to know there were none, ask
+`len` and say so.
+
+```rill
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
+plane.sensors.gate.contacts | len | set plane.ui.contacts
+```
+
+Two lines, two questions. The first goes quiet when the gate is clear and
+`plane.ui.nearest` holds its last answer; the second says `0`, which is
+what the reader actually wants to branch on. `len` over `stats | .n` for
+a length is the difference between asking a question and opening a
+magic box.
 
 **`along` passes through every knot** and clamps outside 0..1, because a
 path has ends. Fewer than two knots is refused: one knot is not a path.
@@ -934,10 +958,12 @@ once 1 | ramp 2s from 0 | set plane.render.grade.exposure
 plane.world.light | below 0.2 0.3 | set plane.lights.street.on
 ```
 
-**The nearest threat** — a list into one answer:
+**The nearest threat** — a list into one answer, and the count that says
+when there is none:
 
 ```rill
 plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
+plane.sensors.gate.contacts | len | set plane.ui.contacts
 ```
 
 **The boundary contract** — refuse a malformed list where it arrives,
@@ -1053,7 +1079,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `every` | `every <period>` | Occurrence source on a cadence: mount, then once per period. §6 |
 | `exp` | `exp <in>` | e to the input. |
 | `expect` | `expect [<in>] <shape>` | Assert a shape **once, at mount**; a mismatch refuses the mount. §6e |
-| `first` | `first <in>` | The leading element. §6d |
+| `first` | `first <in>` | The leading element. An empty array ends the wave silently. §6d |
 | `floor` | `floor <in>` | Round toward −inf. |
 | `fract` | `fract <in>` | Fractional part, always in 0..1 — `fract -0.25` is 0.75. |
 | `frame` | `frame` | Fed frame count since mount, as a value. Source. §6b |
@@ -1061,7 +1087,9 @@ and it is listed after the ports here so the arity reads at a glance.
 | `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. §4 |
 | `integrate` | `integrate <in> max <max>` | Running sum over fed time, clamped to ±max. The clamp is required. §6b |
 | `keep` | `keep <in> (…)` | The elements a predicate says true for. Filters **elements**; `where` gates the stream. §6d |
+| `last` | `last <in>` | The trailing element — `window 5s \| last` is the most recent reading. An empty array is silence. §6d |
 | `latch` | `latch <in> <trigger>` | Sample-and-hold: emit the current `in` when `trigger` fires. |
+| `len` | `len <in>` | How many elements. This is how absence is said once `first` goes quiet. §6c |
 | `lerp` | `lerp <t> <a> <b>` | a + (b − a)·t; `t` is the piped one. Extrapolates where `range` clamps. §6b |
 | `lfo` | `lfo <shape> <period> [phase <phase>]` | Modulation source in 0..1 — `lfo sine 4s`. Shapes: `sine tri saw square`. §6b |
 | `log` | `log <in>` | Natural log (IEEE: zero yields −inf, a negative nan). |

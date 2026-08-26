@@ -646,6 +646,41 @@
       "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
     },
     {
+      "name": "empty-list-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## Say \"no threats\" without inventing one\n\nRuled 2026-08-26. `first` used to REFUSE an empty array — it promises one\nvalue, went the reasoning, and an empty list has none. True, and the wrong\nshape: no contacts at the gate is the *ordinary* state of a sensor, and the\nordinary state of the world should not spend a program's error budget.\n\nThe before is the refusal, so there is no before cell to mount: it is the\nnearest-threat recipe walking into the error budget every quiet second."
+    },
+    {
+      "name": "empty-list-after-note",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "### after — envelopes ✅\n\n`first` and `last` name an END of a list, and an empty list has none, so\nthe wave ends there — the `where` precedent. `nth 0` on the same array\nstill refuses, because naming position zero is a claim that there is one.\nA count is satisfiable; a claim is not, which is the same asymmetry\n`take` already carries from the other side.\n\nTwo lines, two questions. The first goes quiet when the gate is clear and\nthe sink holds its last answer; the second says `0`, which is what a\nreader actually branches on. **Absence is said by the count, never by a\nsentinel** — and `len` over `stats | .n` for a length is the difference\nbetween asking a question and opening a magic box."
+    },
+    {
+      "name": "empty-list-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\nplane.sensors.gate.contacts | len | set plane.ui.contacts"
+    },
+    {
+      "name": "most-recent-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## The most recent reading out of a rolling window\n\n`last`'s customer, and the tier-2 re-probe asked for it by name. `window`\nis a rolling buffer; its newest entry is what people want from it, and\nbefore this the only way to reach it was `stats` (which does not carry\nit) or `nth` with a length you do not know."
+    },
+    {
+      "name": "most-recent-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.gpu.traversal_ms | window 5s | last | set plane.ui.latest_ms"
+    },
+    {
       "name": "levels-page",
       "mode": "query",
       "markdown": true,

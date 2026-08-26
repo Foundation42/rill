@@ -2100,6 +2100,8 @@ test "every core op declares its class deliberately" {
         .{ .name = "reduce", .class = .reads },
         .{ .name = "sort", .class = .reads }, // optional key body, same reason
         .{ .name = "first", .class = .pure },
+        .{ .name = "last", .class = .pure },
+        .{ .name = "len", .class = .pure },
         .{ .name = "take", .class = .pure },
         .{ .name = "transpose", .class = .pure },
         .{ .name = "shuffle", .class = .pure }, // seeded: same in, same out
@@ -2788,7 +2790,9 @@ test "the manuals parse: every printed example compiles" {
     // not chatter, the nearest threat, the boundary contract, the camera
     // shake. The campaign's whole vocabulary, in the section a person reads
     // when they want to copy something that works.
-    try testing.expectEqual(@as(usize, 45), human);
+    // 45 → 46 (envelopes, `first`-on-empty): §6d gains the two-line pair that
+    // IS the ruling — the pick that goes quiet, and the count that speaks.
+    try testing.expectEqual(@as(usize, 46), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -4104,8 +4108,13 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // 93 → 94 (envelopes, `below`): the note on the flagship's third and last
     // spelling. `below`'s customer IS that row, so it re-spells a program
     // rather than adding one — the rill-cell count stays at 45.
-    try testing.expectEqual(@as(usize, 45), rill_cells);
-    try testing.expectEqual(@as(usize, 94), total);
+    // 45 → 47, 94 → 99 (envelopes, `first`-on-empty): the two-line pair that
+    // IS the ruling — the pick that goes quiet and the count that speaks —
+    // and `last`'s own customer, the newest entry of a rolling window. Both
+    // asks have no BEFORE cell to mount, and for the same reason in each
+    // case: the before was a refusal and an operator that did not exist.
+    try testing.expectEqual(@as(usize, 47), rill_cells);
+    try testing.expectEqual(@as(usize, 99), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -5464,13 +5473,67 @@ test "beat 3b: `take … from` slices, and past the end is empty rather than an 
     try testing.expectEqual(@as(usize, 0), past.len);
 }
 
-test "beat 3b: `first` errors on empty — it promises one value" {
+test "`first`/`last` on an empty array END THE WAVE — and `nth` still errors" {
+    // Ruled 2026-08-26, replacing beat 3b's refusal. The `where` precedent: a
+    // value cannot be invented, and an operator with nothing to say says
+    // nothing. "No contacts" is the ordinary state of a sensor, and the
+    // ordinary state of the world should not spend a program's error budget.
+    //
+    // Gated as the ASYMMETRY, because that is the ruling: `first` and `last`
+    // go quiet on the same array where `nth 0` refuses. Two operators reading
+    // the same empty list, one silence and one refusal, in one program.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[] | first | set plane.out
+        \\[] | first | set plane.a
+        \\[] | last | set plane.b
     , .{});
     defer fx.deinit();
-    try expectRefusalNames(&.{ "first", "empty" });
+    try testing.expectEqual(@as(usize, 0), Refusal.hits);
+    // Nothing reached the sinks, and nothing was said about it.
+    try testing.expect(fx.rt.readSlot("programs.p.first1.out.out") == null);
+    try testing.expect(fx.rt.readSlot("programs.p.last1.out.out") == null);
+
+    var fx2: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx2,
+        \\[] | nth 0 | set plane.c
+    , .{});
+    defer fx2.deinit();
+    // `nth 0` names a position, which is a claim that the position exists.
+    try expectRefusalNames(&.{ "nth", "out of range", "0 elements" });
+}
+
+test "`last` is the most recent reading, and `len` is how many there are" {
+    // `last`'s customer, and `len`'s: a rolling window says both what it last
+    // saw and how much it has seen, without either being reached for through
+    // `stats`.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[3, 1, 4, 1, 5] | last | set plane.recent
+        \\[3, 1, 4, 1, 5] | len | set plane.n
+        \\[] | len | set plane.none
+    , .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 5), types.asNumber(fx.rt.readSlot("programs.p.last1.out.out").?).?);
+    try testing.expectEqual(@as(f64, 5), types.asNumber(fx.rt.readSlot("programs.p.len1.out.out").?).?);
+    // The whole reason `len` was admitted: absence is SAID, by the count. An
+    // empty array is where `first` goes quiet and `len` does not.
+    try testing.expectEqual(@as(f64, 0), types.asNumber(fx.rt.readSlot("programs.p.len2.out.out").?).?);
+}
+
+test "`last` reads the END of the array, not the start" {
+    // "A rather than B", where A ≠ B: a one-element array cannot tell these
+    // apart, and neither can a palindrome. Five elements, first ≠ last.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[3, 1, 4, 1, 5] | first | set plane.a
+        \\[3, 1, 4, 1, 5] | last | set plane.b
+    , .{});
+    defer fx.deinit();
+    const a = types.asNumber(fx.rt.readSlot("programs.p.first1.out.out").?).?;
+    const b = types.asNumber(fx.rt.readSlot("programs.p.last1.out.out").?).?;
+    try testing.expect(a != b);
+    try testing.expectEqual(@as(f64, 3), a);
+    try testing.expectEqual(@as(f64, 5), b);
 }
 
 test "beat 3b: `transpose` is self-inverse, both directions" {

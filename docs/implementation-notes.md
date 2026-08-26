@@ -1256,3 +1256,66 @@ makes both read true. One gate, both words, nowhere to hide.
 The other four: `below` accepting a backwards order; the level not
 published at mount; the refusal dropping its numbers; and `above` itself
 trip-swapped, which the same pair gate catches.
+
+## `first`/`last` on empty, and `len` (2026-08-26, envelopes item 5)
+
+Chris's ruling, and it reverses one of beat 3b's. `first` refused an
+empty array because it *promises one value* — right about the promise,
+wrong about the shape of the failure. A contact list is empty most of the
+time, so §11's flagship list recipe walked into §9's error budget every
+quiet second and eventually unmounted the program whole. **No contacts at
+the gate is the ordinary state of the world, and the ordinary state of
+the world should not spend an error budget.**
+
+So `first` and `last` **end the wave silently** on an empty array — the
+`where` precedent, because a value cannot be invented — and `nth` keeps
+refusing. That asymmetry is the same one `take` already carried from the
+other side, read from the other end:
+
+- `nth 3` names a **position**, which is a claim that the position
+  exists. An empty list makes the claim false, so it refuses.
+- `first`/`last` name an **end**. An empty list simply has none.
+- `take 3` bounds a **count**, and a count of two satisfies it.
+
+A claim can be false; a count and an end cannot.
+
+**`len` was admitted by this ruling, not alongside it.** Once `first`
+goes quiet there has to be something that says *nothing was there*, and
+the honest something is the count — so the recipe is two statements:
+
+```
+contacts | sort by (.distance) | first | .id | set plane.ui.nearest
+contacts | len | set plane.ui.contacts
+```
+
+The first goes quiet and its sink holds its last answer, which is correct
+(a value stream holds); the second says `0`, which is what a reader
+actually branches on. **Absence is said by the count, never by a
+sentinel.** Reaching for `stats | .n` to learn a length is the magic-box
+shape — a statistics package consulted about arithmetic anyone can do —
+and Chris's correction to the recon's cut reason said so: `len` was cut
+because `window | len` existed, and `len` was cut two items later. A
+circular cut is not a reason.
+
+**`last` is compulsory rather than merely admitted**, and its own
+customer is "the most recent reading" — `window 5s | last`. `window` is a
+rolling buffer and its newest entry is what people want from it. The
+re-probe asked for it by name; the manual had been describing it.
+
+Neither is substrate. **Substrate is a primitive a *taught* word is
+defined over** (`wave` under `lfo`, `project` under `| .field`, `nth`
+under `choose`). Both of these are taught.
+
+One shared body again — `endEval(comptime tail: bool)` — for the reason
+`hysteresis` has one.
+
+Four mutations, all bitten: the two ends swapped (caught by three gates,
+including beat 3b's own nearest-hostile row); the empty array refusing
+again; `len` off by one; and `nth`'s range check loosened, which collapses
+the asymmetry the whole ruling is about and is caught in the same gate
+that asserts the silence.
+
+The other half of the re-probe's finding is still open and is recorded as
+such in `rill-tier2.md` §8: the forgiving spelling `take 1 | map (.id)`
+publishes `[]` or `["id"]`, a different *shape*, so every consumer
+changes too. Nothing here changes a published shape.

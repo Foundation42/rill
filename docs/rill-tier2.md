@@ -677,7 +677,7 @@ besides.
 | any of these contacts armed? | ~~can't~~ **1 ✓** | 1 | ~~`map`, `reduce`~~ **landed, beat 3a** — `map (.armed) \| reduce (or)` |
 | the loudest reading in the last 5s | ~~`stats \| .max`, only because `stats` happens to carry it~~ **1 ✓** | 1 | ~~`reduce`~~ **landed, beat 3a** — `window 5s \| reduce (max)` |
 | just the contacts that are armed | ~~can't~~ **1 ✓** | 1 | ~~`keep`~~ **landed, beat 3a** — `keep (.armed)` |
-| nearest hostile from the contact list | ~~invented sensor field~~ **1 ✓** | 1 | ~~`sort by`, `first`~~ **landed, beat 3b**; one line since the `\| .field` ruling |
+| nearest hostile from the contact list | ~~invented sensor field~~ **1 ✓** (+1 for the count, 2026-08-26) | 1 | ~~`sort by`, `first`~~ **landed, beat 3b**; one line since the `\| .field` ruling. The empty case is a second statement, `\| len`, not a sentinel |
 | top three threats | ~~can't~~ **1 ✓** | 1 | ~~`sort by`, `take`~~ **landed, beat 3b** |
 | refuse a malformed contact list at the boundary | ~~silent~~ **1 ✓** | 1 | ~~`match`~~ **landed, beat 2b** |
 | pin the shape a program reads from the plane | ~~silent~~ **1 ✓** | 1 | ~~`expect`~~ **landed, beat 2b** |
@@ -1074,6 +1074,10 @@ customer, none on prose. See `docs/cc-brief-envelopes.md`. The ~30 was
 always **a discipline against prose-admitted words, not a cliff**, and it
 has not let anything through that had a customer.
 
+> Landed so far: **`below`** (the flagship threshold row), **`first`/
+> `last` on empty** with **`len`** (absence said by the count) and
+> **`last`** (`window 5s | last`). 32 of 35.
+
 **The admitted set is exactly 24, which is what the recon predicted.**
 The honest reading of "~30 words" is 24 admitted + 5 substrate = 29
 names a person must learn, with the math completions being a family
@@ -1184,16 +1188,25 @@ host, or the manual rather than the operator table:
   occurrence, or `ramp <over> to <v>` so a trigger names its destination.
   **Not decided.**
 
-- **FORK — `first` errors on empty, and the flagship list recipe walks
-  into it** (same source). §11's nearest-threat recipe is
-  `contacts | sort by (.distance) | first | .id | set …`, and a contact
-  list is empty most of the time; §9's error budget then unmounts the
-  program whole. The forgiving spelling that exists is `take 1 | map
-  (.id)`, which publishes `[]` or `["id"]` — a different shape, so every
-  consumer changes too. `first` was gated on erroring for a principled
-  reason (it promises ONE value), and that reason is still right; what is
-  missing is the spelling for "the nearest, if there is one".
-  **Not decided.**
+- **~~FORK — `first` errors on empty~~ — RULED 2026-08-26** (raised at the
+  re-probe, settled in the envelopes campaign). §11's nearest-threat
+  recipe is `contacts | sort by (.distance) | first | .id | set …`, and a
+  contact list is empty most of the time; §9's error budget then unmounts
+  the program whole. **`first` and `last` now end the wave silently on an
+  empty array** — the `where` precedent, because a value cannot be
+  invented — while **`nth` keeps erroring**, since a position is a claim
+  and an end is not. The recipe gains a second line, `contacts | len |
+  set plane.ui.contacts`: **absence is said by the count, never by a
+  sentinel.** `first`'s old reason (it promises ONE value) was right about
+  the promise and wrong about the shape of the failure; no contacts at
+  the gate is the ordinary state of the world, and the ordinary state of
+  the world should not spend an error budget.
+
+  The other half of the finding stands and is NOT settled here: the
+  forgiving spelling `take 1 | map (.id)` publishes `[]` or `["id"]` — a
+  different *shape*, so every consumer changes too. Nothing above changes
+  a published shape; a reader who wants the empty case in-band still has
+  no spelling for it.
 
 - **`| .field` — RULED 2026-08-25** (raised and settled the same day).
   `| .field` is the taught spelling for a field read mid-chain, sugar for

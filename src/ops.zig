@@ -1991,11 +1991,47 @@ fn evalSort(ctx: *EvalCtx) EvalError!Emit {
 
 /// `first` — the leading element. Errors on empty, like `nth`: it promises ONE
 /// value and there isn't one. (See the asymmetry note on `take`.)
-fn evalFirst(ctx: *EvalCtx) EvalError!Emit {
-    var r = struple.reader(try arrayIn(ctx));
-    const e = (r.nextView() catch return ctx.refuse("first: '{s}' is a malformed array", .{ctx.portName(0)})) orelse
-        return ctx.refuse("first: the array is empty — there is no first element", .{});
-    try splice(ctx, 0, e);
+/// `first` / `last` — the leading and trailing element.
+///
+/// **An empty array ENDS THE WAVE, silently** (ruled 2026-08-26, replacing
+/// beat 3b's refusal). The `where` precedent: a value cannot be invented, and
+/// an operator with nothing to say says nothing. A refusal here was the wrong
+/// shape — "no contacts" is the ordinary state of a sensor, and the ordinary
+/// state of the world should not spend a program's error budget.
+///
+/// **`nth` keeps erroring**, and the asymmetry is the point twice over. `nth 3`
+/// names a position, which is a *claim* that the position exists; `first` names
+/// an end, and an empty list simply has none. Same shape as `take`'s
+/// forgiveness: a count is satisfiable, a claim is not.
+///
+/// Absence is then said by the COUNT — `contacts | len | set plane.ui.contacts`
+/// — never by a sentinel. That is what `len` was admitted for.
+fn endEval(comptime tail: bool) fn (*EvalCtx) EvalError!Emit {
+    return struct {
+        fn e(ctx: *EvalCtx) EvalError!Emit {
+            const items = try arrayIn(ctx);
+            var r = struple.reader(items);
+            var found: ?[]const u8 = null;
+            while (r.nextView() catch return ctx.refuse("{s}: '{s}' is a malformed array", .{ ctx.op.name, ctx.portName(0) })) |v| {
+                found = v;
+                if (!tail) break;
+            }
+            const e_ = found orelse return Emit.none; // the empty array is silence
+            try splice(ctx, 0, e_);
+            return Emit.first;
+        }
+    }.e;
+}
+
+/// `len` — how many elements. Admitted 2026-08-26 with the `first`-on-empty
+/// ruling, and by it: once `first` goes quiet there has to be something that
+/// says *nothing was there*, and the honest something is the count. Reaching
+/// for `stats | .n` to learn a length is the magic-box shape — a statistics
+/// package consulted about arithmetic everybody can do.
+fn evalLen(ctx: *EvalCtx) EvalError!Emit {
+    const view = struple.view(try arrayIn(ctx));
+    const n = view.count() catch return ctx.refuse("len: '{s}' is a malformed array", .{ctx.portName(0)});
+    try ctx.out[0].appendInt(@intCast(n));
     return Emit.first;
 }
 
@@ -2764,7 +2800,9 @@ const CORE = [_]registry.OpDef{
     // tier 2, beat 3b — order. `sort`'s body rides the `by` keyword, which is
     // what makes it optional without breaking "optionals are keyword-only".
     .{ .name = "sort", .inputs = &.{p.in("in", Tag.array)}, .statics = &.{.{ .name = "desc", .kind = .word, .flag = true, .optional = true }}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .body_kw = "by", .help = "Stable sort — `sort by (.distance) [desc]`. Without `by`, the elements are their own keys. Ties keep their input order.", .eval = evalSort },
-    .{ .name = "first", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The leading element — `sort by (.distance) | first`. Empty is an error: it promises one value.", .eval = evalFirst },
+    .{ .name = "first", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The leading element — `sort by (.distance) | first`. An empty array ends the wave silently; say absence with `len`.", .eval = endEval(false) },
+    .{ .name = "last", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The trailing element — `window 5s | last` is the most recent reading. An empty array ends the wave silently.", .eval = endEval(true) },
+    .{ .name = "len", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "How many elements — `contacts | len | set plane.ui.contacts`. This is how absence is said once `first` goes quiet.", .eval = evalLen },
     .{ .name = "take", .inputs = &.{ p.in("in", Tag.array), p.in("n", Tag.number), p.kwOpt("from", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "At most `n` elements, from `from` — `take 3`. A short array is forgiven; `nth` past the end is not.", .eval = evalTake },
     .{ .name = "transpose", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "AoS ↔ SoA, self-inverse — `{a: [1,2], b: [3,4]}` ↔ `[{a:1,b:3},{a:2,b:4}]`. Ragged input refuses, both sides named.", .eval = evalTranspose },
     .{ .name = "shuffle", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Seeded Fisher–Yates — `shuffle [seed 7] | take 3` is three at random, no repeats. Seed defaults to 0; bit-identical across machines.", .eval = evalShuffle },

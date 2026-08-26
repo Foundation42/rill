@@ -923,7 +923,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | record | record construction `{…}`, projection `.field`, `merge` |
 | array | array construction `[…]` (§3.6a), `nth <i>` (0-based), `choose <i> <array>` (`nth` with the index piped) — tier 2 beat 2a |
 | over arrays | `map <body>`, `keep <pred>`, `reduce <body> [init v]` — each drives a SECTION BODY per element; §3.15, tier 2 beat 3a |
-| order & shape | `sort [by <body>] [desc]` (stable), `first`, `take <n> [from <i>]`, `transpose`, `shuffle [seed <s>]`, `along <knots>` — tier 2 beat 3b |
+| order & shape | `sort [by <body>] [desc]` (stable), `first`, `last`, `len`, `take <n> [from <i>]`, `transpose`, `shuffle [seed <s>]`, `along <knots>` — tier 2 beat 3b; `last`/`len` 2026-08-26 |
 | events & levels | `pulse` (value source), `once`, `toggle`, `tally`, `above <on> <off>` / `below <on> <off>` (hysteresis) — tier 2 beat 4a; `below` 2026-08-26 |
 | noise & space | `noise <period> [octaves] [seed]`, `rand [seed]`, `distance`, `within` — tier 2 beat 4b |
 | contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
@@ -982,6 +982,20 @@ reason `below` is a word rather than `above` with its arguments swapped. Each wo
 below its trip, `below` above it. The check runs in `eval`, and mount runs tick 0, so it is
 a mount-time refusal (the `along` precedent). Equal numbers are a band of zero width and are
 legal in both words — that is a comparator, and the language has one.
+
+**An empty array ends the wave for `first` and `last`; `nth` refuses (ruled
+2026-08-26, replacing beat 3b's refusal for `first`).** `first` and `last` name
+an *end* of a list, and an empty list has none — so they emit nothing and the
+wave ends there, the `where` precedent, because a value cannot be invented.
+`nth <i>` names a *position*, which is a claim that the position exists, so it
+refuses as before, naming the index and the length. The same asymmetry `take`
+already carries from the other side: a count is satisfiable, a claim is not.
+
+A program that must distinguish "no answer" from "the previous answer" says so
+with `len`, which is what `len` was admitted for: **absence is said by the
+count, never by a sentinel.** `first` going quiet leaves its sink holding its
+last value, which is correct — a value stream holds — and is exactly why the
+count is a separate statement rather than a magic value in the same one.
 
 **One node, one kind (same ruling).** `pulse` is a value source (1 for `width`, else 0, once
 per period); `every` is the occurrence source. An operator that both fired an occurrence and
