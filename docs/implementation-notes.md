@@ -1860,3 +1860,22 @@ operator** — because `op [<a>] <b> [<c>]` is ambiguous with a required
 port between them and `register` lets it through. Today no operator has
 two, which is why loosening that check survived its first mutation: it is
 now witnessed against a synthetic operator of exactly that shape.
+
+**And the refusal reached across the seam on its first run.** Putting it
+in `register` rather than in a test meant Matryoshka's build broke, and
+it found **two real traps in the console**, neither of them a false
+positive:
+
+- `chanarche set` / `eararche set` — `clamp_lo` and `clamp_hi`, adjacent
+  and positional, so `chanarche set $c 0.01 200 0.5` filled the *low*
+  clamp and the high one was unsayable. **Two live callers were doing
+  exactly that.**
+- `mesh scale <name> <sx> [sy] [sz]` — the handler defaults the absent
+  ones to `sx`, so one value is uniform and three are per-axis (both
+  fine), but **`mesh scale m1 2 3` silently meant (2, 3, 2)**.
+
+Both respelled with words on the pairs; the common `mesh scale m1 2`
+is untouched. Matryoshka's own wire gate — which builds a sample line
+per verb and drives it through the real parser — caught the change too,
+because it was writing bare positionals. A gate that had not followed
+would have gone on driving a spelling nobody uses.
