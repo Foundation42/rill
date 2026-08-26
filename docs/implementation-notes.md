@@ -1508,3 +1508,45 @@ elements in a row are one write, so `random` drawing the same element
 twice looks like one draw downstream. An occurrence-output twin is the
 fix if the MIDI stack ever needs it; recorded in `rill-tier2.md` §8 with
 that trigger rather than guessed at now.
+
+## The identity gate — the manual is the source (2026-08-26)
+
+Ruled by Chris after the book-runs recon: **the manual is the source; the
+book cites it. Evidence cites the claim, never the reverse.** So when the
+two disagree the manual is right, the book cell is what gets fixed, and
+the failure message says which file to open.
+
+It exists because of a measurement rather than a hunch. The recon counted
+**29 rill statements written byte-identically into both `rill-manual.md`
+and `idioms.rillbook`**, with nothing checking that they still agree. That
+is the mechanism the inverted flagship used, in numbers: `above 0.3 0.2`
+was one sentence copied into §6f, into §11, into the book and into a gate,
+and each copy was separately wrong. Parsing every copy proved every copy
+compiled.
+
+**Both ways, and Chris named the second direction as a requirement:**
+
+1. every listed row is still in both files, byte for byte;
+2. **the list covers every statement the two files share.** Without this
+   a *new* shared program drifts while the gate stays green — the
+   hollow-filter shape, where coverage is whatever happened to be true on
+   the day the list was written.
+
+Plus a guard that neither extractor may go quiet (a renamed fence or a
+JSON drift empties one side, and an empty side makes every check above
+vacuously true).
+
+Statements are compared **trimmed**, joining continuation lines: the
+manual indents a continued pipeline under its head and the book does not,
+and they are still the same program. Indentation is layout.
+
+Four mutations, all bitten: the manual's copy of the flagship edited, the
+book's copy edited, a new program added to both files and left off the
+list, and the manual extractor fed an empty document.
+
+One near-miss worth recording, because it is the lesson from `step`
+arriving one commit later: the first attempt at mutation 1 asserted three
+occurrences of the flagship line in the manual and there were two, so the
+edit never applied and `mutcheck` dutifully reported SURVIVED on a clean
+tree. The assertion caught it. **Read the diff, not just the verdict** —
+a no-op mutation and an unwatched gate look identical from the outside.

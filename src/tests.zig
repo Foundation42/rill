@@ -7525,6 +7525,176 @@ test "manual parity: every core operator is named in the agent manual, or is sub
 
 
 // ---------------------------------------------------------------------------
+// The identity gate (envelopes item 3 phase 1, ruled 2026-08-26).
+//
+// **The manual is the source; the book cites it.** Evidence cites the claim,
+// never the reverse — so when these two disagree, the manual is right and the
+// book cell is what gets fixed, and the failure message says so.
+//
+// This exists because of a measurement, not a hunch: 29 rill statements are
+// written down **byte-identically in both files**, and nothing noticed. That
+// is the mechanism the inverted flagship used. `above 0.3 0.2` was one
+// sentence copied into the manual's §6f, the manual's §11, this book and a
+// gate, and each copy was separately wrong. Parsing every copy proved every
+// copy compiled.
+//
+// **Both ways**, and the second direction is the one Chris required: every
+// listed row must still be in both files, AND the list must cover every
+// statement the two files share. Without that second half a NEW shared
+// program drifts while the gate stays green — the hollow-filter shape, where
+// coverage is whatever was true the day the list was written.
+// ---------------------------------------------------------------------------
+
+/// Every rill statement that appears in `rill-manual.md` and in
+/// `idioms.rillbook`. Adding a row here is not busywork: it is the moment
+/// somebody decides these two files are saying the same thing on purpose.
+const shared_rows = [_][]const u8{
+    "clock | set plane.ui.elapsed",
+    "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure",
+    "lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle",
+    "noise 80ms | range 0.6 1 | set plane.lights.torch.level",
+    "once 1 | ramp 2s from 0 | set plane.render.grade.exposure",
+    "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos",
+    "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos",
+    "plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash",
+    "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount",
+    "plane.events.kill | tally | set plane.ui.kills",
+    "plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu",
+    "plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load",
+    "plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample",
+    "plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak",
+    "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain",
+    "plane.input.key_l | toggle | set plane.lights.key.on",
+    "plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note",
+    "plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade",
+    "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure",
+    "plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact",
+    "plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats",
+    "plane.sensors.gate.contacts | len | set plane.ui.contacts",
+    "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest",
+    "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats",
+    "plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat",
+    "plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge",
+    "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure",
+    "plane.world.light | below 0.2 0.3 | set plane.lights.street.on",
+    "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake",
+};
+
+/// Split rill source into STATEMENTS — a line plus any continuation lines
+/// (`| …` at the head), blanks and comments dropped, every line trimmed.
+/// Trimmed because indentation is layout: the manual indents a continued
+/// pipeline under its head and the book does not, and they are still the same
+/// program.
+fn addStatements(arena: std.mem.Allocator, src: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+    var cur: std.ArrayListUnmanaged(u8) = .empty;
+    var have = false;
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or std.mem.startsWith(u8, line, "//")) continue;
+        if (line[0] == '|' and have) {
+            try cur.append(arena, '\n');
+            try cur.appendSlice(arena, line);
+            continue;
+        }
+        if (have) try out.append(arena, try arena.dupe(u8, cur.items));
+        cur = .empty;
+        have = true;
+        try cur.appendSlice(arena, line);
+    }
+    if (have) try out.append(arena, try arena.dupe(u8, cur.items));
+}
+
+/// Every statement printed in a ```rill block of `doc`.
+fn manualStatements(arena: std.mem.Allocator, doc: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, doc, pos, "```rill\n")) |start| {
+        const body = start + "```rill\n".len;
+        const end = std.mem.indexOfPos(u8, doc, body, "```") orelse return error.TestUnexpectedResult;
+        try addStatements(arena, doc[body..end], out);
+        pos = end;
+    }
+}
+
+/// Every statement of every program cell in the book.
+fn bookStatements(arena: std.mem.Allocator, doc_src: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+    const parsed = try std.json.parseFromSlice(BookDoc, arena, doc_src, .{ .ignore_unknown_fields = true });
+    for (parsed.value.cells) |cell| {
+        if (cell.markdown) continue;
+        try addStatements(arena, cell.source, out);
+    }
+}
+
+fn containsStatement(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |s| {
+        if (std.mem.eql(u8, s, needle)) return true;
+    }
+    return false;
+}
+
+test "the manual is the source and the book cites it: shared programs are identical" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var man: std.ArrayListUnmanaged([]const u8) = .empty;
+    var book: std.ArrayListUnmanaged([]const u8) = .empty;
+    try manualStatements(arena, @embedFile("rill-manual.md"), &man);
+    try bookStatements(arena, @embedFile("idioms.rillbook"), &book);
+
+    // Neither extractor may go quiet. A fence rename or a JSON drift would
+    // empty one side, and an empty side makes every check below vacuously
+    // true — which is exactly how a gate stops watching without saying so.
+    try testing.expect(man.items.len > 50);
+    try testing.expect(book.items.len > 50);
+
+    // (1) Every listed row is still in both files, byte for byte.
+    for (shared_rows) |row| {
+        const in_manual = containsStatement(man.items, row);
+        const in_book = containsStatement(book.items, row);
+        if (in_manual and in_book) continue;
+        if (in_book) {
+            std.debug.print(
+                \\the manual and the book have DRIFTED on a shared program:
+                \\  {s}
+                \\It is in idioms.rillbook and no longer in rill-manual.md.
+                \\The manual is the source. If the manual changed on purpose,
+                \\update the book cell to cite it; if this row is no longer
+                \\shared, take it off `shared_rows`.
+                \\
+            , .{row});
+        } else if (in_manual) {
+            std.debug.print(
+                \\the manual and the book have DRIFTED on a shared program:
+                \\  {s}
+                \\It is in rill-manual.md and no longer in idioms.rillbook.
+                \\The manual is the source, so the book cell is what to fix.
+                \\
+            , .{row});
+        } else {
+            std.debug.print("'{s}' is on `shared_rows` and is in neither file\n", .{row});
+        }
+        return error.TestUnexpectedResult;
+    }
+
+    // (2) …and the list COVERS every statement the two files share. Chris's
+    // requirement, and the half that keeps the list from being a snapshot of
+    // whatever was true the day it was written.
+    for (book.items) |stmt| {
+        if (!containsStatement(man.items, stmt)) continue;
+        if (containsStatement(&shared_rows, stmt)) continue;
+        std.debug.print(
+            \\rill-manual.md and idioms.rillbook now share a program that
+            \\`shared_rows` does not name:
+            \\  {s}
+            \\Add it, so the two copies cannot drift apart unnoticed.
+            \\
+        , .{stmt});
+        return error.TestUnexpectedResult;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The operator index gate (envelopes campaign item 2, 2026-08-26).
 //
 // Asked for by name at the tier-2 re-probe: *"an alphabetical operator index
