@@ -1898,6 +1898,32 @@ positive:
 Both respelled with words on the pairs; the common `mesh scale m1 2`
 is untouched.
 
+**`mesh scale` keeps the keyword spelling, and the alternative is
+recorded rather than re-argued.** Chris's preference was an arity refusal
+— *one for uniform, three for per-axis* — but the registration rule
+blocks the **declaration**, not just the call, so there is no
+`<sx> [sy] [sz]` left to refuse two arguments from. Two ways to get it
+back, both declined:
+
+- **A `grouped` port attribute** — an all-or-none optional run, exempt
+  from the adjacency check and enforced at parse. Good precedent (`tail`,
+  `one_of`, `tail_all` all exist primarily for console verbs) and about
+  seventy lines across the two repos. **Declined: one customer.** The
+  obvious second candidate is not one — `clamp_lo`/`clamp_hi` are
+  independently meaningful, which is exactly why they took words.
+  **Trigger: a second host verb wanting an all-or-none optional tuple.**
+- **An array argument** (`mesh scale m1 [2, 3, 4]`) — the most
+  rill-idiomatic shape, and two arguments then fail on plain arity. It
+  needs the port to accept an array, which means either abusing
+  `broadcasts` (this is not elementwise) or typing it `any` and losing
+  wire-time typing on that argument. The typing gate exists to stop
+  precisely that.
+
+So `mesh scale m1 2` stays bare and unchanged, per-axis carries its words,
+and the silent `(2, 3, 2)` is gone. Ruled 2026-08-26 on the fact that
+settles it: the per-axis form has **one caller in the whole corpus**, and
+one caller is not constant use.
+
 **Checked, not assumed: the clamps were NOT half-applied.** An absent
 clamp defaults to ∓∞, so a one-clamp caller gets an open other side
 rather than a wrong number — and both live callers meant exactly that
