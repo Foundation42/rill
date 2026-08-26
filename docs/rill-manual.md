@@ -407,6 +407,38 @@ clamp. That clamp is required, not optional — a register's state is
 saved with the program, and an unbounded accumulator is a corpse that
 gets copied.
 
+**Envelopes** are the other half of the family: a register chases a
+target something else supplies, an envelope is a *shape an event sets
+off*. Before them, "flash on hit" meant inventing a path on the plane to
+hold a gate and a magic number for `ease` to fall from — two programs and
+a number whose only job was being fallen from.
+
+| op | does |
+|---|---|
+| `kick <attack> <decay>` | an **occurrence** in: rise to 1 over `attack`, fall to 0 over `decay`, stop |
+
+```rill
+plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash
+plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount
+plane.events.hit | kick 20ms 400ms | shape out | set plane.ui.hit_flash
+```
+
+**A retrigger restarts from where it is, never from zero.** Hits arriving
+during the fall are the normal case, not the edge case: a second hit
+should brighten the flash, and an envelope that snapped to zero first
+would put a black frame in the middle of it.
+
+**The segments are straight lines, and a duration is how long the segment
+takes** — `kick 20ms 400ms` is twenty milliseconds up and four hundred
+down, whatever level it started from. Curve it with `shape`, as the third
+line does: one word for one job, rather than a curve knob on every
+envelope in the language.
+
+**Both durations must be on one lane.** `kick 20ms 3f` is two consecutive
+stretches of the same timeline measured in different units, and it is
+refused, naming both ports. (`ease`'s `up` and `down` are alternatives
+that never run together, so they do not have this problem.)
+
 **Movement costs every frame, and the cost is visible.** Anything
 downstream of `clock`, `frame` or `lfo` re-evaluates every tick, and a
 converging register does too until it stops. The console shows a cell
@@ -973,6 +1005,13 @@ and pin what a program reads:
 plane.sensors.gate.contacts | match [{id: string, distance: number}] | set plane.ui.threats
 ```
 
+**Flash on hit** — an event into a shape, with nothing invented in
+between:
+
+```rill
+plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash
+```
+
 **The camera shake** — three independent axes from one seed each:
 
 ```rill
@@ -1087,6 +1126,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. §4 |
 | `integrate` | `integrate <in> max <max>` | Running sum over fed time, clamped to ±max. The clamp is required. §6b |
 | `keep` | `keep <in> (…)` | The elements a predicate says true for. Filters **elements**; `where` gates the stream. §6d |
+| `kick` | `kick <in> <attack> <decay>` | One-shot envelope from an occurrence — rises to 1 over `attack`, falls to 0 over `decay`, stops. Retriggers from the current level. §6b |
 | `last` | `last <in>` | The trailing element — `window 5s \| last` is the most recent reading. An empty array is silence. §6d |
 | `latch` | `latch <in> <trigger>` | Sample-and-hold: emit the current `in` when `trigger` fires. |
 | `len` | `len <in>` | How many elements. This is how absence is said once `first` goes quiet. §6c |

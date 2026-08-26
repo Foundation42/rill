@@ -759,6 +759,154 @@ fn currentRamp(st: RegState, now: u64, span: f64) f64 {
     return st.a + (st.b - st.a) * t;
 }
 
+// ---------------------------------------------------------------------------
+// Envelopes — `kick` and `adsr` (envelopes campaign, 2026-08-26)
+//
+// The register family's missing half. `ease` and `ramp` chase a target that
+// something else supplies; an envelope is a shape an EVENT sets off, and
+// before these two the only way to get one was to invent a gate path on the
+// plane and a magic number for `ease` to fall from. That cost the tier-2
+// re-probe two programs and was the biggest finding they made.
+//
+// Both are built out of straight segments with captured spans, which is where
+// the family's one shared pin lives (Chris, 2026-08-26): **a parameter change
+// applies to the NEXT segment and never retimes the one in flight.** A release
+// that shortened mid-fall would jump, and a jump is what this whole family
+// exists to avoid. So a segment's length is read from its port ONCE, when the
+// segment starts, and lives in state until it ends.
+//
+// The segments are LINEAR, the `ramp` reading rather than the `ease` one: a
+// duration names how long the segment takes, whatever level it starts from, so
+// `kick 20ms 400ms` is twenty milliseconds up and four hundred down and reads
+// as what it says. Curves compose on top — `kick 20ms 400ms | shape out` — and
+// that is one word for one job rather than a curve knob on every envelope.
+// ---------------------------------------------------------------------------
+
+/// A segment in flight: where it started, where it is going, and how long it
+/// was told to take. `span` is captured at the segment's start and never
+/// re-read, which IS the pin above.
+const EnvState = struct {
+    frames: bool = false,
+    at: u64 = 0, // segment start, lane units
+    span: u64 = 0, // segment length, lane units — captured, never re-read
+    from: f64 = 0,
+    to: f64 = 0,
+    phase: Phase = .idle,
+
+    /// `sustain` and `release` are `adsr`'s only; `kick` uses attack and decay
+    /// and stops. One enum for both so the shared arithmetic below has one
+    /// thing to switch on.
+    const Phase = enum(u8) { idle = 0, attack = 1, decay = 2, sustain = 3, release = 4 };
+
+    const size = 1 + 8 + 8 + 8 + 8 + 1;
+
+    fn read(ctx: *EvalCtx) EnvState {
+        const st = ctx.state.items;
+        if (st.len < size) return .{};
+        return .{
+            .frames = st[0] == 1,
+            .at = std.mem.readInt(u64, st[1..9], .little),
+            .span = std.mem.readInt(u64, st[9..17], .little),
+            .from = @bitCast(std.mem.readInt(u64, st[17..25], .little)),
+            .to = @bitCast(std.mem.readInt(u64, st[25..33], .little)),
+            .phase = std.meta.intToEnum(Phase, st[33]) catch .idle,
+        };
+    }
+
+    fn write(self: EnvState, ctx: *EvalCtx) EvalError!void {
+        var buf: [size]u8 = undefined;
+        buf[0] = @intFromBool(self.frames);
+        std.mem.writeInt(u64, buf[1..9], self.at, .little);
+        std.mem.writeInt(u64, buf[9..17], self.span, .little);
+        std.mem.writeInt(u64, buf[17..25], @as(u64, @bitCast(self.from)), .little);
+        std.mem.writeInt(u64, buf[25..33], @as(u64, @bitCast(self.to)), .little);
+        buf[33] = @intFromEnum(self.phase);
+        try ctx.setState(&buf);
+    }
+
+    /// How far through the segment `now` is, 0..1. A zero span is already done
+    /// — `kick 0s 400ms` is a legal instant attack, not a division by zero.
+    fn progress(self: EnvState, now: u64) f64 {
+        if (self.span == 0) return 1.0;
+        const d: f64 = @floatFromInt(now -| self.at);
+        return @min(1.0, d / @as(f64, @floatFromInt(self.span)));
+    }
+
+    fn level(self: EnvState, now: u64) f64 {
+        return self.from + (self.to - self.from) * self.progress(now);
+    }
+
+    /// Start a new segment at `at`, from wherever the envelope currently is.
+    fn begin(self: *EnvState, phase: Phase, at: u64, from: f64, to: f64, span: u64) void {
+        self.* = .{ .frames = self.frames, .at = at, .span = span, .from = from, .to = to, .phase = phase };
+    }
+};
+
+/// Both durations of an envelope segment pair must be on ONE LANE. `kick 20ms
+/// 3f` is two consecutive stretches of the same timeline measured in different
+/// units, which is the contradiction the duration grammar exists to refuse —
+/// unlike `ease`'s `up`/`down`, which are alternatives that never run together.
+fn sameLane(ctx: *EvalCtx, a: types.Duration, ai: usize, b: types.Duration, bi: usize) EvalError!void {
+    if (a.frames == b.frames) return;
+    return ctx.refuse("{s}: '{s}' and '{s}' are on different time lanes — an envelope runs on one clock, so use seconds for both or frames for both", .{
+        ctx.op.name, ctx.portName(ai), ctx.portName(bi),
+    });
+}
+
+/// `kick <attack> <decay>` — an occurrence in, a one-shot envelope out. Rises
+/// to 1 over `attack`, falls to 0 over `decay`, and stops.
+///
+/// **A retrigger restarts from the current level, never from zero** (Chris,
+/// 2026-08-26). Hits arriving during the fall are the normal case, not the
+/// edge case — a light being hit twice should brighten, and an envelope that
+/// snapped to zero first would put a black frame in the middle of the flash.
+///
+/// The name was read aloud before it was built, as Chris asked. `strike` is
+/// the closest rival and loses because it is also a noun for the event
+/// (`plane.events.hit | strike …` reads as two events in a row); `flash` and
+/// `thump` each name one customer and misread for the other; `burst` suggests
+/// repetition; `ping` is spoken for; `env` cannot name one envelope when
+/// `adsr` is another. `kick` is percussive, is a verb applied to the stream,
+/// and sits in the same vocabulary `adsr` came from.
+fn evalKick(ctx: *EvalCtx) EvalError!Emit {
+    const attack = try dur(ctx, 1);
+    const decay = try dur(ctx, 2);
+    try sameLane(ctx, attack, 1, decay, 2);
+    const now = ctx.nowOn(attack.frames);
+    var st = EnvState.read(ctx);
+    st.frames = attack.frames;
+
+    // A rousing starts the attack from wherever we are. `in_fresh` is the
+    // ARRIVAL, not the value: an occurrence that repeats is two occurrences.
+    //
+    // There is no separate "publish 0 at rest" branch, and there was one until
+    // a gate showed it could not be reached: an idle envelope has span 0 and
+    // `from == to == 0`, so the ordinary path below already answers 0. A guard
+    // that cannot run is the `is_body` mistake again — it reads as a decision
+    // and is a decoration.
+    if (ctx.in_fresh[0]) {
+        _ = try raw(ctx, 0); // require the rousing to carry something
+        st.begin(.attack, now, st.level(now), 1.0, attack.count);
+    }
+
+    // Walk finished segments in order — one tick can cross a whole short
+    // attack, and the next segment starts when the last one ENDED rather than
+    // when we noticed, so a slow frame does not stretch the envelope.
+    while (st.phase != .idle and st.progress(now) >= 1.0) {
+        const ended = st.at +| st.span;
+        switch (st.phase) {
+            .attack => st.begin(.decay, ended, 1.0, 0.0, decay.count),
+            .decay => st.begin(.idle, ended, 0, 0, 0),
+            else => unreachable, // `kick` has two segments and a rest
+        }
+    }
+
+    const v = st.level(now);
+    try st.write(ctx);
+    if (st.phase != .idle) try armNextTick(ctx, st.frames);
+    return emitF64(ctx, v);
+}
+
 /// `hold <duration>` — take a new value, then ignore further changes for
 /// `duration`. Sample-and-hold. It does NOT tick: nothing needs to happen at
 /// the end of the window, so there is no wake — the next arrival simply finds
@@ -2788,6 +2936,8 @@ const CORE = [_]registry.OpDef{
     .{ .name = "once", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Pass the first value, then deaf until remount — `once 1 | ramp 2s` fires at mount; piped, it passes the first arrival.", .eval = evalOnce },
     .{ .name = "toggle", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Flip a boolean on each arrival. Emits its initial false at mount and flips from the next arrival on.", .eval = evalToggle },
     .{ .name = "tally", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .help = "Running count of arrivals, as a value. Emits 0 at mount; does not survive remount (remount is restart).", .eval = evalTally },
+    // envelopes campaign, 2026-08-26 — the register family's missing half
+    .{ .name = "kick", .inputs = &.{ p.occ("in", Tag.any), p.in("attack", Tag.duration), p.in("decay", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "One-shot envelope from an occurrence — `plane.events.hit | kick 20ms 400ms`. Rises to 1 over `attack`, falls to 0 over `decay`, stops. A retrigger restarts from the CURRENT level, never from zero.", .eval = evalKick },
     .{ .name = "above", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis — `above 0.3 0.2` is \"above 0.3, until below 0.2\". Emits its level at mount; this is what stops a threshold chattering.", .eval = hysteresis(false) },
     .{ .name = "below", .inputs = &.{ p.in("in", Tag.number), p.in("on", Tag.number), p.in("off", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .class = .reads, .help = "Boolean with hysteresis, falling — `below 0.2 0.3` is \"below 0.2, until above 0.3\". The first number trips and the second releases, same as `above`. Emits its level at mount.", .eval = hysteresis(true) },
     // tier 2, beat 3a — over arrays, driving a section body per element.

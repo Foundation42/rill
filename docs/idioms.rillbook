@@ -681,6 +681,55 @@
       "source": "plane.gpu.traversal_ms | window 5s | last | set plane.ui.latest_ms"
     },
     {
+      "name": "flash-on-hit-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## Flash on hit\n\nThe tier-2 re-probe's biggest finding, and it cost them **two programs, an\ninvented gate path on the plane, and a 60ms magic number whose only job was\ngiving `ease` something to fall from**. There was no way to kick an envelope\nfrom an event: `ease` and `ramp` chase a target that something else supplies,\nand an event supplies nothing to chase.\n\nThe before is what they actually wrote, near enough — and it is **two cells\nbecause it has to be two programs**: a rill may not write a path it also\nsubscribes to, so the gate cannot be raised and read in one. That is not a\nquirk of the transcription; it is the shape of the workaround."
+    },
+    {
+      "name": "flash-on-hit-before-1",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.events.hit | set plane.ui.hit_gate 1"
+    },
+    {
+      "name": "flash-on-hit-before-2",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.ui.hit_gate | ease 60ms down 400ms | set plane.ui.hit_flash"
+    },
+    {
+      "name": "flash-on-hit-after-note",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "### after — envelopes ✅\n\nOne line, one program, nothing invented. The rise and the fall are both\nsaid out loud instead of one being a time constant and the other being a\nnumber somebody had to pick.\n\nThe before is worse than it looks. It needs a second program to put the\ngate back down (a rill may not write a path it also reads), the `60ms` is\nnot an attack — it is how fast `ease` climbs toward a 1 that never\narrives — and `ease` never quite reaches zero, so the flash has a tail\nthat costs a frame forever.\n\n**A retrigger restarts from the current level, never from zero.** Hits\narriving during the fall are the normal case, and an envelope that\nsnapped down first would put a black frame in the middle of the flash."
+    },
+    {
+      "name": "flash-on-hit-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash"
+    },
+    {
+      "name": "shake-on-impact-ask",
+      "mode": "query",
+      "markdown": true,
+      "collapsed": false,
+      "source": "## Shake on impact\n\n`kick`'s second customer, and the reason the word is not called `flash`.\nThe same envelope drives an amount rather than a brightness — and it\ncomposes with the camera-shake noise cell above, which is what an\namplitude is for."
+    },
+    {
+      "name": "shake-on-impact-after",
+      "mode": "mounted",
+      "markdown": false,
+      "collapsed": false,
+      "source": "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount"
+    },
+    {
       "name": "levels-page",
       "mode": "query",
       "markdown": true,

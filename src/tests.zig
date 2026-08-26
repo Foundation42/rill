@@ -2111,6 +2111,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "toggle", .class = .reads },
         .{ .name = "tally", .class = .reads },
         .{ .name = "above", .class = .reads }, // hysteresis is state
+        .{ .name = "kick", .class = .reads }, // envelope in flight is state
         .{ .name = "below", .class = .reads }, // …and its mirror
         .{ .name = "noise", .class = .reads }, // fed time
         .{ .name = "rand", .class = .reads }, // own draw counter
@@ -2182,6 +2183,7 @@ test "every core op declares whether it may tick" {
         // window, the next arrival simply finds it expired.
         .{ .name = "hold", .ticks = false },
         .{ .name = "pulse", .ticks = true }, // a value source on fed time
+        .{ .name = "kick", .ticks = true }, // while the envelope is in flight, and not after
         .{ .name = "noise", .ticks = true }, // as long as time is fed
         .{ .name = "wave", .ticks = false }, // pure shaper; ticks if its t does
         .{ .name = "range", .ticks = false },
@@ -2792,7 +2794,11 @@ test "the manuals parse: every printed example compiles" {
     // when they want to copy something that works.
     // 45 → 46 (envelopes, `first`-on-empty): §6d gains the two-line pair that
     // IS the ruling — the pick that goes quiet, and the count that speaks.
-    try testing.expectEqual(@as(usize, 46), human);
+    // 46 → 48 (envelopes, `kick`): §6b gains the envelope trio — the flash,
+    // the shake, and the same flash curved by `shape` — and §11 gains the
+    // flash as a recipe, because it is the re-probe's biggest finding and §11
+    // is where a person goes to copy something that works.
+    try testing.expectEqual(@as(usize, 48), human);
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
@@ -2835,6 +2841,9 @@ const accepts_anything = [_][]const u8{
     "once", "toggle", "tally",
     // `rand` reads only WHETHER it was roused, never what with.
     "rand",
+    // `kick` is roused, not read: an envelope fires on the ARRIVAL, and what
+    // the occurrence happens to be carrying is none of its business.
+    "kick",
     // `array` packs its ports without reading them, exactly as `record` does:
     // every value is a legal element, and there is nothing left to refuse.
     "array",
@@ -4113,8 +4122,13 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // and `last`'s own customer, the newest entry of a rolling window. Both
     // asks have no BEFORE cell to mount, and for the same reason in each
     // case: the before was a refusal and an operator that did not exist.
-    try testing.expectEqual(@as(usize, 47), rill_cells);
-    try testing.expectEqual(@as(usize, 99), total);
+    // 47 → 51, 99 → 106 (envelopes, `kick`): flash-on-hit gets a real BEFORE —
+    // the invented-gate-path, magic-number version the re-probe actually
+    // wrote — and it is TWO cells because it has to be two programs, which is
+    // the shape of the workaround rather than a quirk of transcribing it.
+    // Plus shake-on-impact, the after that shows why the word is not `flash`.
+    try testing.expectEqual(@as(usize, 51), rill_cells);
+    try testing.expectEqual(@as(usize, 106), total);
 }
 
 // ---------------------------------------------------------------------------
@@ -6243,6 +6257,140 @@ test "beat 4a: `above` emits its LEVEL at mount, both ways" {
 
     try testing.expect(types.asBool(fx.rt.readSlot("programs.p.above1.out.out").?).?);
     try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.above2.out.out").?).?);
+}
+
+// ---------------------------------------------------------------------------
+// Envelopes — `kick` (envelopes campaign item 6, 2026-08-26)
+// ---------------------------------------------------------------------------
+
+/// Read the envelope's level after advancing fed time to `ns`.
+fn kickAt(fx: *Fixture, ns: u64, slot: []const u8) !f64 {
+    try fx.rt.tick(.{ .time_ns = ns });
+    return types.asNumber(fx.rt.readSlot(slot).?).?;
+}
+
+test "`kick`: an occurrence in, a one-shot out — up over attack, down over decay, stopped" {
+    // The re-probe's biggest finding, and it cost them two programs, an
+    // invented gate path on the plane and a 60ms magic number whose only job
+    // was giving `ease` something to fall from.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.hit | kick 100ms 400ms | set plane.ui.flash
+    , .{.{ "plane.events.hit", true }});
+    defer fx.deinit();
+    const out = "programs.p.kick1.out.out";
+
+    // The seeded path is an arrival at mount, so the attack starts at t = 0 —
+    // and its first sample is therefore the rest level, 0. A level publishes
+    // on its first evaluation (beat 4's pin).
+    try testing.expectEqual(@as(f64, 0), types.asNumber(fx.rt.readSlot(out).?).?);
+
+    // Rising: halfway up the attack is halfway up.
+    try testing.expectApproxEqAbs(@as(f64, 0.5), try kickAt(&fx, 50_000_000, out), 1e-9);
+    // The peak is exactly 1 at the end of the attack, not near it.
+    try testing.expectEqual(@as(f64, 1), try kickAt(&fx, 100_000_000, out));
+    // Falling: a quarter through the decay is three quarters of the way up.
+    try testing.expectApproxEqAbs(@as(f64, 0.75), try kickAt(&fx, 200_000_000, out), 1e-9);
+    // …and it lands on exactly 0 and STOPS. `ramp`'s ruling: a fade that
+    // stopped one ε short of home would be a visible band.
+    try testing.expectEqual(@as(f64, 0), try kickAt(&fx, 500_000_000, out));
+
+    // Stopped means stopped: no wake was armed, so the node does not evaluate
+    // again on its own. The flag says what could cost; the counter says what
+    // did, and this is the counter.
+    const kid = nodeIdOf(&fx.prog, "kick1").?;
+    const before = fx.rt.eval_count[kid];
+    try fx.rt.tick(.{ .time_ns = 900_000_000 });
+    try fx.rt.tick(.{ .time_ns = 1_500_000_000 });
+    try testing.expectEqual(before, fx.rt.eval_count[kid]);
+}
+
+test "`kick`: a retrigger restarts from the CURRENT level, never from zero" {
+    // Chris's pin, and the reason it is a pin: hits arriving during the fall
+    // are the normal case, not the edge case. An envelope that snapped to zero
+    // first would put a black frame in the middle of the flash — which is the
+    // one thing the whole family exists to avoid.
+    //
+    // Gated where the two readings differ, which needs a partial fall: the
+    // second hit lands at level 0.75, and the assertion is that the level
+    // never drops below it afterwards. Restart-from-zero fails on the very
+    // next tick; so does restart-from-the-peak, in the other direction.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.hit | kick 100ms 400ms | set plane.ui.flash
+    , .{.{ "plane.events.hit", true }});
+    defer fx.deinit();
+    const out = "programs.p.kick1.out.out";
+
+    _ = try kickAt(&fx, 100_000_000, out); // the peak
+    const at_hit = try kickAt(&fx, 200_000_000, out); // a quarter down
+    try testing.expectApproxEqAbs(@as(f64, 0.75), at_hit, 1e-9);
+
+    try feedOcc(&fx.rt, testing.allocator, "plane.events.hit");
+    try fx.rt.tick(.{ .time_ns = 200_000_001 });
+
+    // From 0.75, over the full attack, to 1 — and never below 0.75 on the way.
+    var t: u64 = 205_000_000;
+    while (t <= 300_000_000) : (t += 5_000_000) {
+        const v = try kickAt(&fx, t, out);
+        try testing.expect(v >= at_hit - 1e-9);
+    }
+    try testing.expectEqual(@as(f64, 1), try kickAt(&fx, 300_000_001, out));
+}
+
+test "`kick`: a slow frame does not stretch the envelope" {
+    // One tick can cross a whole short attack, and the decay then has to start
+    // when the attack ENDED rather than when we noticed. Otherwise a dropped
+    // frame lengthens the flash — the classic wall-clock-vs-lane bug, and the
+    // reason segment starts are carried in state rather than taken from `now`.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.hit | kick 10ms 100ms | set plane.ui.flash
+    , .{.{ "plane.events.hit", true }});
+    defer fx.deinit();
+    const out = "programs.p.kick1.out.out";
+
+    // Nothing until 60ms — one very slow frame straight past the whole attack
+    // and half the decay. The attack ended at 10ms, so 60ms is 50/100 through
+    // the decay: exactly half.
+    try testing.expectApproxEqAbs(@as(f64, 0.5), try kickAt(&fx, 60_000_000, out), 1e-9);
+}
+
+test "`kick`: one tick may cross the WHOLE envelope, and it is then finished" {
+    // The segment walk is a loop, not an `if`, and this is the gate that says
+    // so — added because turning it into an `if` SURVIVED. A frame long enough
+    // to skip both segments produces the right VALUE either way, because a
+    // finished segment clamps at its target and the decay's target is 0. What
+    // differs is whether the envelope is over: with an `if` it is still in its
+    // decay phase, so it arms another tick and shuts down one frame late.
+    //
+    // "A rather than B" again — the value cannot tell them apart, so the gate
+    // asks the eval counter instead.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.events.hit | kick 10ms 100ms | set plane.ui.flash
+    , .{.{ "plane.events.hit", true }});
+    defer fx.deinit();
+    const out = "programs.p.kick1.out.out";
+    const kid = nodeIdOf(&fx.prog, "kick1").?;
+
+    try testing.expectEqual(@as(f64, 0), try kickAt(&fx, 5_000_000_000, out));
+    const after = fx.rt.eval_count[kid];
+    try fx.rt.tick(.{ .time_ns = 6_000_000_000 });
+    try fx.rt.tick(.{ .time_ns = 7_000_000_000 });
+    try testing.expectEqual(after, fx.rt.eval_count[kid]);
+}
+
+test "`kick` refuses two time lanes, naming both ports" {
+    // An envelope is two consecutive stretches of ONE timeline. `ease`'s
+    // up/down are alternatives that never run together, so it does not have
+    // this problem; a kick does.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.events.hit | kick 20ms 3f | set plane.ui.flash
+    , .{.{ "plane.events.hit", true }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "kick", "attack", "decay", "time lanes" });
 }
 
 test "`below`: the FIRST number trips, for both words — the pair's whole claim" {

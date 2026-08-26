@@ -1319,3 +1319,73 @@ The other half of the re-probe's finding is still open and is recorded as
 such in `rill-tier2.md` §8: the forgiving spelling `take 1 | map (.id)`
 publishes `[]` or `["id"]`, a different *shape*, so every consumer
 changes too. Nothing here changes a published shape.
+
+## `kick` — the envelope, and the name read aloud (2026-08-26, item 6)
+
+The register family's missing half. `ease` and `ramp` chase a target that
+something else supplies; an envelope is a **shape an event sets off**,
+and rill had no way to say that. The tier-2 re-probe's biggest finding:
+producing "flash on hit" cost them **two programs, a path invented on the
+plane to hold a gate, and a 60 ms magic number whose only job was giving
+`ease` something to fall from**. Two programs because a rill may not
+write a path it also subscribes to — the workaround's shape, not a
+transcription quirk, and the idioms book now carries it as two cells for
+exactly that reason.
+
+**The name, read aloud before it was built**, as Chris asked. `kick`
+stays. The rejects and their reasons, recorded either way (the
+`pass`/`effect`/`tee` → `also` precedent):
+
+- **`strike`** — the closest rival, and a struck bell has precisely this
+  envelope. It loses because it is also a *noun for the event*:
+  `plane.events.hit | strike 20ms 400ms` reads as two events in a row.
+- **`flash`**, **`thump`** — each names one customer and misreads for the
+  other. The shake row is why the word cannot be visual.
+- **`burst`** — reads well, but suggests repetition, which is `pulse`.
+- **`ping`** — the right shape, spoken for by networking.
+- **`env`/`envelope`** — cannot name one envelope while `adsr` is another.
+
+`kick` is percussive, is a verb applied to the stream, and sits in the
+vocabulary `adsr` came from.
+
+**Design decisions, each with its reason:**
+
+- **Ports, not statics**, same as the `adsr` ruling: durations, and rill
+  has no duration static kind.
+- **Linear segments, `ramp`'s reading of a duration** — how long the
+  segment takes, whatever level it starts from. So `kick 20ms 400ms` is
+  twenty milliseconds up and four hundred down and reads as what it says.
+  Curves compose on top (`| shape out`): one word for one job, rather
+  than a curve knob on every envelope in the language.
+- **`span` is captured in state at each segment's start**, which is the
+  family pin (a parameter change applies to the next segment and never
+  retimes the one in flight).
+- **The next segment starts when the last one ENDED**, not when we
+  noticed. A slow frame must not stretch the envelope.
+- **Both durations on one lane**, refused naming both ports. Two
+  consecutive stretches of one timeline cannot be in different units.
+  `ease`'s `up`/`down` are exempt because they never run together — that
+  asymmetry is written down at `sameLane` rather than left to be argued.
+
+**Chris's brief said "stops at ε"; it stops exactly**, and that is a
+deviation worth recording rather than a liberty. ε is what an
+*exponential* approach needs, because it never arrives. A linear segment
+has an end, so `kick` lands on exactly 0 and goes quiet — the same
+ruling `ramp` got at tier-2 close, for the same reason: a fade that
+stopped one ε short of home would be a visible band.
+
+**Six mutations. Five bitten, one SURVIVED and became a gate.** Turning
+the segment walk from a `while` into an `if` produced the right *value* —
+a frame long enough to skip both segments clamps at the decay's target,
+which is 0 either way. What differed was whether the envelope was
+*over*: with an `if` it sits in its decay phase one more frame and arms
+one more tick. The value could not tell them apart, so the new gate asks
+the eval counter. "A rather than B" for the fourth time this campaign,
+and the fourth time it has been the discriminating *input* that was
+missing rather than the assertion.
+
+Also removed while building: a "publish 0 at rest" branch that could
+never run. An idle envelope has span 0 and `from == to == 0`, so the
+ordinary path already answers 0. That is the `is_body` mistake — a guard
+that reads as a decision and is a decoration — and the ledger says delete
+it with the reason at the site.

@@ -918,6 +918,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | temporal | `sample`, `debounce`, `throttle`, `cooldown`, `window`, `stats`, `delay`, `every`, `arm`, `disarm` (§4.6; durations §3.12) |
 | movement | `clock`, `frame` (fed time as a value, since mount), `lfo`, `wave` (0..1 waveforms) — tier 2 beat 1a, §4.8 |
 | registers | `ease`, `ramp`, `hold`, `diff`, `integrate` (op-internal state chasing a target; §4.8) |
+| envelopes | `kick <attack> <decay>` (occurrence in, one-shot out) — envelopes campaign 2026-08-26 |
 | shaping | `range` (0..1 → interval, clamping), `shape` (0..1 → 0..1 easing curves) |
 | math | `add sub mul div min max clamp abs floor round ceil`, `sin cos tan atan2 sqrt pow exp log mod sign fract`, `pi`/`tau`, comparators — all elementwise (§4.9) |
 | record | record construction `{…}`, projection `.field`, `merge` |
@@ -996,6 +997,23 @@ with `len`, which is what `len` was admitted for: **absence is said by the
 count, never by a sentinel.** `first` going quiet leaves its sink holding its
 last value, which is correct — a value stream holds — and is exactly why the
 count is a separate statement rather than a magic value in the same one.
+
+**Envelopes: a parameter change applies to the NEXT segment and never retimes the
+one in flight (ruled 2026-08-26).** An envelope is a sequence of straight segments,
+and a segment's length is read from its port ONCE, when the segment starts. A
+release that shortened mid-fall would jump, and a jump is what the family exists to
+avoid. The same rule the live `step` array follows when it carries its index.
+
+A segment's duration is **how long the segment takes, whatever level it starts
+from** — the `ramp` reading, not the `ease` one — so `kick 20ms 400ms` is twenty
+milliseconds up and four hundred down and reads as what it says. Curves compose on
+top (`| shape out`) rather than being a knob on every envelope. A **retrigger
+restarts from the current level, never from zero**: an envelope that snapped down
+first would put a hole in the middle of the effect it exists to produce. Both
+durations of an envelope must be on **one time lane**; a mismatch refuses naming
+both ports, because two consecutive stretches of one timeline cannot be measured in
+different units. (`ease`'s `up`/`down` are alternatives that never run together and
+are therefore exempt.)
 
 **One node, one kind (same ruling).** `pulse` is a value source (1 for `width`, else 0, once
 per period); `every` is the occurrence source. An operator that both fired an occurrence and
