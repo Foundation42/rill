@@ -1058,6 +1058,12 @@ scoring:
 | cut, and stayed cut | 9 | `norm` `either` `rate` `slew` `toward` `len` `last` `without`, `zip`/`unzip`→`transpose` |
 | admitted, not built | 1 | `smooth` — deferred to its own beat (needs the window-with-times shape) |
 
+**Successor campaign, stamped 2026-08-26: 29 → 35.** Six words —
+`below`, `len`, `last`, `kick`, `adsr`, `step` — every one with a named
+customer, none on prose. See `docs/cc-brief-envelopes.md`. The ~30 was
+always **a discipline against prose-admitted words, not a cliff**, and it
+has not let anything through that had a customer.
+
 **The admitted set is exactly 24, which is what the recon predicted.**
 The honest reading of "~30 words" is 24 admitted + 5 substrate = 29
 names a person must learn, with the math completions being a family
@@ -1078,8 +1084,35 @@ Cut, confirmed by that scoring: `norm` (`remap` covers it), `either`
 `sample`** — the first draft said "`window | len`" and then cut `len`
 two items later, which cannot both be true; corrected at beat 2a),
 `slew` (`ease` approximates it, and its row is already met), `toward`
-(record math once `normalize` exists), `len`/`last` (cheap but still
-words), `without`, and `zip`/`unzip` as separate words.
+(record math once `normalize` exists), `without`, and `zip`/`unzip` as
+separate words.
+
+**`len` and `last` were cut here and are ADMITTED as of 2026-08-26**, and
+the reason is corrected rather than just the conclusion. The original
+line read "`len`/`last` (cheap but still words)", which is not a reason —
+cheapness is not what admission rule 1 asks about, a customer is. Both
+have one:
+
+- **`len`'s customer is the `first`-on-empty ruling itself.** Once
+  `first` ends the wave silently on an empty array, absence has to be
+  said by something, and it is said by the count:
+  `contacts | len | set plane.ui.contacts`. A sentinel would be a lie and
+  `stats | .n` for a length is the magic-box shape — reaching through an
+  operator that computes five things to get the one that is a property of
+  the array.
+- **`last`'s customer is "the most recent reading"** —
+  `window 5s | last`. `window` is a *rolling* buffer, so its newest entry
+  is the thing people actually want from it, and without `last` it costs
+  `stats | .n`, a subtraction and an `nth`. The re-probe asked for it by
+  name.
+
+`last` is also **compulsory** now rather than merely admitted: the
+empty-array rule is stated for the pair, and a manual describing a word
+that does not exist is exactly what the ergonomics re-probe just caught.
+
+**Neither is substrate.** Substrate is a primitive that a *taught* word
+is defined over — `wave` under `lfo`, `project` under `.field`, `nth`
+under `choose`. Both of these are taught.
 
 Watch `map` and `reduce`: both have excellent customers in §2.11's own
 bullet list that never made it onto §4. Beat 3 adds those rows or drops

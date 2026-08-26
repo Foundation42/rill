@@ -7,8 +7,9 @@ NEW. Chris is the verdict function: rulings are his, gates are yours.*
 
 **Stamped by Chris 2026-08-26, immediately after the tier-2 campaign
 closed and its ergonomics re-probe was stamped.** Nothing here is a
-proposal; the rulings below are rulings. What is yours is the building,
-the gates, and the two open questions marked FOR CHRIS.
+proposal; the rulings below are rulings, and the two questions this brief
+opened were both answered before it was banked — there is nothing left
+waiting on Chris. What is yours is the building and the gates.
 
 ---
 
@@ -105,11 +106,31 @@ count, never a sentinel**. The manual says why.
 
 ⚠️ **Today `first` refuses on empty and is gated for it** ("beat 3b:
 `first` errors on empty — it promises one value"). That gate and its
-manual paragraph both invert with this ruling. `last` and `len` do **not
-exist yet** — both were cut at the recon (`len`'s cut reason was
-corrected at beat 2a; `last` was cut as "cheap but still words").
+manual paragraph both invert with this ruling.
 
-## 4. The words — three, all register family, all with flagship customers
+**`len` and `last` do not exist yet and are ADMITTED (2026-08-26), not
+substrate.** Both were cut at the recon on a reason that was not one —
+"cheap but still words". Corrected in `rill-tier2.md`, reason and all:
+
+- **`len`'s customer is the `first`-on-empty ruling itself.** Absence has
+  to be said by something once `first` goes quiet, and it is said by the
+  count. `stats | .n` for a length is the magic-box shape.
+- **`last`'s customer is "the most recent reading"** — `window 5s | last`.
+  `window` is a rolling buffer; its newest entry is what people want from
+  it. The re-probe asked for it by name.
+- **`last` is compulsory, not merely admitted**: the empty rule above is
+  stated for the *pair*, and a manual describing a word that does not
+  exist is exactly what the re-probe just caught.
+
+**Neither is substrate.** Substrate is a primitive a *taught* word is
+defined over (`wave` under `lfo`, `project` under `.field`, `nth` under
+`choose`). Both of these are taught.
+
+## 4. The words — six, every one with a named customer
+
+Two of them (`len`, `last`) are §3's ruling made sayable; the other four
+are below. `below` is in §3. `kick`, `adsr` and `step` are the register
+family.
 
 **`kick <attack> <decay>`** — occurrence in, one-shot envelope out.
 Rises over `attack`, falls over `decay`, **stops at ε**. **Retrigger
@@ -129,11 +150,15 @@ statics in the conventional order — that order is a cultural constant.**
 on the eval counter going flat, the way `ramp … from` is gated — a value
 that stays put looks identical to one being recomputed).
 
-⚠️ FOR CHRIS, decide when you get there and state it: Chris said
-*statics*, but `a`/`d`/`r` are durations and `s` is a number, and rill
-has no duration static kind. **Ports** are positional in the same order,
-cost nothing extra, and make a live ADSR parameter possible. CC's lean is
-ports, recorded as a deviation. Ask, don't assume.
+**RULED 2026-08-26: `adsr` takes PORTS, not statics** — CC's lean,
+recorded as the deviation from Chris's first wording. `a`/`d`/`r` are
+durations and rill has no duration static kind, ports are positional in
+the same conventional order, and **a live release is worth having**.
+
+**Pin that came with it: a parameter change applies to the NEXT segment
+and never retimes the one in flight** — the same rule as `step`'s live
+array carrying its index. A release that shortens mid-fall would jump,
+and a jump is the thing this whole family exists to avoid.
 
 **`step <array>`** — a step sequencer modelled on an arpeggiator.
 Rousing is an **occurrence**; each rousing emits the **next** element.
@@ -154,19 +179,18 @@ xoshiro256++ like `rand` and `shuffle`, not a third generator.
 
 ## 5. Word count
 
-Chris: **29 → 33. All four admitted by customer, none on prose; the ~30
-was a discipline, not a cliff.**
+**RULED 2026-08-26: 29 → 35.** Six words — `below`, `len`, `last`,
+`kick`, `adsr`, `step` — **every one with a named customer, none on
+prose.**
 
-⚠️ FOR CHRIS — CC counts **two more** and will not quietly resolve it:
-Chris's four are `below`, `kick`, `adsr`, `step`. But §3's ruling
-*requires* `len` (the recipe text is given verbatim) and *names* `last`
-(the empty-array rule is stated for the pair). Neither exists. Both have
-customers the reviewer named — *"`last` — `first` exists. To get the
-newest window sample I must know the length… 'the most recent reading' is
-a thing people want"* and *"`count`/`len`/`length`/`size`/`empty` — the
-only way to learn an array's length is `stats | .n`"*. So the honest
-count is **29 → 35**, or 33 if `len`/`last` are meant to be substrate
-rather than admitted words. **State it in the report; don't pick.**
+Chris's first pass said 33 for four words; the `first`/`last` ruling
+requires `len` verbatim in its recipe and states the empty rule for the
+pair, so `len` and `last` come with it. Chris: *"the second is my error —
+I wrote a recipe against two words that don't exist."*
+
+**The ~30 was a discipline against prose-admitted words, not a cliff, and
+it has not let anything through that had a customer.** Record it that way
+— the budget's job was never the number.
 
 ## 6. What "done" means — unchanged from tier 2
 
