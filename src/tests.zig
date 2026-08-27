@@ -2797,6 +2797,15 @@ test "the manuals parse: every printed example compiles" {
     defer reg.deinit();
     const human = try parseManual(@embedFile("rill-manual.md"), &reg, "rill-manual.md");
     const agent = try parseManual(@embedFile("rill-for-agents.md"), &reg, "rill-for-agents.md");
+    // The README too, and for a sharper reason than the manuals: it is the
+    // FRONT DOOR, and the example on it did not parse. `play heartbeat` named
+    // an operator that has never existed and `#` opened a comment in a
+    // language whose comment is `//` (`#` is the tag sigil), so the first
+    // fourteen lines anyone read were fiction. Found 2026-08-27, while adding
+    // a sentence claiming these blocks were gated — they were not, and the
+    // sentence is what made it worth checking.
+    const readme = try parseManual(@embedFile("README.md"), &reg, "README.md");
+    try testing.expect(readme >= 4);
     // Both ways, like the class table: a manual whose examples silently
     // stopped being collected would pass vacuously. Update on purpose when
     // examples are added or removed.
@@ -4188,8 +4197,12 @@ test "the idioms book parses: every cell compiles, and the count is deliberate" 
     // again two programs — a counter through the plane, which is also a corpse
     // that rides every dump — and the camera cycle, which is the row that
     // argues for the modes composing.
-    try testing.expectEqual(@as(usize, 57), rill_cells);
-    try testing.expectEqual(@as(usize, 117), total);
+    // 57 → 60, 117 → 125 (the spatial words): where-am-I-on-the-route and its
+    // wrong-way warning, which is the row that argues for `nearest` handing
+    // back the PARAMETER — a position could not be `diff`ed into a direction —
+    // and the cone of vision, which is what one `dot` buys over six nodes.
+    try testing.expectEqual(@as(usize, 60), rill_cells);
+    try testing.expectEqual(@as(usize, 125), total);
 }
 
 // ---------------------------------------------------------------------------

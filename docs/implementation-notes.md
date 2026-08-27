@@ -2206,3 +2206,91 @@ suppression from the whole language.
 **A second finding, free:** `kick` rises to 1 whatever its trigger carries, so
 `mul` *before* an envelope never changed its height. Chris's edit could not
 have made the flash brighter even if it had worked. Scale the envelope.
+
+## `nearest` emits the parameter, not the point (2026-08-27)
+
+**Ruled:** `nearest <p> <knots>` is the inverse of `along` and gives back
+**`t`**, the curve parameter — not the position on the curve.
+
+**Bought by:** a comment Chris wrote in Blade3D about twenty years ago. Its
+`IEvaluateBezierCurve.GetClosestPoint(Vector3)` returned a *position*, so no
+caller could recover the parameter, and `PhysicsSplineControl` carries this:
+
+```csharp
+// Hmm this Time/Duration thing seems like kind of a pain, it would be nice if the "startPosition" was just
+// whatever position the object was closest to, and then found the next closestPosition by some increment value/property.
+```
+
+The follower could not use the query it already had, because a position is a
+dead end. A parameter is not: `nearest … | along …` recovers the point in one
+more word, `t` on its own is progress round a circuit, and `| diff` on it is
+which way you are travelling. One word, three uses; the other spelling has one.
+
+**Two of that implementation's bugs became this one's gates.**
+
+*It terminated on a symmetry test.* `FindClosestPoint` returned as soon as its
+two probes were equidistant:
+
+```csharp
+if (Math.Abs(distanceToLeftPoint.Length() - distanceToRightPoint.Length()) <= tolerance)
+    return leftPointOnCurve;
+```
+
+That is true at the FIRST step for any query point lying on the curve — or on
+a perpendicular bisector — so it bailed out around t≈0.25 for everything. And
+sitting on the curve is exactly where a follower spends its life. `nearest`
+terminates on BRACKET WIDTH with a fixed iteration count, and the gate stands
+on the curve at five places and asks.
+
+*It scanned only the knots.* The coarse pass tested each segment's `Knot0`,
+then searched that one segment, so a long segment whose interior was nearest
+but whose endpoints were far returned the wrong point. `nearest` scans the
+whole curve.
+
+**Fixed iteration counts, not a tolerance loop.** A rill program that took a
+different number of steps on Tuesday would not replay. 24 coarse samples per
+segment, 60 ternary rounds; the rounds keep 2/3 of the bracket each, so the
+bracket closes to ~1e-11 of a segment regardless of the geometry.
+
+**The endpoints are exact, and that needed saying out loud.** The narrowing
+creeps toward an end without arriving — `hi` stays pinned at the end while
+`lo` climbs — so the midpoint of the final bracket answers 0.9999999999998
+where the true answer is 1. Taking the best of `{lo, mid, hi}` costs two
+evaluations and makes `nearest | along` land ON the last knot instead of near
+it. The gate asks for a point well past the end and expects exactly 1.
+
+**`curveAt` is `along`'s arithmetic without the packing**, because `nearest`
+evaluates the curve hundreds of times per tick and `blend4` packs a struple
+value each time. The two must not drift onto different curves — an inverse of
+a different curve is a lie — so the gate round-trips through the REAL `along`:
+five points sampled off `along`, fed to `nearest`, back to their own `t`.
+
+## §12's prose column had drifted, and it was load-bearing (2026-08-27)
+
+**Found by:** an operator audit against Blade3D's node-graph registry (~440
+operators — the same instinct as rill's, twenty years earlier).
+
+The operator index claimed three operators broadcast over records and arrays:
+`add`, `sub`, `mul`. **Twenty-three do** — every unary maths word, `div`,
+`min`, `max`, the boolean trio, and the comparators:
+
+```
+abs add and ceil cos div exp floor fract log max min mod mul
+not or pow round sign sin sqrt sub tan   (+ comparators)
+```
+
+**Why it matters beyond tidiness:** the audit was deciding whether `normalize`
+deserved a word. It does not — `div` broadcasts, so a unit vector is
+`| div (… | distance origin)`, two words that already exist. That decision is
+only visible to someone who knows `div` broadcasts, and the manual said it did
+not. A doc bug had been quietly arguing for a language change.
+
+**The gate gap:** §12 is gated four ways — exhaustive against the registry
+both directions, arity parsed slot by slot, alphabetical order, every `§`
+pointer resolves — and every one of those passed. The third column is prose,
+hand-maintained, and nothing reads it. The gates check that a row EXISTS and
+that its signature is right; they cannot check that its sentence is true.
+Recorded rather than fixed: the honest options are to generate the column from
+the registry (losing the prose that makes it readable) or to gate a specific
+claim like broadcasting against `Port.broadcasts`, which would catch this one
+class and no other. Worth doing when a second claim drifts.

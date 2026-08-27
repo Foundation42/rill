@@ -8,17 +8,12 @@ no run button and no execution wires: propagation is the only control flow,
 and operators are the valves that decide whether a change continues
 downstream.
 
-```
-use plane.player as p
+```rill
+// a healthbar, live: clamp, normalise, write back
+plane.player.health | clamp 0 100 | div 100 | set plane.ui.healthbar
 
-# player vitals, live as one record
-p.{health, stamina} as stats
-
-# healthbar: clamp, normalise, write back
-stats.health | clamp 0 100 | div 100 | set plane.ui.healthbar
-
-# heartbeat: an occurrence when health crosses below 20
-p.health | dropped_below 20 | play heartbeat
+// a heartbeat when health crosses below 20 — an occurrence, not a state
+plane.player.health | dropped_below 20 | notify plane.audio.heartbeat
 ```
 
 The pipe is the 90% case and is exactly the console you already have. Names
@@ -28,8 +23,54 @@ special subscribe form. There is no `if` statement and no exec pins, ever:
 selection is `select`/`lerp` over live branches, gating is `where`/`partition`
 over occurrence streams.
 
-Design spec: [docs/rill-spec.md](docs/rill-spec.md) ·
-Implementation notes: [docs/implementation-notes.md](docs/implementation-notes.md)
+## What it looks like in anger
+
+rill is load-bearing in [Matryoshka](../matryoshka), a compute-only software
+ray tracer. The engine's **camera controller is a rill program**, mounted at
+startup — 46 `glfwGetKey` calls left the frame loop when it arrived, and what
+a key *means* stopped being a fact about the engine:
+
+```rill
+plane.input.kbd.shift | mul 2 | add 1 as boost
+plane.input.kbd.w | sub plane.input.kbd.s | mul boost | set plane.camera.thrust.fwd
+plane.input.mouse.rmb | mul plane.camera.sens as look
+plane.input.mouse.dx | mul look | set plane.camera.torque.yaw
+```
+
+A muzzle flash is one statement. It rides the exposure knob's **modulation
+lane**, so the colourist's slider is untouched and comes back — two writers on
+one lane sum rather than race:
+
+```rill
+plane.input.mouse.lmb | rose_above 0.5 | kick 15ms 150ms | mul 2 | set plane.mod.render.grade.exposure
+```
+
+And a camera that tows itself back onto a spline is seven lines. `along` walks
+a Catmull-Rom curve; `nearest` is its inverse, handing back the parameter so
+`| diff` can tell you which way round you are going; `dot` splits a
+world-space error into the camera's own axes:
+
+```rill
+[{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}] as track
+plane.camera.pos | nearest track as t
+t | along track as target
+target | sub plane.camera.pos as err
+err | dot plane.camera.fwd | mul 0.06 | clamp -1 1 | set plane.camera.thrust.fwd
+```
+
+Every block above is parsed by the test suite. So is every ```rill block in
+both manuals and every cell in the idioms book — a manual that drifts from the
+registry fails the build.
+
+## The documents
+
+| | |
+|---|---|
+| [docs/rill-manual.md](docs/rill-manual.md) | the human manual. §6a *thinking in rill*, §12 the operator index — every operator, gated against the registry both ways |
+| [docs/rill-for-agents.md](docs/rill-for-agents.md) | the same language for someone who reads faster than they explore |
+| [docs/idioms.rillbook](docs/idioms.rillbook) | 60 idioms as runnable cells, each with the *before* it replaces |
+| [docs/implementation-notes.md](docs/implementation-notes.md) | the ledger: every durable ruling, what bought it, and what it cost |
+| [docs/rill-spec.md](docs/rill-spec.md) | the design spec |
 
 ## Quick start
 
@@ -80,9 +121,10 @@ no engine required.
 
 ## Build
 
-`zig build test` (acceptance gates G1–G9) · `zig build run` (mounts a HUD
-rill on the mock plane and narrates four ticks) · Zig 0.14.1, sibling of
-`struple` / `radix` / `matryoshka`.
+`zig build test` — 347 gates · `zig build run` (mounts a HUD rill on the mock
+plane and narrates four ticks) · `zig build run-file -- prog.rill` (mounts a
+file, ticks it, and says "(nothing)" out loud if it writes nothing) · Zig
+0.14.1, sibling of `struple` / `radix` / `matryoshka`.
 
 ## License
 

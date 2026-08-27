@@ -1,824 +1,880 @@
 {
-  "rillbook": 2,
-  "cells": [
-    {
-      "name": "about",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "# The idioms book\n\nOne page per ask on the tier-2 simple-things list (`docs/rill-tier2.md`\n§4). Each ask gets a **before** cell — how it is said with the language as it\nstands — and, once its operators land, an **after** cell. The pair is the\ncampaign's evidence: the before cell is what the ask cost, the after cell is\nwhat it costs now, and both are parsed by `zig build test` so neither can rot.\n\nRules of the book:\n\n- Every non-markdown cell parses. The gate counts cells both ways, so a cell\n  that stops being collected fails loudly rather than vacuously.\n- An ask that cannot be said at all today has a markdown cell and no before\n  cell. Its beat fills in the after.\n- The mutation for an after cell is deleting the operator it shows off.\n- Paths are the tiltyard's. A cell that reads a path assumes it is seeded\n  before mount — tick 0 evaluates everything, so a path that does not exist\n  yet is a node that never fires.\n\n---\n\n**The round-trip is lossless from format 2** (2026-08-26). The rillbook browser app used to rebuild each cell from five named fields and silently drop everything else, so any field added here — a fed-time script, an asserted outcome — was deleted by the next save. Fixed in `matryoshka/web/apps/rillbook/rbdoc.mjs`, with a round-trip gate on `zig build test` there: **a cell carrying an unrecognised field is asserted to survive a save.** Version 2 *means* that guarantee — a v1 document may have been through the lossy serialiser and cannot be trusted to still hold what was put in it.\n\n**The manual is the source; this book cites it** (ruled 2026-08-26). 29 statements appear byte-identically in both, and a gate holds them identical both ways. If a program here and in `rill-manual.md` disagree, the manual is right."
-    },
-    {
-      "name": "breathe-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Breathe the exposure between 0.5 and 1.5 over four seconds\n\nThe founding example. Scored in §4 as *9 lines, 2 programs, a seed → 1 line*,\nneeding `lfo` and `range`.\n\nTwo programs because §4.4 refuses a program that both writes and subscribes to\none path, and a phase counter is exactly that. A seed because tick 0 evaluates\neverything: `plane.anim.breath.tick` must exist before either program mounts or\nthe reader's nodes never fire.\n\nThe waveform below is a triangle, not a sine — with no `sin` and no `wave`\nthere is no sine to be had. That is part of what the ask cost."
-    },
-    {
-      "name": "breathe-before-counter",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "every 1f | inc plane.anim.breath.tick 1"
-    },
-    {
-      "name": "breathe-before-driver",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.anim.breath.tick | div 240 as phase\nphase | floor as whole\nphase | sub whole as frac\nfrac | mul 2 | sub 1 | abs as fold\nfold | mul -1 | add 1 as tri\ntri | lerp 0.5 1.5 | set plane.render.grade.exposure"
-    },
-    {
-      "name": "breathe-after",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 1a ✅\n\nOne line. `lfo` is the source, `range` is the exit from the unit interval,\n`set` ends the wave. No counter, no second program, no seed — and a real\nsine instead of the triangle the arithmetic could reach.\n\nThe mutation that must bite is deleting `lfo`."
-    },
-    {
-      "name": "breathe-after-cell",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure"
-    },
-    {
-      "name": "elapsed-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Show elapsed time on the HUD\n\nThe row `clock` earned for itself. `clock` and `frame` were admitted as\n*substrate* — they are what `lfo` and the registers are built from — but\nthe recon noted that admitting them by pin rather than by customer left\nadmission rule 1 with a silent exception. This row closes it honestly."
-    },
-    {
-      "name": "elapsed-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "clock | set plane.ui.elapsed"
-    },
-    {
-      "name": "flash-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Flash a light on an event — attack and decay, not a rectangle\n\n§4: *~4 lines, and a rectangle → 1*, needing `pulse | ease up down`.\n\nToday the shape is a rectangle because nothing decays: the light goes to full\non the rousing and drops to nothing when the window closes. `delay` moves the\nedge; it does not soften it."
-    },
-    {
-      "name": "flash-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.signals.horn | set plane.lights.alarm.level 1\nplane.signals.horn | delay 200ms | set plane.lights.alarm.level 0"
-    },
-    {
-      "name": "flash-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level"
-    },
-    {
-      "name": "toggle-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Toggle a light on a keypress\n\n§4: *~3 lines → 1*, needing `toggle`.\n\nToday a toggle is a counter through the plane, which costs the second program\nfor the same reason the breathing exposure does — and the parity test is\narithmetic nobody should have to write."
-    },
-    {
-      "name": "toggle-before-counter",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.input.key_l | inc plane.ui.lamp.presses 1"
-    },
-    {
-      "name": "toggle-before-driver",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.ui.lamp.presses | div 2 as halved\nhalved | floor | mul 2 as even\nplane.ui.lamp.presses | sub even | = 1 | set plane.lights.lamp.on"
-    },
-    {
-      "name": "toggle-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.input.key_l | toggle | set plane.lights.key.on"
-    },
-    {
-      "name": "count-kills-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Count kills\n\n§4: *2 programs (`inc` + reader) → 1*, needing `tally`.\n\n`inc` is the write half and cannot read its own path, so the count is only\nvisible to a second program. `tally` is the same count held inside the\noperator, where the cycle ban does not reach."
-    },
-    {
-      "name": "count-kills-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.events.kill | inc plane.score.kills 1"
-    },
-    {
-      "name": "count-kills-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.events.kill | tally | set plane.ui.kills"
-    },
-    {
-      "name": "night-falls-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Night falls, lights on\n\n§4 scores this ✓ at 1 line today — and the score is honest about line count\nand wrong about behaviour. `dropped_below` fires on every crossing, so a light\nlevel wobbling either side of the threshold at dusk switches the lights on and\noff repeatedly. This is `above`'s customer (recon §3d), and the row should be\nre-scored *today — 1 line, chatters* when beat 4 lands hysteresis."
-    },
-    {
-      "name": "night-falls-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.sky.light | dropped_below 0.3 | set plane.lights.court.on true"
-    },
-    {
-      "name": "night-falls-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 4, re-spelled 2026-08-26 ✅\n\nThe cell above said `above 0.3 0.2 | not` until the tier-2 re-probe, and\nbefore that it said `above 0.3 0.2` with no `not` at all — a perfectly\ngood hysteresis band that lights the street at noon. Three copies of the\nsame sentence (the manual recipe, this cell, and the gate) all said it,\nbecause each was a separate copy and none of them was read aloud.\n\n`below <on> <off>` is the ruling that came out of it: the first number\ntrips and the second releases, in both words, so the sentence you write\nis the sentence you meant. Street lights come on when the light *falls*."
-    },
-    {
-      "name": "night-falls-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.world.light | below 0.2 0.3 | set plane.lights.street.on"
-    },
-    {
-      "name": "fade-in-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Fade the exposure in over two seconds on mount\n\n§4: *can't (no register) → 1*, needing `once` and `ramp`.\n\n**Half of it landed in beat 1a.** `ramp` exists, so a fade to a target is\none word; what is still missing is `once` — a rousing that fires at mount\nand never again. Beat 4. The cell below is the fade with an explicit\ntarget on the plane, which is the honest spelling until `once` lands."
-    },
-    {
-      "name": "fade-in-partial",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure"
-    },
-    {
-      "name": "fade-in-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## After — one line that STOPS\n\n```rill\nonce 1 | ramp 2s from 0 | set plane.render.grade.exposure\n```\n\n`from` gives the first tween a start, which is the whole of the mount\nfade. Without it a ramp has nowhere to start and simply *is* its first\ntarget — right everywhere except at mount, which is why `from` was added\nbeside that behaviour rather than instead of it.\n\nThere is also a version with no `from` at all —\n`clock | div 2 | range 0 1`, since `range` clamps — and it is one line\nand correct and **re-evaluates every frame forever**. The register stops.\nThat difference is the register family's whole argument, and it is gated\non the eval counter going flat rather than on the value, because a value\nthat stays put looks exactly like one being recomputed."
-    },
-    {
-      "name": "fade-in-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "once 1 | ramp 2s from 0 | set plane.render.grade.exposure"
-    },
-    {
-      "name": "ease-toward-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Ease the camera exposure toward a target\n\n§4: *can't → 1*, needing `ease`. No before cell — same reason."
-    },
-    {
-      "name": "ease-toward-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 1a ✅\n\nThe register chases the target inside the operator, which is legal because\nthe cycle ban is about state through the *plane*. The same idea written\nthrough the plane is still refused at parse."
-    },
-    {
-      "name": "ease-toward-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.render.grade.exposure_target | ease 400ms | set plane.render.grade.exposure"
-    },
-    {
-      "name": "vu-meter-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## A VU meter on a field reading\n\n§4: *can't → 1*, needing `abs | ease 20ms down 400ms` — the envelope\nfollower, which is `ease` with asymmetric time constants. No before cell."
-    },
-    {
-      "name": "vu-meter-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 1a ✅\n\n`ease` with asymmetric constants IS the envelope follower: fast to rise,\nslow to fall. Two keyword ports where the prior art needs three CHOPs."
-    },
-    {
-      "name": "vu-meter-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu"
-    },
-    {
-      "name": "closing-fast-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Alarm when a raider is closing fast, not merely near\n\nProposed §4 row (recon §3e): *invented sensor field → 1*, needing `diff`.\n\nThe probe reviewer invented a `raider_velocity` sensor field because nothing\nin rill derived it. The honest spelling is one word, and it is why `diff`\nearns admission. No before cell: the before was a change to the host."
-    },
-    {
-      "name": "closing-fast-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 1a ✅\n\nOne word where the before was a change to the host. Note the threshold is\nnegative: closing fast is a *falling* distance."
-    },
-    {
-      "name": "closing-fast-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge"
-    },
-    {
-      "name": "charge-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Charge a mechanism while a lever is held, capped\n\nProposed §4 row (recon §3e), landed with the operator. The clamp is\nrequired, not optional: a register's state is saved with the program, so\nan unbounded accumulator is a corpse that gets copied."
-    },
-    {
-      "name": "charge-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.keep.lever.held | integrate max 100 | set plane.keep.portcullis.charge"
-    },
-    {
-      "name": "swing-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Swing a light back and forth\n\n§4: *~8 lines → 1*, needing `lfo tri` and `range`. The before is the breathing\ncounter again with a different output path — which is the finding: every\nperiodic ask rebuilds the same seven lines."
-    },
-    {
-      "name": "swing-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 1a ✅\n\nThe same three words as the breathing exposure with a different waveform\nand a different sink — which is the point. Every periodic ask used to\nrebuild the same seven lines of phase arithmetic."
-    },
-    {
-      "name": "swing-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle"
-    },
-    {
-      "name": "cooldown-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## A cooldown-guarded order\n\n§4 scores this ✓ at 1 line, and here it is honest — `cooldown` already holds\nits deadline in op state, which is the mechanism the whole register family\ninherits (recon §0)."
-    },
-    {
-      "name": "cooldown-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.enemy_count | rose_above 0 | cooldown 30s | notify plane.orders.muster"
-    },
-    {
-      "name": "rate-limit-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Rate-limit a noisy sensor into a knob\n\n§4 scores this ✓ at 1 line today via `sample`, and names `slew` beside it.\nThe row being already met is why `slew` is *listed, not admitted* (recon §3f)."
-    },
-    {
-      "name": "rate-limit-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.hearth.heat | sample 250ms | set plane.render.grade.exposure"
-    },
-    {
-      "name": "dim-lamp-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Dim the lamp as the fire dies\n\n§4 scores this ✓ at 2 lines via fields. Kept in the book as a ✓ row that the\ncampaign must not regress — and as one of the two rows flagged in recon §3d as\npossibly ✓-with-a-wobble against a noisy input."
-    },
-    {
-      "name": "dim-lamp-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "every 1f { cast $firelight 0.8 radius 6 at plane.sensors.hearth.pos decay 4s }"
-    },
-    {
-      "name": "flicker-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Flicker a torch\n\n§4: *can't (no noise) → 1*, needing `noise` and `range`. Beat 4. No before\ncell — a deterministic flicker cannot be built from the current set at all."
-    },
-    {
-      "name": "flicker-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "noise 80ms | range 0.6 1 | set plane.lights.torch.level"
-    },
-    {
-      "name": "drift-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Let the grade drift slowly over a minute\n\n§4: *can't → 1*, needing `noise 20s` and `range`. Beat 4."
-    },
-    {
-      "name": "drift-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "noise 20s | range 0.9 1.1 | set plane.render.grade.exposure"
-    },
-    {
-      "name": "shake-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Shake the camera on impact, 300ms\n\n§4: *can't → 2–3*, needing `noise` on three seeds, `hold`, and record math.\n`hold` landed in beat 1a; `noise` is beat 4 and record math is beat 1b, so\nthe row does not move yet. Recorded rather than quietly skipped."
-    },
-    {
-      "name": "shake-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake"
-    },
-    {
-      "name": "random-idle-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Pick a random idle animation per trigger\n\n§4: *can't → 1*, needing `rand` and `floor`. Beat 4."
-    },
-    {
-      "name": "random-idle-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.events.idle | rand | mul 4 | floor | choose [\"a\", \"b\", \"c\", \"d\"] | set plane.anim.idle"
-    },
-    {
-      "name": "nearest-hostile-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Nearest hostile from the contact list\n\n§4: *invented sensor field → 1*, needing `sort by` and `first`. Beat 3.\nThe contact source publishes an array; today nothing orders one."
-    },
-    {
-      "name": "nearest-hostile-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## After — one line\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\n```\n\nThis first landed at *two* lines: the sort and the pick were one, and the\nfield read cost another, because `.field` read from a name or a path and a\nchain had neither. That was raised as a fork and ruled the same day —\n`| .field` is the taught spelling, sugar for `project`, and `project` stays\nregistered as substrate: reachable, never taught."
-    },
-    {
-      "name": "nearest-hostile-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest"
-    },
-    {
-      "name": "top-three-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats"
-    },
-    {
-      "name": "top-three-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Top three threats\n\n§4: *can't → 1*, needing `sort by` and `take`. Beat 3."
-    },
-    {
-      "name": "three-points-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Move a light through three points typed into a cell\n\n§4: *host verb only → 1*, needing the array literal and `along`. Beats 2 and 3.\nThis is the ask the rillbook exists for: three points typed into a cell, no\nhost verb in the way."
-    },
-    {
-      "name": "three-points-partial-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Partial — the literal lands, the travel does not\n\nThe points are typeable now, and stepping between them is one line. Moving\n*along* them — one continuous parameter over the whole path — is `along`,\nbeat 3. This cell is the half that exists."
-    },
-    {
-      "name": "three-points-partial",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
-    },
-    {
-      "name": "three-points-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## After — the row, finished\n\nBeat 2a made the points typeable and stepping between them one line.\n`along` is the travel: a Catmull-Rom curve that passes through every knot,\nclamping outside 0..1 because a path has ends. The knots are records, so\nthe curve runs through each axis."
-    },
-    {
-      "name": "three-points-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
-    },
-    {
-      "name": "time-of-day-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Pick an exposure by time-of-day band\n\n§4: *`select` chain → 1*, needing the array literal and `choose`. Beat 2."
-    },
-    {
-      "name": "time-of-day-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.world.hour | < 6 as night\nplane.world.hour | < 18 as day\nnight | select 0.2 1.0 as lit\nday | select lit 0.4 | set plane.render.grade.exposure"
-    },
-    {
-      "name": "time-of-day-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## After — one line, and the bands are the value\n\n```rill\nplane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure\n```\n\nThe four-line `select` chain above encoded the bands **in the control flow**:\ntwo thresholds, two named streams, and a nested `select` you have to read\ninside-out to learn that dusk is 0.4. The array puts the bands where they\nbelong — in a value you can read left to right, edit in place, and hand to\nsomething else.\n\n`choose` is `nth` with the index piped. Which port is hot is the whole\ndifference: the list rouses `nth`, the index rouses `choose`."
-    },
-    {
-      "name": "time-of-day-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure"
-    },
-    {
-      "name": "follow-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Keep a light two metres above the player\n\n§4: *~3 lines → 1–2*, needing record math (the broadcast pin). Recon §6 argues\nthis lands in beat 1b rather than beat 2, because broadcast is one change to\none comptime helper and every math word should be born with it."
-    },
-    {
-      "name": "follow-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.entities.player.pos.y | add 2 as lifted\n{x: plane.entities.player.pos.x, y: lifted, z: plane.entities.player.pos.z}\n  | set plane.lights.follow.pos"
-    },
-    {
-      "name": "follow-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — beat 1b ✅\n\nMath is elementwise over records, so a position plus an offset is the\nsentence. No vector family, no rebuilt record, no separate `map`.\n\nThe mutation that must bite is making `add` scalar again."
-    },
-    {
-      "name": "follow-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos"
-    },
-    {
-      "name": "contracts-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Refuse a malformed contact list, and pin what a program reads\n\n§4's last two rows: both *silent → 1*, needing `match` (runtime) and `expect`\n(mount). Beat 2. There is no before cell because \"silent\" is the before: a\nshape mismatch today is discovered downstream, or not at all."
-    },
-    {
-      "name": "contracts-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## After — the same shape literal, two different promises\n\n```rill\nplane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat\nplane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade\n```\n\n`match` checks **every value** and a mismatch kills that wave, naming the\nfield and both sides:\n\n> `match: '.distance' is string, not number`\n\n`expect` checks **once, at mount**, and a mismatch refuses the mount — the\nprogram does not come up. After that it costs nothing, and it never quietly\nbecomes a runtime check: a violating value that arrives later passes straight\nthrough. That is the contract, and it is the whole reason there are two words\ninstead of one with a flag.\n\nIf there is nothing at the path when the program mounts, `expect` refuses and\ntells you to use `match`. It never degrades on its own."
-    },
-    {
-      "name": "contracts-match",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat"
-    },
-    {
-      "name": "contracts-expect",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade"
-    },
-    {
-      "name": "ticking-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## What movement costs, and how to see it\n\nEverything downstream of `clock`, `frame` or `lfo` re-evaluates every\ntick — that is the cost of animation, and it is meant to be visible\nrather than discovered. `OpDef.ticks` declares which operators may\nre-arm themselves; the console lights a badge from it and shows the\nnode's **live evaluation count** beside it. The badge says what could\ncost; the counter says what did.\n\nA register is the interesting case: it ticks *while converging* and then\nstops, so its badge is lit and its counter goes flat. The cell below\nconverges and then costs nothing, which is the property the whole family\nrests on — and there is a gate that watches the counter stop."
-    },
-    {
-      "name": "ticking-demo",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.target | ease 100ms | set plane.smoothed"
-    },
-    {
-      "name": "broadcast-refusals",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## What broadcast refuses, and how it says so\n\nBroadcast and its mismatch check landed together — ratified up front,\nbecause ICE shipped broadcast without one and that error was the thing\nevery ICE user learned to dread.\n\nEvery refusal names the operator, **both sides**, and where, in a\ntype-word vocabulary defined once (`number`, `record{x, y}`, `[number]`)\nand reused by beat 2's shape literal:\n\n```\nadd: record{x, y, z} and record{x, y} — field 'z' is missing on the right\nadd: [number] of 3 and [number] of 2 — arrays must be the same length\nadd: record{x, y} and [number] — a record and an array have no elementwise meaning\nmul: the left side is string, not a number at .inner.name — record{inner} and number\n```\n\nThere is no implicit intersection and no zip-to-the-shorter. Picking a\nrule quietly is how a wrong answer learns to look like a right one.\n\nThe cells below are the two that broadcast *replaced*: `window | mul`\nIS map, and a comparator over an array is the predicate beat 3's `keep`\nwill filter on."
-    },
-    {
-      "name": "broadcast-map",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load"
-    },
-    {
-      "name": "broadcast-predicate",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact"
-    },
-    {
-      "name": "range-not-lerp",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## `range` or `lerp`?\n\nThe same arithmetic — `lo + (hi − lo) · t` — and one difference that\nearns the second word: **`range` clamps, `lerp` extrapolates.**\n\nEverything upstream of a modulation chain (`lfo`, `wave`, `shape`)\nleaves 0..1 by construction, and `range` is the **exit** from that\ninterval: if a source ever strays, the exposure stays inside the range\nyou named instead of going dark or blowing out. Reach for `lerp` when\nyou are genuinely blending two things and want to be able to overshoot.\n\nRatified as built, 2026-08-25."
-    },
-    {
-      "name": "range-exit",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "lfo sine 4s | shape smooth | range 0.5 1.5 | set plane.render.grade.exposure"
-    },
-    {
-      "name": "arrays-page",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Arrays — a value, not a buffer\n\n`[a, b, c]`, with commas, matching records. Arrays were already a value kind\nin rill — `window` emits one, `stats` consumes one — so the literal is the\nmissing half of something that existed, not a new thing.\n\nAn array holding a name or a path is **live**, exactly as `{health: hp}` is:\neach element is a wire, and a change to any of them is a change to the array.\n\n**What it is not:** a buffer. Values are immutable per tick — no element\nassignment, no append, no loop over one. An array is a value that happens to\nhave several parts.\n\n**Reading one:** `nth <i>` (0-based) and `choose <i> <array>` — the same\ncomputation with the hot port swapped. `stats` still covers min/max/mean.\n\n**Out of range is an error.** Not a clamp, not a silent nothing: the mistake\nis in the program, and a clamped index is a wrong picture nobody is told\nabout. So is a fractional one — rounding is a guess. The refusal names the\nindex and the length.\n\nPositions stay records: `[0, 2, 0]` does not coerce to `{x, y, z}`. One\nthing, one spelling."
-    },
-    {
-      "name": "array-oldest",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample"
-    },
-    {
-      "name": "shapes-page",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Shapes — what you write down on purpose\n\nThe engine's mismatch check (beat 1b) catches what you *didn't* anticipate.\n`expect` and `match` are where you write down what you did.\n\n```\n{id: string, distance: number}\n{pos: {x: number, y: number, z: number}, kind?: string}\n[number]\n{id: string} exact\n```\n\nThe type words are the same ones a refusal prints — `number`, `boolean`,\n`string`, `any` — so what the language says back to you and what you write\nare one vocabulary. `[T]` is an array of `T`, nesting is `{…}` inside `{…}`,\n`?` marks a field that may be absent, and `any` marks one that must be\npresent but may be anything.\n\n**Shapes are open by default.** Extra fields pass; `exact` closes them, and it\ncloses *every* record in the shape, not only the outermost — the word closes\nthe shape, and a closed outside with open insides is a promise nobody asked\nfor.\n\n**Where each belongs.** `expect` at the boundary with the plane, where the\nvalue is there at mount and you want the mount to fail loudly if the world\nisn't what you think. `match` after anything whose shape is only known on\narrival: a contact list, a record built from `window`, a host verb's result."
-    },
-    {
-      "name": "over-arrays-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Over arrays — the three rows §2.11 argued and §4 never listed\n\nThree asks that had excellent arguments in the design doc and no row on\nthe simple-things list, which under admission rule 1 means the words were\n**listed, not admitted**. Beat 3a wrote the rows down first, then landed\nthem — the order matters, because rule 1 without that order is a loophole.\n\n- *any of these contacts armed?* — couldn't be said\n- *the loudest reading in the last 5s* — only via `stats | .max`, which\n  happens to carry it\n- *just the contacts that are armed* — couldn't be said"
-    },
-    {
-      "name": "any-armed",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.contacts | map (.armed) | reduce (or) | set plane.ui.any_armed"
-    },
-    {
-      "name": "loudest-recent",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak"
-    },
-    {
-      "name": "keep-armed",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats"
-    },
-    {
-      "name": "bodies-page",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Bodies — a section is an operator with ports left open\n\n```rill\nplane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats\nplane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak\n```\n\n`(clamp 0 1)` is `clamp` with its input open. `(add)` leaves two open.\n`(.distance)` is the field read with its input open. There is **no new\nsyntax** and no closure: a body closes over nothing, `{ }` is still a\nfan-out, and `( )` was always a partial application.\n\n**The consumer says how many arguments it supplies** — `map` one, `reduce`\ntwo — so a section with the wrong number of open ports is refused when\nyou write it, naming the operator and both counts. Only the thing about\nto fill the ports knows how many it will fill.\n\n**`reduce` folds left**: accumulator into the first open port, element\ninto the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2 = 5`. No\n`init` means the first element seeds it. Empty with no `init` is an\nerror — zero is right for `add` and wrong for `mul`, and picking one is\npicking a rule.\n\n**Most map is free.** `window 10s | mul 2` *is* map, because math already\nbroadcasts. Reach for `map` when the body needs an argument or is a field\nread.\n\n**`keep` filters elements, `where` gates the stream.** Both apply to an\narray-valued stream and mean different things — which is exactly why one\nword dispatched by input kind would have had to guess."
-    },
-    {
-      "name": "order-page",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
-    },
-    {
-      "name": "empty-list-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Say \"no threats\" without inventing one\n\nRuled 2026-08-26. `first` used to REFUSE an empty array — it promises one\nvalue, went the reasoning, and an empty list has none. True, and the wrong\nshape: no contacts at the gate is the *ordinary* state of a sensor, and the\nordinary state of the world should not spend a program's error budget.\n\nThe before is the refusal, so there is no before cell to mount: it is the\nnearest-threat recipe walking into the error budget every quiet second."
-    },
-    {
-      "name": "empty-list-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — envelopes ✅\n\n`first` and `last` name an END of a list, and an empty list has none, so\nthe wave ends there — the `where` precedent. `nth 0` on the same array\nstill refuses, because naming position zero is a claim that there is one.\nA count is satisfiable; a claim is not, which is the same asymmetry\n`take` already carries from the other side.\n\nTwo lines, two questions. The first goes quiet when the gate is clear and\nthe sink holds its last answer; the second says `0`, which is what a\nreader actually branches on. **Absence is said by the count, never by a\nsentinel** — and `len` over `stats | .n` for a length is the difference\nbetween asking a question and opening a magic box."
-    },
-    {
-      "name": "empty-list-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\nplane.sensors.gate.contacts | len | set plane.ui.contacts"
-    },
-    {
-      "name": "most-recent-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## The most recent reading out of a rolling window\n\n`last`'s customer, and the tier-2 re-probe asked for it by name. `window`\nis a rolling buffer; its newest entry is what people want from it, and\nbefore this the only way to reach it was `stats` (which does not carry\nit) or `nth` with a length you do not know."
-    },
-    {
-      "name": "most-recent-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.gpu.traversal_ms | window 5s | last | set plane.ui.latest_ms"
-    },
-    {
-      "name": "flash-on-hit-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Flash on hit\n\nThe tier-2 re-probe's biggest finding, and it cost them **two programs, an\ninvented gate path on the plane, and a 60ms magic number whose only job was\ngiving `ease` something to fall from**. There was no way to kick an envelope\nfrom an event: `ease` and `ramp` chase a target that something else supplies,\nand an event supplies nothing to chase.\n\nThe before is what they actually wrote, near enough — and it is **two cells\nbecause it has to be two programs**: a rill may not write a path it also\nsubscribes to, so the gate cannot be raised and read in one. That is not a\nquirk of the transcription; it is the shape of the workaround.\n\n**And it never turns off.** Read the two cells again: the first raises\n`hit_gate` to 1 and nothing anywhere lowers it — the second program *cannot*,\nbecause it subscribes to that path. So `ease` chases a 1 that never leaves,\nthe flash goes to full and stays there, and the only ways out are a third\nprogram on a timer or an engine-side reset. This is not a cost in lines. It\nis a wall, and anybody reaching for this shape hits it — which makes it the\nstrongest single argument `kick` has. Gated: the badness is asserted, not\nclaimed."
-    },
-    {
-      "name": "flash-on-hit-before-1",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.events.hit | set plane.ui.hit_gate 1"
-    },
-    {
-      "name": "flash-on-hit-before-2",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.ui.hit_gate | ease 60ms down 400ms | set plane.ui.hit_flash"
-    },
-    {
-      "name": "flash-on-hit-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — envelopes ✅\n\nOne line, one program, nothing invented. The rise and the fall are both\nsaid out loud instead of one being a time constant and the other being a\nnumber somebody had to pick.\n\nThe before is worse than it looks, and worse than this note used to say.\nThe `60ms` is not an attack — it is how fast `ease` climbs toward a 1\nthat never arrives. And **nothing ever lowers the gate**: a rill may not\nwrite a path it also subscribes to, so the second program has no way to\nput `hit_gate` back down. `ease` chases a 1 that never leaves, and the\nflash stays on for good.\n\n*(This note previously claimed the before had \"a tail that costs a frame\nforever\". It does not — `ease` converges within ε and stops arming. The\nbadness gate written for this cell is what found the wrong claim, which\nis the argument for gating the before cells at all.)*\n\n**A retrigger restarts from the current level, never from zero.** Hits\narriving during the fall are the normal case, and an envelope that\nsnapped down first would put a black frame in the middle of the flash."
-    },
-    {
-      "name": "flash-on-hit-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash"
-    },
-    {
-      "name": "shake-on-impact-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Shake on impact\n\n`kick`'s second customer, and the reason the word is not called `flash`.\nThe same envelope drives an amount rather than a brightness — and it\ncomposes with the camera-shake noise cell above, which is what an\namplitude is for."
-    },
-    {
-      "name": "shake-on-impact-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount"
-    },
-    {
-      "name": "held-note-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## A note that is held, not fired\n\n`kick` fires and is over. Some things are *held*: a key down, an alarm\nstanding, a lever pulled. The before is what that costs without `adsr` —\ntwo registers and a `select`, and it still cannot say \"decay to a sustain\nand then stay there\", because `ease` and `ramp` both chase one target and\na sustain is a second one."
-    },
-    {
-      "name": "held-note-before",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.input.key_c | select 1 0 | ease 10ms down 400ms | set plane.audio.voice.gain"
-    },
-    {
-      "name": "held-note-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — envelopes ✅\n\nFour numbers in the order everyone already knows. The before **rises to\nfull and stays there**: there is no decay to a sustain, because one\nregister chases one target and a sustain is a second one. Held, the\nbefore sits at 1 where the after sits at its 0.7 — gated, both ways\nround.\n\n*(This note previously added that a released note \"costs a frame\nforever\". It does not — `ease` converges within ε and stops arming.\nWrong, and now corrected: the before is bad enough without it.)*\n\n**A held sustain costs nothing.** Nothing has to happen while a note is\nheld, so nothing is scheduled: the evaluation counter sits still until\nthe gate moves.\n\n**A parameter change applies to the next segment and never retimes the\none in flight** (Chris, 2026-08-26). Shorten `release` while a note is\nalready falling and *that* fall keeps the length it was given. A release\nthat retimed itself mid-fall would jump, and a jump is the thing this\nwhole family exists to avoid."
-    },
-    {
-      "name": "held-note-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain"
-    },
-    {
-      "name": "arpeggio-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Walk a list, one rousing at a time\n\n`nth` and `choose` PICK; nothing WALKED. The before is a counter through\nthe plane, and it needs two programs for the same reason the flash did — a\nrill may not write a path it also subscribes to — plus a `mod` to wrap it\nand an `inc` that is a blind delta, so nothing can ever read the position\nback except through the plane."
-    },
-    {
-      "name": "arpeggio-before-1",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.music.beat | inc plane.music.arp_i 1"
-    },
-    {
-      "name": "arpeggio-before-2",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.music.arp_i | mod 4 | choose [60, 64, 67, 72] | set plane.audio.note"
-    },
-    {
-      "name": "arpeggio-after-note",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "### after — envelopes ✅\n\nOne line. The cursor lives in the operator, which is legal for the same\nreason a register's does: the cycle ban is about state through the\n*plane*, not about an operator's own state.\n\nThe before also cannot stop, cannot bounce, cannot shuffle, and its\ncounter is a corpse that rides every dump and grows forever — the exact\nthing `integrate`'s required clamp exists to prevent, in a path where\nnothing checks.\n\n**Order and end are separate choices**: `shuffle loop` is a fresh\npermutation every pass, `loop reverse` cycles backwards forever, and the\ncombinations that cannot mean anything refuse at mount naming both words."
-    },
-    {
-      "name": "arpeggio-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note"
-    },
-    {
-      "name": "camera-cycle-ask",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Cycle camera positions on a key\n\n`step`'s second customer, and the one that argues for the modes composing\nrather than being five alternatives: cycling backwards forever is `loop\nreverse`, and a reader wants it on their first afternoon."
-    },
-    {
-      "name": "camera-cycle-after",
-      "mode": "mounted",
-      "markdown": false,
-      "collapsed": false,
-      "source": "plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] loop | set plane.lights.key.pos"
-    },
-    {
-      "name": "levels-page",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Levels and crossings\n\n**Levels emit at tick 0. Crossings baseline silently.**\n\n`above` and `below` publish their level at mount, `toggle` its initial `false`,\n`tally` its `0` — because a program that reads a level must have one to\nread on its first evaluation, and \"nothing yet\" is not a level.\n`dropped_below`, `rose_above` and `edge` do the opposite: they record\ntheir first observation and say nothing, because a crossing nobody\ncrossed is not an event.\n\n**`above` is the row that put a correctness column on the list.** \"Night\nfalls → lights on\" scored ✓ at one line *and* flipped the street lights\non and off every frame at dusk, because a strict comparator has no memory\nof which side it was on. `above 0.3 0.2` reads as \"above 0.3, until below\n0.2\", and the gate drives the exact wobble where the two disagree: six\nflips against zero.\n\n**And the sense was still wrong.** The band was right and the direction\nwas upside down, in three separate copies, until a reader with no priors\ntried to use the recipe. `below <on> <off>` (2026-08-26) is the answer:\nthe first number trips and the second releases in *both* words, so\nneither one asks you to work out which of its numbers is the bigger.\nEach refuses the other's order at mount, naming both numbers.\n\n**`pulse` is a value and `every` is an occurrence.** One node, one kind.\n`pulse` is the rectangle you shape — `pulse 2s width 60ms | ease 10ms\ndown 300ms` is a flash with an attack and a decay, which is what the\n\"not a rectangle\" row asked for.\n\n**Seeds are the decorrelator.** `noise` and `rand` and `shuffle` all seed\nfrom 0 by default, so the naive program is deterministic and anyone who\nwants independence says so. Three shake axes on seeds 1, 2, 3 are\nindependent; two torches on one seed flicker together."
-    },
-    {
-      "name": "tier2-closed",
-      "mode": "query",
-      "markdown": true,
-      "collapsed": false,
-      "source": "## Tier 2, closed\n\nThirty-five asks on the simple-things list. **Thirty-one are one line**,\none is the two its target allowed, and three are not cleared — each\nblocked on something written down with the trigger that would start it:\ntempo on the plane (`beat`), a bezier curve (`shape bezier`), and a\nwindow that carries times (`smooth`).\n\nThe founding example was two programs, a seeded counter and seven lines\nof arithmetic. It is:\n\n```rill\nlfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure\n```\n\n**Twenty-four words were admitted**, which is exactly what the recon\npredicted before any of them were built. Five more are substrate,\nadmitted by ruling rather than by a row and named as such. Five were\nargued in prose, and the rows were written down **before** the words\nlanded — which is the difference between admission rule 1 having teeth\nand having a loophole. Nine were cut and stayed cut.\n\nEvery ✓ above is a mounted gate, not a paragraph. Every beat's mutations\nwere counted. Three of them were findings about the *gates* rather than\nthe code, and each became a line in the ledger:\n\n- a gate asserting \"A rather than B\" must run where A ≠ B;\n- gate past the library's fallbacks, or the library is the thing under\n  test;\n- gate the property the doc claims, not the implementation's incidental\n  ones — and when a property has a period, sample **on** the period."
-    }
-  ]
+ "rillbook": 2,
+ "cells": [
+  {
+   "name": "about",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "# The idioms book\n\nOne page per ask on the tier-2 simple-things list (`docs/rill-tier2.md`\n§4). Each ask gets a **before** cell — how it is said with the language as it\nstands — and, once its operators land, an **after** cell. The pair is the\ncampaign's evidence: the before cell is what the ask cost, the after cell is\nwhat it costs now, and both are parsed by `zig build test` so neither can rot.\n\nRules of the book:\n\n- Every non-markdown cell parses. The gate counts cells both ways, so a cell\n  that stops being collected fails loudly rather than vacuously.\n- An ask that cannot be said at all today has a markdown cell and no before\n  cell. Its beat fills in the after.\n- The mutation for an after cell is deleting the operator it shows off.\n- Paths are the tiltyard's. A cell that reads a path assumes it is seeded\n  before mount — tick 0 evaluates everything, so a path that does not exist\n  yet is a node that never fires.\n\n---\n\n**The round-trip is lossless from format 2** (2026-08-26). The rillbook browser app used to rebuild each cell from five named fields and silently drop everything else, so any field added here — a fed-time script, an asserted outcome — was deleted by the next save. Fixed in `matryoshka/web/apps/rillbook/rbdoc.mjs`, with a round-trip gate on `zig build test` there: **a cell carrying an unrecognised field is asserted to survive a save.** Version 2 *means* that guarantee — a v1 document may have been through the lossy serialiser and cannot be trusted to still hold what was put in it.\n\n**The manual is the source; this book cites it** (ruled 2026-08-26). 29 statements appear byte-identically in both, and a gate holds them identical both ways. If a program here and in `rill-manual.md` disagree, the manual is right."
+  },
+  {
+   "name": "breathe-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Breathe the exposure between 0.5 and 1.5 over four seconds\n\nThe founding example. Scored in §4 as *9 lines, 2 programs, a seed → 1 line*,\nneeding `lfo` and `range`.\n\nTwo programs because §4.4 refuses a program that both writes and subscribes to\none path, and a phase counter is exactly that. A seed because tick 0 evaluates\neverything: `plane.anim.breath.tick` must exist before either program mounts or\nthe reader's nodes never fire.\n\nThe waveform below is a triangle, not a sine — with no `sin` and no `wave`\nthere is no sine to be had. That is part of what the ask cost."
+  },
+  {
+   "name": "breathe-before-counter",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "every 1f | inc plane.anim.breath.tick 1"
+  },
+  {
+   "name": "breathe-before-driver",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.anim.breath.tick | div 240 as phase\nphase | floor as whole\nphase | sub whole as frac\nfrac | mul 2 | sub 1 | abs as fold\nfold | mul -1 | add 1 as tri\ntri | lerp 0.5 1.5 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "breathe-after",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 1a ✅\n\nOne line. `lfo` is the source, `range` is the exit from the unit interval,\n`set` ends the wave. No counter, no second program, no seed — and a real\nsine instead of the triangle the arithmetic could reach.\n\nThe mutation that must bite is deleting `lfo`."
+  },
+  {
+   "name": "breathe-after-cell",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "elapsed-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Show elapsed time on the HUD\n\nThe row `clock` earned for itself. `clock` and `frame` were admitted as\n*substrate* — they are what `lfo` and the registers are built from — but\nthe recon noted that admitting them by pin rather than by customer left\nadmission rule 1 with a silent exception. This row closes it honestly."
+  },
+  {
+   "name": "elapsed-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "clock | set plane.ui.elapsed"
+  },
+  {
+   "name": "flash-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Flash a light on an event — attack and decay, not a rectangle\n\n§4: *~4 lines, and a rectangle → 1*, needing `pulse | ease up down`.\n\nToday the shape is a rectangle because nothing decays: the light goes to full\non the rousing and drops to nothing when the window closes. `delay` moves the\nedge; it does not soften it."
+  },
+  {
+   "name": "flash-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.signals.horn | set plane.lights.alarm.level 1\nplane.signals.horn | delay 200ms | set plane.lights.alarm.level 0"
+  },
+  {
+   "name": "flash-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level"
+  },
+  {
+   "name": "toggle-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Toggle a light on a keypress\n\n§4: *~3 lines → 1*, needing `toggle`.\n\nToday a toggle is a counter through the plane, which costs the second program\nfor the same reason the breathing exposure does — and the parity test is\narithmetic nobody should have to write."
+  },
+  {
+   "name": "toggle-before-counter",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_l | inc plane.ui.lamp.presses 1"
+  },
+  {
+   "name": "toggle-before-driver",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.ui.lamp.presses | div 2 as halved\nhalved | floor | mul 2 as even\nplane.ui.lamp.presses | sub even | = 1 | set plane.lights.lamp.on"
+  },
+  {
+   "name": "toggle-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_l | toggle | set plane.lights.key.on"
+  },
+  {
+   "name": "count-kills-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Count kills\n\n§4: *2 programs (`inc` + reader) → 1*, needing `tally`.\n\n`inc` is the write half and cannot read its own path, so the count is only\nvisible to a second program. `tally` is the same count held inside the\noperator, where the cycle ban does not reach."
+  },
+  {
+   "name": "count-kills-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.kill | inc plane.score.kills 1"
+  },
+  {
+   "name": "count-kills-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.kill | tally | set plane.ui.kills"
+  },
+  {
+   "name": "night-falls-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Night falls, lights on\n\n§4 scores this ✓ at 1 line today — and the score is honest about line count\nand wrong about behaviour. `dropped_below` fires on every crossing, so a light\nlevel wobbling either side of the threshold at dusk switches the lights on and\noff repeatedly. This is `above`'s customer (recon §3d), and the row should be\nre-scored *today — 1 line, chatters* when beat 4 lands hysteresis."
+  },
+  {
+   "name": "night-falls-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.sky.light | dropped_below 0.3 | set plane.lights.court.on true"
+  },
+  {
+   "name": "night-falls-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 4, re-spelled 2026-08-26 ✅\n\nThe cell above said `above 0.3 0.2 | not` until the tier-2 re-probe, and\nbefore that it said `above 0.3 0.2` with no `not` at all — a perfectly\ngood hysteresis band that lights the street at noon. Three copies of the\nsame sentence (the manual recipe, this cell, and the gate) all said it,\nbecause each was a separate copy and none of them was read aloud.\n\n`below <on> <off>` is the ruling that came out of it: the first number\ntrips and the second releases, in both words, so the sentence you write\nis the sentence you meant. Street lights come on when the light *falls*."
+  },
+  {
+   "name": "night-falls-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.world.light | below 0.2 0.3 | set plane.lights.street.on"
+  },
+  {
+   "name": "fade-in-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Fade the exposure in over two seconds on mount\n\n§4: *can't (no register) → 1*, needing `once` and `ramp`.\n\n**Half of it landed in beat 1a.** `ramp` exists, so a fade to a target is\none word; what is still missing is `once` — a rousing that fires at mount\nand never again. Beat 4. The cell below is the fade with an explicit\ntarget on the plane, which is the honest spelling until `once` lands."
+  },
+  {
+   "name": "fade-in-partial",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure"
+  },
+  {
+   "name": "fade-in-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — one line that STOPS\n\n```rill\nonce 1 | ramp 2s from 0 | set plane.render.grade.exposure\n```\n\n`from` gives the first tween a start, which is the whole of the mount\nfade. Without it a ramp has nowhere to start and simply *is* its first\ntarget — right everywhere except at mount, which is why `from` was added\nbeside that behaviour rather than instead of it.\n\nThere is also a version with no `from` at all —\n`clock | div 2 | range 0 1`, since `range` clamps — and it is one line\nand correct and **re-evaluates every frame forever**. The register stops.\nThat difference is the register family's whole argument, and it is gated\non the eval counter going flat rather than on the value, because a value\nthat stays put looks exactly like one being recomputed."
+  },
+  {
+   "name": "fade-in-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "once 1 | ramp 2s from 0 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "ease-toward-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Ease the camera exposure toward a target\n\n§4: *can't → 1*, needing `ease`. No before cell — same reason."
+  },
+  {
+   "name": "ease-toward-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 1a ✅\n\nThe register chases the target inside the operator, which is legal because\nthe cycle ban is about state through the *plane*. The same idea written\nthrough the plane is still refused at parse."
+  },
+  {
+   "name": "ease-toward-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.render.grade.exposure_target | ease 400ms | set plane.render.grade.exposure"
+  },
+  {
+   "name": "vu-meter-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## A VU meter on a field reading\n\n§4: *can't → 1*, needing `abs | ease 20ms down 400ms` — the envelope\nfollower, which is `ease` with asymmetric time constants. No before cell."
+  },
+  {
+   "name": "vu-meter-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 1a ✅\n\n`ease` with asymmetric constants IS the envelope follower: fast to rise,\nslow to fall. Two keyword ports where the prior art needs three CHOPs."
+  },
+  {
+   "name": "vu-meter-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu"
+  },
+  {
+   "name": "closing-fast-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Alarm when a raider is closing fast, not merely near\n\nProposed §4 row (recon §3e): *invented sensor field → 1*, needing `diff`.\n\nThe probe reviewer invented a `raider_velocity` sensor field because nothing\nin rill derived it. The honest spelling is one word, and it is why `diff`\nearns admission. No before cell: the before was a change to the host."
+  },
+  {
+   "name": "closing-fast-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 1a ✅\n\nOne word where the before was a change to the host. Note the threshold is\nnegative: closing fast is a *falling* distance."
+  },
+  {
+   "name": "closing-fast-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge"
+  },
+  {
+   "name": "charge-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Charge a mechanism while a lever is held, capped\n\nProposed §4 row (recon §3e), landed with the operator. The clamp is\nrequired, not optional: a register's state is saved with the program, so\nan unbounded accumulator is a corpse that gets copied."
+  },
+  {
+   "name": "charge-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.keep.lever.held | integrate max 100 | set plane.keep.portcullis.charge"
+  },
+  {
+   "name": "swing-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Swing a light back and forth\n\n§4: *~8 lines → 1*, needing `lfo tri` and `range`. The before is the breathing\ncounter again with a different output path — which is the finding: every\nperiodic ask rebuilds the same seven lines."
+  },
+  {
+   "name": "swing-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 1a ✅\n\nThe same three words as the breathing exposure with a different waveform\nand a different sink — which is the point. Every periodic ask used to\nrebuild the same seven lines of phase arithmetic."
+  },
+  {
+   "name": "swing-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle"
+  },
+  {
+   "name": "cooldown-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## A cooldown-guarded order\n\n§4 scores this ✓ at 1 line, and here it is honest — `cooldown` already holds\nits deadline in op state, which is the mechanism the whole register family\ninherits (recon §0)."
+  },
+  {
+   "name": "cooldown-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.enemy_count | rose_above 0 | cooldown 30s | notify plane.orders.muster"
+  },
+  {
+   "name": "rate-limit-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Rate-limit a noisy sensor into a knob\n\n§4 scores this ✓ at 1 line today via `sample`, and names `slew` beside it.\nThe row being already met is why `slew` is *listed, not admitted* (recon §3f)."
+  },
+  {
+   "name": "rate-limit-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.hearth.heat | sample 250ms | set plane.render.grade.exposure"
+  },
+  {
+   "name": "dim-lamp-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Dim the lamp as the fire dies\n\n§4 scores this ✓ at 2 lines via fields. Kept in the book as a ✓ row that the\ncampaign must not regress — and as one of the two rows flagged in recon §3d as\npossibly ✓-with-a-wobble against a noisy input."
+  },
+  {
+   "name": "dim-lamp-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "every 1f { cast $firelight 0.8 radius 6 at plane.sensors.hearth.pos decay 4s }"
+  },
+  {
+   "name": "flicker-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Flicker a torch\n\n§4: *can't (no noise) → 1*, needing `noise` and `range`. Beat 4. No before\ncell — a deterministic flicker cannot be built from the current set at all."
+  },
+  {
+   "name": "flicker-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "noise 80ms | range 0.6 1 | set plane.lights.torch.level"
+  },
+  {
+   "name": "drift-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Let the grade drift slowly over a minute\n\n§4: *can't → 1*, needing `noise 20s` and `range`. Beat 4."
+  },
+  {
+   "name": "drift-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "noise 20s | range 0.9 1.1 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "shake-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Shake the camera on impact, 300ms\n\n§4: *can't → 2–3*, needing `noise` on three seeds, `hold`, and record math.\n`hold` landed in beat 1a; `noise` is beat 4 and record math is beat 1b, so\nthe row does not move yet. Recorded rather than quietly skipped."
+  },
+  {
+   "name": "shake-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake"
+  },
+  {
+   "name": "random-idle-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Pick a random idle animation per trigger\n\n§4: *can't → 1*, needing `rand` and `floor`. Beat 4."
+  },
+  {
+   "name": "random-idle-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.idle | rand | mul 4 | floor | choose [\"a\", \"b\", \"c\", \"d\"] | set plane.anim.idle"
+  },
+  {
+   "name": "nearest-hostile-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Nearest hostile from the contact list\n\n§4: *invented sensor field → 1*, needing `sort by` and `first`. Beat 3.\nThe contact source publishes an array; today nothing orders one."
+  },
+  {
+   "name": "nearest-hostile-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — one line\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\n```\n\nThis first landed at *two* lines: the sort and the pick were one, and the\nfield read cost another, because `.field` read from a name or a path and a\nchain had neither. That was raised as a fork and ruled the same day —\n`| .field` is the taught spelling, sugar for `project`, and `project` stays\nregistered as substrate: reachable, never taught."
+  },
+  {
+   "name": "nearest-hostile-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest"
+  },
+  {
+   "name": "top-three-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats"
+  },
+  {
+   "name": "top-three-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Top three threats\n\n§4: *can't → 1*, needing `sort by` and `take`. Beat 3."
+  },
+  {
+   "name": "three-points-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Move a light through three points typed into a cell\n\n§4: *host verb only → 1*, needing the array literal and `along`. Beats 2 and 3.\nThis is the ask the rillbook exists for: three points typed into a cell, no\nhost verb in the way."
+  },
+  {
+   "name": "three-points-partial-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Partial — the literal lands, the travel does not\n\nThe points are typeable now, and stepping between them is one line. Moving\n*along* them — one continuous parameter over the whole path — is `along`,\nbeat 3. This cell is the half that exists."
+  },
+  {
+   "name": "three-points-partial",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
+  },
+  {
+   "name": "three-points-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — the row, finished\n\nBeat 2a made the points typeable and stepping between them one line.\n`along` is the travel: a Catmull-Rom curve that passes through every knot,\nclamping outside 0..1 because a path has ends. The knots are records, so\nthe curve runs through each axis."
+  },
+  {
+   "name": "three-points-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
+  },
+  {
+   "name": "on-the-curve-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Where am I on the route?\n\n`along` takes a parameter and gives a point. The question a follower\nactually asks is the other way round — *given where I am, how far along am\nI?* — and until `nearest` there was no way to ask it."
+  },
+  {
+   "name": "on-the-curve-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — the inverse of `along`\n\n`nearest` hands back the **parameter**, not the point. That is the whole\ndesign: `| along` recovers the point when you want it, while `t` on its own\nis progress round a circuit, and `| diff` on `t` is which way you are\ntravelling — so a wrong-way warning is two more words.\n\nChris met the other spelling in an engine he wrote twenty years earlier. Its\nclosest-point query returned a *position*, no caller could recover the\nparameter, and the source still carries a comment wishing it could."
+  },
+  {
+   "name": "on-the-curve-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.car.pos | nearest [{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] | set plane.ui.lap_progress"
+  },
+  {
+   "name": "wrong-way-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## …and which way round you are going\n\nThe parameter is a number like any other, so the words that read numbers all\nwork on it. `diff` is the rate it changes; going backwards makes that\nnegative, and `below` gives the hysteresis so a nudge at a hairpin does not\nflash the warning."
+  },
+  {
+   "name": "wrong-way-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.car.pos | nearest [{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] | diff | below -0.02 0 | set plane.hud.wrong_way"
+  },
+  {
+   "name": "in-front-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Is it in front of me?\n\nWritable before `dot` as a `mul` and two `add`s over the three axes — six\nnodes to say one thing, and the thing it says is the whole of projection."
+  },
+  {
+   "name": "in-front-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — one number answers it\n\n`dot` with a unit direction reads as a facing: **1** dead ahead, **0** side\non, **−1** behind. So a cone of vision is a threshold on it, and `above`\ngives that threshold a band so a guard on the edge of noticing you does not\nstutter.\n\nThe same word splits a world-space error into a body's own axes — one `dot`\nper axis — which is how a program steers anything."
+  },
+  {
+   "name": "in-front-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | set plane.guard.alerted"
+  },
+  {
+   "name": "time-of-day-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Pick an exposure by time-of-day band\n\n§4: *`select` chain → 1*, needing the array literal and `choose`. Beat 2."
+  },
+  {
+   "name": "time-of-day-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.world.hour | < 6 as night\nplane.world.hour | < 18 as day\nnight | select 0.2 1.0 as lit\nday | select lit 0.4 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "time-of-day-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — one line, and the bands are the value\n\n```rill\nplane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure\n```\n\nThe four-line `select` chain above encoded the bands **in the control flow**:\ntwo thresholds, two named streams, and a nested `select` you have to read\ninside-out to learn that dusk is 0.4. The array puts the bands where they\nbelong — in a value you can read left to right, edit in place, and hand to\nsomething else.\n\n`choose` is `nth` with the index piped. Which port is hot is the whole\ndifference: the list rouses `nth`, the index rouses `choose`."
+  },
+  {
+   "name": "time-of-day-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure"
+  },
+  {
+   "name": "follow-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Keep a light two metres above the player\n\n§4: *~3 lines → 1–2*, needing record math (the broadcast pin). Recon §6 argues\nthis lands in beat 1b rather than beat 2, because broadcast is one change to\none comptime helper and every math word should be born with it."
+  },
+  {
+   "name": "follow-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.entities.player.pos.y | add 2 as lifted\n{x: plane.entities.player.pos.x, y: lifted, z: plane.entities.player.pos.z}\n  | set plane.lights.follow.pos"
+  },
+  {
+   "name": "follow-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — beat 1b ✅\n\nMath is elementwise over records, so a position plus an offset is the\nsentence. No vector family, no rebuilt record, no separate `map`.\n\nThe mutation that must bite is making `add` scalar again."
+  },
+  {
+   "name": "follow-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos"
+  },
+  {
+   "name": "contracts-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Refuse a malformed contact list, and pin what a program reads\n\n§4's last two rows: both *silent → 1*, needing `match` (runtime) and `expect`\n(mount). Beat 2. There is no before cell because \"silent\" is the before: a\nshape mismatch today is discovered downstream, or not at all."
+  },
+  {
+   "name": "contracts-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## After — the same shape literal, two different promises\n\n```rill\nplane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat\nplane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade\n```\n\n`match` checks **every value** and a mismatch kills that wave, naming the\nfield and both sides:\n\n> `match: '.distance' is string, not number`\n\n`expect` checks **once, at mount**, and a mismatch refuses the mount — the\nprogram does not come up. After that it costs nothing, and it never quietly\nbecomes a runtime check: a violating value that arrives later passes straight\nthrough. That is the contract, and it is the whole reason there are two words\ninstead of one with a flag.\n\nIf there is nothing at the path when the program mounts, `expect` refuses and\ntells you to use `match`. It never degrades on its own."
+  },
+  {
+   "name": "contracts-match",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat"
+  },
+  {
+   "name": "contracts-expect",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade"
+  },
+  {
+   "name": "ticking-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## What movement costs, and how to see it\n\nEverything downstream of `clock`, `frame` or `lfo` re-evaluates every\ntick — that is the cost of animation, and it is meant to be visible\nrather than discovered. `OpDef.ticks` declares which operators may\nre-arm themselves; the console lights a badge from it and shows the\nnode's **live evaluation count** beside it. The badge says what could\ncost; the counter says what did.\n\nA register is the interesting case: it ticks *while converging* and then\nstops, so its badge is lit and its counter goes flat. The cell below\nconverges and then costs nothing, which is the property the whole family\nrests on — and there is a gate that watches the counter stop."
+  },
+  {
+   "name": "ticking-demo",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.target | ease 100ms | set plane.smoothed"
+  },
+  {
+   "name": "broadcast-refusals",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## What broadcast refuses, and how it says so\n\nBroadcast and its mismatch check landed together — ratified up front,\nbecause ICE shipped broadcast without one and that error was the thing\nevery ICE user learned to dread.\n\nEvery refusal names the operator, **both sides**, and where, in a\ntype-word vocabulary defined once (`number`, `record{x, y}`, `[number]`)\nand reused by beat 2's shape literal:\n\n```\nadd: record{x, y, z} and record{x, y} — field 'z' is missing on the right\nadd: [number] of 3 and [number] of 2 — arrays must be the same length\nadd: record{x, y} and [number] — a record and an array have no elementwise meaning\nmul: the left side is string, not a number at .inner.name — record{inner} and number\n```\n\nThere is no implicit intersection and no zip-to-the-shorter. Picking a\nrule quietly is how a wrong answer learns to look like a right one.\n\nThe cells below are the two that broadcast *replaced*: `window | mul`\nIS map, and a comparator over an array is the predicate beat 3's `keep`\nwill filter on."
+  },
+  {
+   "name": "broadcast-map",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load"
+  },
+  {
+   "name": "broadcast-predicate",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact"
+  },
+  {
+   "name": "range-not-lerp",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## `range` or `lerp`?\n\nThe same arithmetic — `lo + (hi − lo) · t` — and one difference that\nearns the second word: **`range` clamps, `lerp` extrapolates.**\n\nEverything upstream of a modulation chain (`lfo`, `wave`, `shape`)\nleaves 0..1 by construction, and `range` is the **exit** from that\ninterval: if a source ever strays, the exposure stays inside the range\nyou named instead of going dark or blowing out. Reach for `lerp` when\nyou are genuinely blending two things and want to be able to overshoot.\n\nRatified as built, 2026-08-25."
+  },
+  {
+   "name": "range-exit",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "lfo sine 4s | shape smooth | range 0.5 1.5 | set plane.render.grade.exposure"
+  },
+  {
+   "name": "arrays-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Arrays — a value, not a buffer\n\n`[a, b, c]`, with commas, matching records. Arrays were already a value kind\nin rill — `window` emits one, `stats` consumes one — so the literal is the\nmissing half of something that existed, not a new thing.\n\nAn array holding a name or a path is **live**, exactly as `{health: hp}` is:\neach element is a wire, and a change to any of them is a change to the array.\n\n**What it is not:** a buffer. Values are immutable per tick — no element\nassignment, no append, no loop over one. An array is a value that happens to\nhave several parts.\n\n**Reading one:** `nth <i>` (0-based) and `choose <i> <array>` — the same\ncomputation with the hot port swapped. `stats` still covers min/max/mean.\n\n**Out of range is an error.** Not a clamp, not a silent nothing: the mistake\nis in the program, and a clamped index is a wrong picture nobody is told\nabout. So is a fractional one — rounding is a guess. The refusal names the\nindex and the length.\n\nPositions stay records: `[0, 2, 0]` does not coerce to `{x, y, z}`. One\nthing, one spelling."
+  },
+  {
+   "name": "array-oldest",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample"
+  },
+  {
+   "name": "shapes-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Shapes — what you write down on purpose\n\nThe engine's mismatch check (beat 1b) catches what you *didn't* anticipate.\n`expect` and `match` are where you write down what you did.\n\n```\n{id: string, distance: number}\n{pos: {x: number, y: number, z: number}, kind?: string}\n[number]\n{id: string} exact\n```\n\nThe type words are the same ones a refusal prints — `number`, `boolean`,\n`string`, `any` — so what the language says back to you and what you write\nare one vocabulary. `[T]` is an array of `T`, nesting is `{…}` inside `{…}`,\n`?` marks a field that may be absent, and `any` marks one that must be\npresent but may be anything.\n\n**Shapes are open by default.** Extra fields pass; `exact` closes them, and it\ncloses *every* record in the shape, not only the outermost — the word closes\nthe shape, and a closed outside with open insides is a promise nobody asked\nfor.\n\n**Where each belongs.** `expect` at the boundary with the plane, where the\nvalue is there at mount and you want the mount to fail loudly if the world\nisn't what you think. `match` after anything whose shape is only known on\narrival: a contact list, a record built from `window`, a host verb's result."
+  },
+  {
+   "name": "over-arrays-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Over arrays — the three rows §2.11 argued and §4 never listed\n\nThree asks that had excellent arguments in the design doc and no row on\nthe simple-things list, which under admission rule 1 means the words were\n**listed, not admitted**. Beat 3a wrote the rows down first, then landed\nthem — the order matters, because rule 1 without that order is a loophole.\n\n- *any of these contacts armed?* — couldn't be said\n- *the loudest reading in the last 5s* — only via `stats | .max`, which\n  happens to carry it\n- *just the contacts that are armed* — couldn't be said"
+  },
+  {
+   "name": "any-armed",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | map (.armed) | reduce (or) | set plane.ui.any_armed"
+  },
+  {
+   "name": "loudest-recent",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak"
+  },
+  {
+   "name": "keep-armed",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats"
+  },
+  {
+   "name": "bodies-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Bodies — a section is an operator with ports left open\n\n```rill\nplane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats\nplane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak\n```\n\n`(clamp 0 1)` is `clamp` with its input open. `(add)` leaves two open.\n`(.distance)` is the field read with its input open. There is **no new\nsyntax** and no closure: a body closes over nothing, `{ }` is still a\nfan-out, and `( )` was always a partial application.\n\n**The consumer says how many arguments it supplies** — `map` one, `reduce`\ntwo — so a section with the wrong number of open ports is refused when\nyou write it, naming the operator and both counts. Only the thing about\nto fill the ports knows how many it will fill.\n\n**`reduce` folds left**: accumulator into the first open port, element\ninto the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2 = 5`. No\n`init` means the first element seeds it. Empty with no `init` is an\nerror — zero is right for `add` and wrong for `mul`, and picking one is\npicking a rule.\n\n**Most map is free.** `window 10s | mul 2` *is* map, because math already\nbroadcasts. Reach for `map` when the body needs an argument or is a field\nread.\n\n**`keep` filters elements, `where` gates the stream.** Both apply to an\narray-valued stream and mean different things — which is exactly why one\nword dispatched by input kind would have had to guess."
+  },
+  {
+   "name": "order-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
+  },
+  {
+   "name": "empty-list-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Say \"no threats\" without inventing one\n\nRuled 2026-08-26. `first` used to REFUSE an empty array — it promises one\nvalue, went the reasoning, and an empty list has none. True, and the wrong\nshape: no contacts at the gate is the *ordinary* state of a sensor, and the\nordinary state of the world should not spend a program's error budget.\n\nThe before is the refusal, so there is no before cell to mount: it is the\nnearest-threat recipe walking into the error budget every quiet second."
+  },
+  {
+   "name": "empty-list-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — envelopes ✅\n\n`first` and `last` name an END of a list, and an empty list has none, so\nthe wave ends there — the `where` precedent. `nth 0` on the same array\nstill refuses, because naming position zero is a claim that there is one.\nA count is satisfiable; a claim is not, which is the same asymmetry\n`take` already carries from the other side.\n\nTwo lines, two questions. The first goes quiet when the gate is clear and\nthe sink holds its last answer; the second says `0`, which is what a\nreader actually branches on. **Absence is said by the count, never by a\nsentinel** — and `len` over `stats | .n` for a length is the difference\nbetween asking a question and opening a magic box."
+  },
+  {
+   "name": "empty-list-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\nplane.sensors.gate.contacts | len | set plane.ui.contacts"
+  },
+  {
+   "name": "most-recent-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## The most recent reading out of a rolling window\n\n`last`'s customer, and the tier-2 re-probe asked for it by name. `window`\nis a rolling buffer; its newest entry is what people want from it, and\nbefore this the only way to reach it was `stats` (which does not carry\nit) or `nth` with a length you do not know."
+  },
+  {
+   "name": "most-recent-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.gpu.traversal_ms | window 5s | last | set plane.ui.latest_ms"
+  },
+  {
+   "name": "flash-on-hit-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Flash on hit\n\nThe tier-2 re-probe's biggest finding, and it cost them **two programs, an\ninvented gate path on the plane, and a 60ms magic number whose only job was\ngiving `ease` something to fall from**. There was no way to kick an envelope\nfrom an event: `ease` and `ramp` chase a target that something else supplies,\nand an event supplies nothing to chase.\n\nThe before is what they actually wrote, near enough — and it is **two cells\nbecause it has to be two programs**: a rill may not write a path it also\nsubscribes to, so the gate cannot be raised and read in one. That is not a\nquirk of the transcription; it is the shape of the workaround.\n\n**And it never turns off.** Read the two cells again: the first raises\n`hit_gate` to 1 and nothing anywhere lowers it — the second program *cannot*,\nbecause it subscribes to that path. So `ease` chases a 1 that never leaves,\nthe flash goes to full and stays there, and the only ways out are a third\nprogram on a timer or an engine-side reset. This is not a cost in lines. It\nis a wall, and anybody reaching for this shape hits it — which makes it the\nstrongest single argument `kick` has. Gated: the badness is asserted, not\nclaimed."
+  },
+  {
+   "name": "flash-on-hit-before-1",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.hit | set plane.ui.hit_gate 1"
+  },
+  {
+   "name": "flash-on-hit-before-2",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.ui.hit_gate | ease 60ms down 400ms | set plane.ui.hit_flash"
+  },
+  {
+   "name": "flash-on-hit-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — envelopes ✅\n\nOne line, one program, nothing invented. The rise and the fall are both\nsaid out loud instead of one being a time constant and the other being a\nnumber somebody had to pick.\n\nThe before is worse than it looks, and worse than this note used to say.\nThe `60ms` is not an attack — it is how fast `ease` climbs toward a 1\nthat never arrives. And **nothing ever lowers the gate**: a rill may not\nwrite a path it also subscribes to, so the second program has no way to\nput `hit_gate` back down. `ease` chases a 1 that never leaves, and the\nflash stays on for good.\n\n*(This note previously claimed the before had \"a tail that costs a frame\nforever\". It does not — `ease` converges within ε and stops arming. The\nbadness gate written for this cell is what found the wrong claim, which\nis the argument for gating the before cells at all.)*\n\n**A retrigger restarts from the current level, never from zero.** Hits\narriving during the fall are the normal case, and an envelope that\nsnapped down first would put a black frame in the middle of the flash."
+  },
+  {
+   "name": "flash-on-hit-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash"
+  },
+  {
+   "name": "shake-on-impact-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Shake on impact\n\n`kick`'s second customer, and the reason the word is not called `flash`.\nThe same envelope drives an amount rather than a brightness — and it\ncomposes with the camera-shake noise cell above, which is what an\namplitude is for."
+  },
+  {
+   "name": "shake-on-impact-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount"
+  },
+  {
+   "name": "held-note-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## A note that is held, not fired\n\n`kick` fires and is over. Some things are *held*: a key down, an alarm\nstanding, a lever pulled. The before is what that costs without `adsr` —\ntwo registers and a `select`, and it still cannot say \"decay to a sustain\nand then stay there\", because `ease` and `ramp` both chase one target and\na sustain is a second one."
+  },
+  {
+   "name": "held-note-before",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_c | select 1 0 | ease 10ms down 400ms | set plane.audio.voice.gain"
+  },
+  {
+   "name": "held-note-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — envelopes ✅\n\nFour numbers in the order everyone already knows. The before **rises to\nfull and stays there**: there is no decay to a sustain, because one\nregister chases one target and a sustain is a second one. Held, the\nbefore sits at 1 where the after sits at its 0.7 — gated, both ways\nround.\n\n*(This note previously added that a released note \"costs a frame\nforever\". It does not — `ease` converges within ε and stops arming.\nWrong, and now corrected: the before is bad enough without it.)*\n\n**A held sustain costs nothing.** Nothing has to happen while a note is\nheld, so nothing is scheduled: the evaluation counter sits still until\nthe gate moves.\n\n**A parameter change applies to the next segment and never retimes the\none in flight** (Chris, 2026-08-26). Shorten `release` while a note is\nalready falling and *that* fall keeps the length it was given. A release\nthat retimed itself mid-fall would jump, and a jump is the thing this\nwhole family exists to avoid."
+  },
+  {
+   "name": "held-note-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain"
+  },
+  {
+   "name": "arpeggio-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Walk a list, one rousing at a time\n\n`nth` and `choose` PICK; nothing WALKED. The before is a counter through\nthe plane, and it needs two programs for the same reason the flash did — a\nrill may not write a path it also subscribes to — plus a `mod` to wrap it\nand an `inc` that is a blind delta, so nothing can ever read the position\nback except through the plane."
+  },
+  {
+   "name": "arpeggio-before-1",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.music.beat | inc plane.music.arp_i 1"
+  },
+  {
+   "name": "arpeggio-before-2",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.music.arp_i | mod 4 | choose [60, 64, 67, 72] | set plane.audio.note"
+  },
+  {
+   "name": "arpeggio-after-note",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "### after — envelopes ✅\n\nOne line. The cursor lives in the operator, which is legal for the same\nreason a register's does: the cycle ban is about state through the\n*plane*, not about an operator's own state.\n\nThe before also cannot stop, cannot bounce, cannot shuffle, and its\ncounter is a corpse that rides every dump and grows forever — the exact\nthing `integrate`'s required clamp exists to prevent, in a path where\nnothing checks.\n\n**Order and end are separate choices**: `shuffle loop` is a fresh\npermutation every pass, `loop reverse` cycles backwards forever, and the\ncombinations that cannot mean anything refuse at mount naming both words."
+  },
+  {
+   "name": "arpeggio-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note"
+  },
+  {
+   "name": "camera-cycle-ask",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Cycle camera positions on a key\n\n`step`'s second customer, and the one that argues for the modes composing\nrather than being five alternatives: cycling backwards forever is `loop\nreverse`, and a reader wants it on their first afternoon."
+  },
+  {
+   "name": "camera-cycle-after",
+   "mode": "mounted",
+   "markdown": false,
+   "collapsed": false,
+   "source": "plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] loop | set plane.lights.key.pos"
+  },
+  {
+   "name": "levels-page",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Levels and crossings\n\n**Levels emit at tick 0. Crossings baseline silently.**\n\n`above` and `below` publish their level at mount, `toggle` its initial `false`,\n`tally` its `0` — because a program that reads a level must have one to\nread on its first evaluation, and \"nothing yet\" is not a level.\n`dropped_below`, `rose_above` and `edge` do the opposite: they record\ntheir first observation and say nothing, because a crossing nobody\ncrossed is not an event.\n\n**`above` is the row that put a correctness column on the list.** \"Night\nfalls → lights on\" scored ✓ at one line *and* flipped the street lights\non and off every frame at dusk, because a strict comparator has no memory\nof which side it was on. `above 0.3 0.2` reads as \"above 0.3, until below\n0.2\", and the gate drives the exact wobble where the two disagree: six\nflips against zero.\n\n**And the sense was still wrong.** The band was right and the direction\nwas upside down, in three separate copies, until a reader with no priors\ntried to use the recipe. `below <on> <off>` (2026-08-26) is the answer:\nthe first number trips and the second releases in *both* words, so\nneither one asks you to work out which of its numbers is the bigger.\nEach refuses the other's order at mount, naming both numbers.\n\n**`pulse` is a value and `every` is an occurrence.** One node, one kind.\n`pulse` is the rectangle you shape — `pulse 2s width 60ms | ease 10ms\ndown 300ms` is a flash with an attack and a decay, which is what the\n\"not a rectangle\" row asked for.\n\n**Seeds are the decorrelator.** `noise` and `rand` and `shuffle` all seed\nfrom 0 by default, so the naive program is deterministic and anyone who\nwants independence says so. Three shake axes on seeds 1, 2, 3 are\nindependent; two torches on one seed flicker together."
+  },
+  {
+   "name": "tier2-closed",
+   "mode": "query",
+   "markdown": true,
+   "collapsed": false,
+   "source": "## Tier 2, closed\n\nThirty-five asks on the simple-things list. **Thirty-one are one line**,\none is the two its target allowed, and three are not cleared — each\nblocked on something written down with the trigger that would start it:\ntempo on the plane (`beat`), a bezier curve (`shape bezier`), and a\nwindow that carries times (`smooth`).\n\nThe founding example was two programs, a seeded counter and seven lines\nof arithmetic. It is:\n\n```rill\nlfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure\n```\n\n**Twenty-four words were admitted**, which is exactly what the recon\npredicted before any of them were built. Five more are substrate,\nadmitted by ruling rather than by a row and named as such. Five were\nargued in prose, and the rows were written down **before** the words\nlanded — which is the difference between admission rule 1 having teeth\nand having a loophole. Nine were cut and stayed cut.\n\nEvery ✓ above is a mounted gate, not a paragraph. Every beat's mutations\nwere counted. Three of them were findings about the *gates* rather than\nthe code, and each became a line in the ledger:\n\n- a gate asserting \"A rather than B\" must run where A ≠ B;\n- gate past the library's fallbacks, or the library is the thing under\n  test;\n- gate the property the doc claims, not the implementation's incidental\n  ones — and when a property has a period, sample **on** the period."
+  }
+ ]
 }
