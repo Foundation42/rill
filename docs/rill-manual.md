@@ -260,6 +260,8 @@ in steps.
 | "count up while this is held" | `\| integrate max <m>` | op-internal state, so no `inc` dance — and the cap is required |
 | "map 0..1 onto a real range" | `\| range lo hi`, not `lerp` | `range` clamps and `lerp` extrapolates; a modulation chain wants the interval it named |
 | "add 2 metres to a position" | `\| add {x: 0, y: 2, z: 0}` | math is elementwise over records and arrays; there is no vector family to learn |
+| "how far along the route am I?" | `\| nearest <knots>` | the inverse of `along`, and it hands back the **parameter** — so `\| along` recovers the point, and `\| diff` says which way you are going |
+| "is it in front of me?" / "how much of this is in that direction?" | `\| dot <a direction>` | one number answers both; with a unit direction it is 1 dead ahead, 0 side on, −1 behind |
 | "double every reading in the window" | `window 10s \| mul 2` | broadcasting over an array IS map |
 | "pick one of these" | `\| choose [a, b, c]` | a table of choices is a *value*, not a chain of `select`s — read it left to right, edit it in place |
 | "the i-th one" | `\| nth <i>` | `nth` and `choose` are one computation; the difference is which port rouses it |
@@ -757,6 +759,8 @@ plane.events.kill | tally | set plane.ui.kills
 plane.world.light | below 0.2 0.3 | set plane.lights.street.on
 noise 80ms | range 0.6 1 | set plane.lights.torch.level
 plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
+plane.car.pos | nearest plane.track.knots | set plane.ui.lap_progress
+plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | set plane.guard.sees
 ```
 
 | op | does |
@@ -769,6 +773,26 @@ plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
 | `noise <period> [octaves <n>] [seed <s>]` | smooth noise in 0..1 over fed time |
 | `rand [seed <s>]` | a fresh value in 0..1 per rousing |
 | `distance <a> <b>` · `within <a> <b> <r>` | over `record{x, y, z}` on both sides |
+| `dot <a> <b>` | scalar product — **how much of `a` lies along `b`** |
+| `nearest <p> <knots>` | where `p` is on the curve, as `t` in 0..1 — **the inverse of `along`** |
+
+**`nearest` returns the parameter, not the point.** `nearest … | along …`
+recovers the point in one more word, while `t` on its own is progress round a
+circuit, and `| diff` on it is which way you are travelling along it. A word
+that handed back the position would throw all of that away — which is not a
+hypothetical: Blade3D's `GetClosestPoint` returned a position, no caller could
+recover the parameter, and its own source carries a comment wishing it could.
+
+**It is the inverse of `along`, and of no other curve.** Same uniform
+Catmull-Rom, same segment split, same duplicated endpoints. `p | nearest ks |
+along ks` lands back on the curve at the point closest to `p`, and if `p` was
+already on the curve it lands back on `p`.
+
+**`dot` is the whole of projection.** `a | dot b` is how much of `a` points
+along `b`; with a unit `b` it is the length of `a`'s shadow on that direction.
+Facing checks fall out of it (`facing | dot to_target` is 1 dead ahead, 0 side
+on, −1 behind), and so does splitting a world-space error into a body's own
+axes — one `dot` per axis.
 
 **Levels emit at mount; crossings do not.** `above`/`below` publish their level
 straight away, `toggle` its initial `false`, `tally` its `0` — a program
@@ -1200,38 +1224,39 @@ and it is listed after the ports here so the arity reads at a glance.
 | `>` | `> <a> <b>` | Greater than. |
 | `>=` | `>= <a> <b>` | Greater than or equal. |
 | `above` | `above <in> <on> <off>` | Boolean with hysteresis: above `on`, until below `off`. Emits its level at mount. §6f |
-| `abs` | `abs <in>` | Absolute value. |
+| `abs` | `abs <in>` | Absolute value. Broadcasts over a record or an array. |
 | `add` | `add <a> <b>` | a + b. Broadcasts over a record or an array. |
 | `adsr` | `adsr <in> <attack> <decay> <sustain> <release>` | Gate in, envelope out: rise, decay to `sustain` while the gate holds, release when it drops. A held sustain costs nothing. §6b |
 | `along` | `along <t> <knots>` | Travel a smooth curve through the knots as t goes 0..1. Clamps outside; fewer than two knots refuses. §6d |
-| `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a |
+| `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a. Broadcasts over a record or an array. |
 | `arm` | `arm [<in>] [off <off>] [on <on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). Both controls carry their word — either may be given alone. |
 | `atan2` | `atan2 <y> <x>` | Angle of (x, y) in radians; `y` is the piped one — `dy \| atan2 dx`. |
 | `below` | `below <in> <on> <off>` | Boolean with hysteresis, falling: below `on`, until above `off`. Emits its level at mount. §6f |
 | `cast` | `cast <in> [<value>] at <at> [decay <decay>] <$channel> radius <radius> [to <#to>]` | Deposit into a field channel. `to` couples delivery to a tag's members. §7 |
-| `ceil` | `ceil <in>` | Round toward +inf. |
+| `ceil` | `ceil <in>` | Round toward +inf. Broadcasts over a record or an array. |
 | `changed` | `changed <in>` | An occurrence whenever the value actually changes. |
 | `choose` | `choose <i> <of>` | `nth` with the index piped — `plane.time.band \| choose [0.2, 1, 0.6]`. §6c |
 | `clamp` | `clamp <in> <lo> <hi>` | Clamp `in` to lo..hi. |
 | `clock` | `clock` | Fed real seconds since mount, as a value. Source. §6b |
 | `const` | `const <value>` | Emit a constant, once, at mount. |
 | `cooldown` | `cooldown <in> <window>` | Pass one, then deaf for the window. §6 |
-| `cos` | `cos <in>` | Cosine, radians. |
+| `cos` | `cos <in>` | Cosine, radians. Broadcasts over a record or an array. |
 | `debounce` | `debounce <in> <quiet>` | Pass only after a quiet period; storms collapse to their last edge. §6 |
 | `delay` | `delay <in> <by>` | Emit each occurrence `by` later. §6 |
 | `diff` | `diff <in>` | Rate of change per second. Baselines silently; stops ticking at zero. §6b |
 | `disarm` | `disarm [<in>] [off <off>] [on <on>]` | Latch gate, initially **closed**: silent until `on` arms it. Both controls carry their word — either may be given alone. |
 | `distance` | `distance <a> <b>` | Distance between two positions; both `record{x, y, z}`. §6f |
-| `div` | `div <a> <b>` | a / b (IEEE: division by zero yields ±inf). |
+| `div` | `div <a> <b>` | a / b (IEEE: division by zero yields ±inf). Broadcasts over a record or an array. |
+| `dot` | `dot <a> <b>` | Scalar product — how much of a lies along b; both `record{x, y, z}`. §6f |
 | `dropped_below` | `dropped_below <in> <threshold>` | Fires, with the value, on the way through. First observation baselines silently. §2 |
 | `ease` | `ease <in> <tau> [up <up>] [down <down>]` | Chase the input with time constant `tau`; `up`/`down` make it asymmetric. Never snaps. §6b |
 | `edge` | `edge <in>` | Fire on the false→true transition. §6f |
 | `every` | `every <period>` | Occurrence source on a cadence: mount, then once per period. §6 |
-| `exp` | `exp <in>` | e to the input. |
+| `exp` | `exp <in>` | e to the input. Broadcasts over a record or an array. |
 | `expect` | `expect [<in>] <shape>` | Assert a shape **once, at mount**; a mismatch refuses the mount. §6e |
 | `first` | `first <in>` | The leading element. An empty array ends the wave silently. §6d |
-| `floor` | `floor <in>` | Round toward −inf. |
-| `fract` | `fract <in>` | Fractional part, always in 0..1 — `fract -0.25` is 0.75. |
+| `floor` | `floor <in>` | Round toward −inf. Broadcasts over a record or an array. |
+| `fract` | `fract <in>` | Fractional part, always in 0..1 — `fract -0.25` is 0.75. Broadcasts over a record or an array. |
 | `frame` | `frame` | Fed frame count since mount, as a value. Source. §6b |
 | `hold` | `hold <in> <for>` | Take a value, then ignore changes for `for`. §6b |
 | `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. §4 |
@@ -1243,20 +1268,21 @@ and it is listed after the ports here so the arity reads at a glance.
 | `len` | `len <in>` | How many elements. This is how absence is said once `first` goes quiet. §6c |
 | `lerp` | `lerp <t> <a> <b>` | a + (b − a)·t; `t` is the piped one. Extrapolates where `range` clamps. §6b |
 | `lfo` | `lfo <shape> <period> [phase <phase>]` | Modulation source in 0..1 — `lfo sine 4s`. Shapes: `sine tri saw square`. §6b |
-| `log` | `log <in>` | Natural log (IEEE: zero yields −inf, a negative nan). |
+| `log` | `log <in>` | Natural log (IEEE: zero yields −inf, a negative nan). Broadcasts over a record or an array. |
 | `map` | `map <in> (…)` | The body once per element, in order. Keeps the length. §6d |
 | `match` | `match <in> <shape>` | Assert a shape on **every** value; a mismatch kills the wave. §6e |
-| `max` | `max <a> <b>` | The larger of a and b. |
+| `max` | `max <a> <b>` | The larger of a and b. Broadcasts over a record or an array. |
 | `merge` | `merge <a> <b>` | Merge two records; b's fields win. |
-| `min` | `min <a> <b>` | The smaller of a and b. |
+| `min` | `min <a> <b>` | The smaller of a and b. Broadcasts over a record or an array. |
 | `mod` | `mod <a> <b>` | Floored modulo — the sign follows the divisor, so `-90 \| mod 360` is 270. |
 | `mul` | `mul <a> <b>` | a × b. Broadcasts over a record or an array. |
+| `nearest` | `nearest <p> <knots>` | Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`. §6f |
 | `noise` | `noise <period> [octaves <octaves>] [seed <seed>]` | Smooth noise in 0..1 over fed time. Stateless, seeded, bit-identical across machines. §6f |
-| `not` | `not <a>` | Boolean not. |
+| `not` | `not <a>` | Boolean not. Broadcasts over a record or an array. |
 | `notify` | `notify <in> [<value>] <path>` | Write an occurrence to a plane path — the same write as `set`, stating the intent. §4 |
 | `nth` | `nth <in> <i>` | The i-th element, 0-based. Out of range is an **error**, never a clamp. §6c |
 | `once` | `once <in>` | The first value, then deaf until remount. §6f |
-| `or` | `or <a> <b>` | Boolean or. |
+| `or` | `or <a> <b>` | Boolean or. Broadcasts over a record or an array. |
 | `partition` | `partition <in> <pred>` | Route every arrival to exactly one of two outputs. §10 |
 | `pi` | `pi` | 3.14159…, emitted once at mount. |
 | `pow` | `pow <a> <b>` | a to the power b — `x \| pow 2` is x squared. |
@@ -1267,23 +1293,23 @@ and it is listed after the ports here so the arity reads at a glance.
 | `record` | `record …` | Record construction — the taught spelling is `{field: stream, …}`. §7 |
 | `reduce` | `reduce <in> [init <init>] (…)` | Left fold: accumulator into the body's first open port, element into the second. §6d |
 | `rose_above` | `rose_above <in> <threshold>` | Fires, with the value, on the way through. First observation baselines silently. §2 |
-| `round` | `round <in>` | Round to nearest. |
+| `round` | `round <in>` | Round to nearest. Broadcasts over a record or an array. |
 | `sample` | `sample <in> <period>` | At most one emission per period; the latest value wins. §6 |
 | `select` | `select <cond> <a> <b>` | cond ? a : b — all branches exist, one is chosen per tick. §6a |
 | `set` | `set <in> [<value>] <path>` | Write to a plane path. Piped, the input is the rousing and `value` is what is written. §4 |
 | `shape` | `shape <t> <curve>` | Ease a 0..1 value into 0..1. Curves: `linear smooth in out inout`. §6b |
 | `shuffle` | `shuffle <in> [seed <seed>]` | Seeded Fisher–Yates; `shuffle \| take 3` is three at random. §6d |
-| `sign` | `sign <in>` | −1, 0 or 1 (nan stays nan). |
-| `sin` | `sin <in>` | Sine, radians. |
+| `sign` | `sign <in>` | −1, 0 or 1 (nan stays nan). Broadcasts over a record or an array. |
+| `sin` | `sin <in>` | Sine, radians. Broadcasts over a record or an array. |
 | `sort` | `sort <in> [desc] [by (…)]` | **Stable** sort; ties keep input order. Without `by`, elements are their own keys. §6d |
-| `sqrt` | `sqrt <in>` | Square root (IEEE: a negative yields nan). |
+| `sqrt` | `sqrt <in>` | Square root (IEEE: a negative yields nan). Broadcasts over a record or an array. |
 | `stats` | `stats <in>` | `{max, mean, min, n, stddev}` over a numeric array. §6c |
 | `step` | `step <in> <of> [seed <seed>] [max <max>] [loop] [bounce] [reverse] [random] [shuffle]` | Step sequencer: each rousing emits the next element. Runs once unless told otherwise. §6c |
 | `sub` | `sub <a> <b>` | a − b. Broadcasts over a record or an array. |
 | `tag` | `tag <in> <@subject> <#tag>` | Add a subject to a tag. Idempotent; one tag per call. §7 |
 | `take` | `take <in> <n> [from <from>]` | At most `n` elements. A short array is **forgiven** — `nth` past the end is not. §6d |
 | `tally` | `tally <in>` | Running count of arrivals, as a value. Emits 0 at mount. §6f |
-| `tan` | `tan <in>` | Tangent, radians. |
+| `tan` | `tan <in>` | Tangent, radians. Broadcasts over a record or an array. |
 | `tap` | `tap <in> <label>` | Debug passthrough: log the value to the host's log bus. |
 | `tau` | `tau` | 2π, a whole turn, emitted once at mount. |
 | `throttle` | `throttle <in> <window>` | First occurrence passes, the rest are eaten for the window. §6 |

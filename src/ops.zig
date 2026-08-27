@@ -1848,7 +1848,13 @@ fn evalRand(ctx: *EvalCtx) EvalError!Emit {
 /// sides is the contract (ruled 2026-08-25) — the spatial pair does not guess
 /// at 2D, and a missing axis says which one.
 fn axis(ctx: *EvalCtx, port: usize, which: []const u8) EvalError![3]f64 {
-    const v = try raw(ctx, port);
+    return axisOf(ctx, try raw(ctx, port), which);
+}
+
+/// `axis` for a value that did not arrive on a port — an element of a knot
+/// array, say. Same contract and the same refusals, because a knot is a
+/// position and there is no second spelling for one.
+fn axisOf(ctx: *EvalCtx, v: []const u8, which: []const u8) EvalError![3]f64 {
     if (types.typeOfValue(v) != Tag.record) {
         return ctx.refuse("{s}: '{s}' is {s}, not record{{x, y, z}}", .{ ctx.op.name, which, describeTop(ctx, v) });
     }
@@ -1876,6 +1882,18 @@ fn separation(ctx: *EvalCtx) EvalError!f64 {
 
 fn evalDistance(ctx: *EvalCtx) EvalError!Emit {
     return emitF64(ctx, try separation(ctx));
+}
+
+/// `dot <a> <b>` — the scalar product of two positions-or-directions.
+///
+/// Writable today as `mul` plus two field reads plus two `add`s, which is six
+/// nodes to say one thing; and the thing it says — *how much of a is along b* —
+/// is the whole of projection, so it earns a word. Same `record{x, y, z}`
+/// contract as `distance`/`within`: the spatial family does not guess at 2D.
+fn evalDot(ctx: *EvalCtx) EvalError!Emit {
+    const a = try axis(ctx, 0, ctx.portName(0));
+    const b = try axis(ctx, 1, ctx.portName(1));
+    return emitF64(ctx, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
 }
 
 /// `within <b> <r>` — the question people actually ask, and the one that keeps
@@ -2731,6 +2749,137 @@ fn evalStep(ctx: *EvalCtx) EvalError!Emit {
 ///
 /// **Fewer than two knots refuses**, and because mount runs tick 0 that lands
 /// at mount for every mounted program. One knot is not a path.
+/// The curve `along` draws, in plain numbers — same segment split, same
+/// duplicated endpoints, same basis. `at` is the GLOBAL parameter in
+/// `[0, n-1]`, which is what `along` computes from `t` before it blends.
+///
+/// It exists separately from `blend4` because `nearest` evaluates the curve
+/// hundreds of times per tick and `blend4` packs a struple value each time. The
+/// two must not drift: `nearest` claims to be `along`'s inverse, and an inverse
+/// of a different curve is a lie. The gate below holds them together by
+/// round-tripping through the real `along`.
+fn curveAt(knots: []const [3]f64, at: f64) [3]f64 {
+    const n = knots.len;
+    var seg: usize = @intFromFloat(@floor(at));
+    if (seg > n - 2) seg = n - 2;
+    const u = at - @as(f64, @floatFromInt(seg));
+    const w = catmullWeights(u);
+    const k = [4][3]f64{
+        knots[if (seg == 0) 0 else seg - 1],
+        knots[seg],
+        knots[seg + 1],
+        knots[if (seg + 2 > n - 1) n - 1 else seg + 2],
+    };
+    var out: [3]f64 = .{ 0, 0, 0 };
+    for (0..3) |c| {
+        out[c] = w[0] * k[0][c] + w[1] * k[1][c] + w[2] * k[2][c] + w[3] * k[3][c];
+    }
+    return out;
+}
+
+fn sqDist(a: [3]f64, b: [3]f64) f64 {
+    const dx = a[0] - b[0];
+    const dy = a[1] - b[1];
+    const dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+/// Coarse samples per segment for `nearest`'s first pass. Enough that a bracket
+/// of two steps contains one minimum for any curve a person would author, and
+/// cheap enough to run every tick: this is 24 multiply-adds per segment, not 24
+/// allocations.
+const NEAREST_SAMPLES = 24;
+/// Ternary-narrowing rounds after the coarse pass. Each keeps 2/3 of the
+/// bracket, so 60 rounds take it to ~1e-11 of a segment — past f32 print
+/// precision, and a FIXED count, because a rill program that took a different
+/// number of iterations on Tuesday would not replay.
+const NEAREST_ROUNDS = 60;
+
+/// `nearest <p> <knots>` — where on the curve you are, as `t` in 0..1.
+///
+/// The exact inverse of `along`, and it emits the PARAMETER rather than the
+/// point on purpose. `nearest … | along …` recovers the point in one more word,
+/// while `t` on its own is progress round a circuit, lap detection, and — via
+/// `diff` — which way you are facing along it. A word that returned the point
+/// would throw all of that away.
+///
+/// Chris hit exactly this in Blade3D twenty years ago: `GetClosestPoint`
+/// returned a position and no caller could recover the parameter, so the
+/// follower could not use it and the source carries a comment wishing it could.
+///
+/// The search is a coarse scan then a ternary narrowing, and it **terminates on
+/// bracket width**. Blade3D's terminated when the two probes were equidistant,
+/// which is true at the first step whenever the query point sits ON the curve —
+/// the one case a follower is in almost always — and it bailed out at t≈0.25.
+/// The gate below stands on the curve and asks.
+fn evalNearest(ctx: *EvalCtx) EvalError!Emit {
+    const pos = try axis(ctx, 0, ctx.portName(0));
+    const kv = try raw(ctx, 1);
+    if (types.typeOfValue(kv) != Tag.array) {
+        return ctx.refuse("nearest: '{s}' is {s}, not an array of knots", .{ ctx.portName(1), describeTop(ctx, kv) });
+    }
+    const view = struple.view(try innerOf(ctx, kv));
+    const n = view.count() catch return ctx.refuse("nearest: '{s}' is a malformed array", .{ctx.portName(1)});
+    if (n < 2) {
+        return ctx.refuse("nearest: {d} knot{s} is not a path — `nearest` needs at least two", .{ n, if (n == 1) "" else "s" });
+    }
+
+    const knots = ctx.arena.alloc([3]f64, n) catch return ctx.refuse("nearest: out of memory", .{});
+    for (0..n) |i| {
+        const kn = (view.at(i) catch null) orelse
+            return ctx.refuse("nearest: '{s}' is a malformed array", .{ctx.portName(1)});
+        knots[i] = try axisOf(ctx, kn, ctx.portName(1));
+    }
+
+    const span: f64 = @floatFromInt(n - 1);
+    const step = span / @as(f64, @floatFromInt((n - 1) * NEAREST_SAMPLES));
+
+    // Coarse pass over the WHOLE curve. Blade3D scanned only the knots and then
+    // searched one segment, so a long segment whose interior was nearest but
+    // whose endpoints were far returned the wrong point.
+    var best_at: f64 = 0;
+    var best_d2 = sqDist(pos, curveAt(knots, 0));
+    var i: usize = 1;
+    const samples = (n - 1) * NEAREST_SAMPLES;
+    while (i <= samples) : (i += 1) {
+        const at = @min(span, @as(f64, @floatFromInt(i)) * step);
+        const d2 = sqDist(pos, curveAt(knots, at));
+        if (d2 < best_d2) {
+            best_d2 = d2;
+            best_at = at;
+        }
+    }
+
+    // Narrow the bracket the coarse winner sits in. Fixed rounds, width
+    // termination — never a "the probes agree" test.
+    var lo = @max(0.0, best_at - step);
+    var hi = @min(span, best_at + step);
+    var round: usize = 0;
+    while (round < NEAREST_ROUNDS) : (round += 1) {
+        const third = (hi - lo) / 3.0;
+        const m1 = lo + third;
+        const m2 = hi - third;
+        if (sqDist(pos, curveAt(knots, m1)) < sqDist(pos, curveAt(knots, m2))) hi = m2 else lo = m1;
+    }
+    // Pick the best of the bracket's ends and its middle, rather than trusting
+    // the middle. When the minimum sits AT an end of the curve the narrowing
+    // creeps toward that end without ever arriving — `hi` stays exactly `span`
+    // while `lo` climbs — so the midpoint answers 0.9999999999998 where the
+    // true answer is 1. Comparing the ends costs two evaluations and makes
+    // `nearest | along` land exactly on the last knot instead of near it.
+    const mid = (lo + hi) * 0.5;
+    var at = mid;
+    var d2 = sqDist(pos, curveAt(knots, mid));
+    for ([_]f64{ lo, hi }) |cand| {
+        const cd2 = sqDist(pos, curveAt(knots, cand));
+        if (cd2 < d2) {
+            d2 = cd2;
+            at = cand;
+        }
+    }
+    return emitF64(ctx, at / span);
+}
+
 fn evalAlong(ctx: *EvalCtx) EvalError!Emit {
     const t = try num(ctx, 0);
     const kv = try raw(ctx, 1);
@@ -3233,6 +3382,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "noise", .inputs = &.{ p.in("period", Tag.duration), p.kwOpt("octaves", Tag.number), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "Smooth noise in 0..1 over fed time — `noise 80ms` flickers, `noise 20s` drifts. Stateless, seeded (default 0), bit-identical across machines.", .eval = evalNoise },
     .{ .name = "rand", .inputs = &.{ p.occ("in", Tag.any), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .help = "White: a fresh value in 0..1 per rousing — `plane.trigger | rand | mul 4 | floor`. Same generator as `shuffle`; seed defaults to 0.", .eval = evalRand },
     .{ .name = "distance", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Distance between two positions — both record{x, y, z}; a missing axis is named.", .eval = evalDistance },
+    .{ .name = "dot", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Scalar product of two positions or directions — both record{x, y, z}. How much of a lies along b.", .eval = evalDot },
     .{ .name = "within", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record), p.in("r", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Is a within r of b? Both record{x, y, z}.", .eval = evalWithin },
     // tier 2, beat 4a — events and levels.
     .{ .name = "pulse", .inputs = &.{ p.in("period", Tag.duration), p.kwOpt("width", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "Value source: 1 for `width`, else 0, once per period — `pulse 1s [width 100ms]`. Width defaults to a tenth of the period. `every` is the occurrence source.", .eval = evalPulse },
@@ -3261,6 +3411,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "transpose", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "AoS ↔ SoA, self-inverse — `{a: [1,2], b: [3,4]}` ↔ `[{a:1,b:3},{a:2,b:4}]`. Ragged input refuses, both sides named.", .eval = evalTranspose },
     .{ .name = "shuffle", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Seeded Fisher–Yates — `shuffle [seed 7] | take 3` is three at random, no repeats. Seed defaults to 0; bit-identical across machines.", .eval = evalShuffle },
     .{ .name = "step", .inputs = &.{ p.occ("in", Tag.any), p.in("of", Tag.array), p.kwOpt("seed", Tag.number), p.kwOpt("max", Tag.number) }, .statics = &.{ .{ .name = "loop", .kind = .word, .flag = true, .optional = true }, .{ .name = "bounce", .kind = .word, .flag = true, .optional = true }, .{ .name = "reverse", .kind = .word, .flag = true, .optional = true }, .{ .name = "random", .kind = .word, .flag = true, .optional = true }, .{ .name = "shuffle", .kind = .word, .flag = true, .optional = true } }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Step sequencer — `plane.beat | step [60, 64, 67] loop`. Each rousing emits the NEXT element; by default it runs once and the wave ends. Order: sequential (`reverse` walks down) or `random`/`shuffle`; end: `loop`, `bounce`, or stop. `max n` caps emissions.", .eval = evalStep },
+    .{ .name = "nearest", .inputs = &.{ p.in("p", Tag.record), p.in("knots", Tag.array) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`. Fewer than two knots refuses.", .eval = evalNearest },
     .{ .name = "along", .inputs = &.{ p.in("t", Tag.number), p.in("knots", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Travel a Catmull-Rom curve through the knots as t goes 0..1 — `along [a, b, c]`. Clamps outside 0..1; fewer than two knots refuses.", .eval = evalAlong },
     // tier 2, beat 2b — contracts. One shape literal, two promises.
     .{ .name = "expect", .inputs = &.{p.opt("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .fails_mount = true, .help = "Assert a shape ONCE, at mount — `expect {id: string, distance: number} [exact]`. A mismatch refuses the mount. Costs nothing afterwards; never falls back to a runtime check.", .eval = evalExpect },

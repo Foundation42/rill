@@ -2143,6 +2143,8 @@ test "every core op declares its class deliberately" {
         .{ .name = "noise", .class = .reads }, // fed time
         .{ .name = "rand", .class = .reads }, // own draw counter
         .{ .name = "distance", .class = .pure },
+        .{ .name = "dot", .class = .pure },
+        .{ .name = "nearest", .class = .pure }, // a search, but a pure one: same p, same knots, same t
         .{ .name = "within", .class = .pure },
         .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
@@ -7728,6 +7730,97 @@ test "beat 4b: alarm when a raider is within 10m of the gate — the row, one li
     try fx.rt.feed(.{ .path = "plane.entities.raider.pos", .value = pk.bytes() });
     try fx.rt.tick(.{});
     try testing.expect(types.asBool(fx.rt.readSlot(out).?).?);
+}
+
+test "`dot`: the scalar product, and what it is for" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: 3, y: 0, z: 4} | dot {x: 3, y: 0, z: 4} | set plane.self
+        \\{x: 1, y: 0, z: 0} | dot {x: 0, y: 1, z: 0} | set plane.side
+        \\{x: 1, y: 0, z: 0} | dot {x: -1, y: 0, z: 0} | set plane.behind
+        \\{x: 2, y: 3, z: 4} | dot {x: 5, y: 6, z: 7} | set plane.mixed
+    , .{});
+    defer fx.deinit();
+
+    // With itself it is the squared length — 3-4-5, so 25.
+    try testing.expectEqual(@as(f64, 25), slotNum(&fx, "programs.p.dot1.out.out").?);
+    // The three facings that make it useful: side on is 0, behind is negative,
+    // and (below) dead ahead is positive. That trio is the whole of `dot` as an
+    // author meets it.
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.dot2.out.out").?);
+    try testing.expectEqual(@as(f64, -1), slotNum(&fx, "programs.p.dot3.out.out").?);
+    // 2·5 + 3·6 + 4·7
+    try testing.expectEqual(@as(f64, 56), slotNum(&fx, "programs.p.dot4.out.out").?);
+}
+
+test "`dot` refuses a non-position, naming the axis it wanted" {
+    // Same contract as `distance`/`within`, and the same words: the spatial
+    // family does not guess at 2D (ruled 2026-08-25).
+    var fx: Fixture = undefined;
+    const bad = mountFixture(testing.allocator, &fx,
+        \\{x: 1, y: 2} | dot {x: 1, y: 2, z: 3} | set plane.out
+    , .{});
+    if (bad) |_| {
+        defer fx.deinit();
+        try fx.rt.tick(.{});
+        // The wave dies at the node rather than inventing z = 0.
+        try testing.expect(fx.rt.readSlot("programs.p.dot1.out.out") == null);
+    } else |_| {}
+}
+
+test "`nearest` is the inverse of `along` — including when you are ON the curve" {
+    // The property the word claims, round-tripped through the REAL `along`, so
+    // the two cannot drift onto different curves.
+    //
+    // Standing on the curve is the case Blade3D got wrong: its search stopped
+    // when its two probes were equidistant, which is true at the first step for
+    // any point on the curve (or on a perpendicular bisector), and it returned
+    // t≈0.25 for everything. This asks at five places along the curve.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[0, 0.25, 0.5, 0.75, 1] | map (along [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 5, z: 0}, {x: 30, y: 0, z: 0}]) as pts
+        \\pts | map (nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 5, z: 0}, {x: 30, y: 0, z: 0}]) | set plane.ts
+    , .{});
+    defer fx.deinit();
+
+    const got = fx.rt.readSlot("programs.p.map2.out.out").?;
+    const inner = try innerOf(testing.allocator, got);
+    defer testing.allocator.free(inner);
+    const view = struple.view(inner);
+    const want = [_]f64{ 0, 0.25, 0.5, 0.75, 1 };
+    for (want, 0..) |w, i| {
+        const cell = (try view.at(i)).?;
+        try testing.expectApproxEqAbs(w, types.asNumber(cell).?, 1e-4);
+    }
+}
+
+test "`nearest`: a point off the curve lands on the nearest part of it" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        // A straight run along x. A point hovering above the middle of it must
+        // come back at the middle, not at an end.
+        \\{x: 15, y: 40, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | set plane.mid
+        // ...and one past the far end clamps to 1 rather than running off.
+        \\{x: 900, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | set plane.past
+        \\{x: -900, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | set plane.before
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectApproxEqAbs(@as(f64, 0.5), slotNum(&fx, "programs.p.nearest1.out.out").?, 1e-3);
+    try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.nearest2.out.out").?);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.nearest3.out.out").?);
+}
+
+test "`nearest` refuses what `along` refuses, in the same words" {
+    var fx: Fixture = undefined;
+    const one_knot = mountFixture(testing.allocator, &fx,
+        \\{x: 0, y: 0, z: 0} | nearest [{x: 1, y: 1, z: 1}] | set plane.out
+    , .{});
+    if (one_knot) |_| {
+        defer fx.deinit();
+        try fx.rt.tick(.{});
+        try testing.expect(fx.rt.readSlot("programs.p.nearest1.out.out") == null);
+    } else |_| {}
 }
 
 test "beat 4b: `distance` is euclidean over record{x, y, z}" {
