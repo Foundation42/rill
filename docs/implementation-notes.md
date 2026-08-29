@@ -2294,3 +2294,63 @@ Recorded rather than fixed: the honest options are to generate the column from
 the registry (losing the prose that makes it readable) or to gate a specific
 claim like broadcasting against `Port.broadcasts`, which would catch this one
 class and no other. Worth doing when a second claim drifts.
+
+## `loop` — the closed curve (2026-08-29)
+
+**Ruled (Chris):** a closed track is said to the WORDS, not padded into the
+data — `along <t> <knots> [loop]` and `nearest <p> <knots> [loop]`. Blade3D
+had closed-spline support built in (XNA's `CurveLoopType` via
+`PreLoop`/`PostLoop` on `PositionCurve`), and its lesson stands: loop is a
+property of the curve, never the end-user's knot list.
+
+**Bought by:** the seam kink. rail.rill closed its circuit the only way the
+open words allowed — first knot repeated as the last, `t` wrapped by `mod 1`
+outside — and the curve cornered once per lap at t=0/1, because `along`
+clamps its END tangents: the basis entering the seam and the basis leaving it
+disagreed. The gaze rounded that corner at ~0.26 rad/frame, one frame a lap.
+
+**What `loop` means, in one rule: the seam is not special.**
+- There are n segments, not n−1 — the closing segment from the last knot back
+  to the first is a segment like any other, and the tangent neighbours wrap
+  with it. Crossing the seam reads the same four knots as approaching it.
+- `t` WRAPS where the open curve clamps, floored like the `mod` word: t=1 IS
+  t=0, 1.02 is 0.02, −0.25 is 0.75. A loop has no ends to clamp to.
+- `nearest … loop` searches all n segments and its narrowing bracket runs
+  STRAIGHT THROUGH the seam — `curveAt` wraps any real parameter, so a
+  bracket of [−0.02, 0.04] is legal and converges across it. The answer is
+  canonical: `[0, 1)`, seam at 0.
+
+**The word is `loop`, by two in-house precedents** — `step … loop` (after the
+last element comes the first) and matryoshka's `camera path … spline`, which
+already "closes the circuit with `loop`". Same word, same sentence, third
+place it is said.
+
+**Two refusals, both mount-time** (tick 0), shared by both words through one
+helper so they cannot drift on what a loop is:
+- fewer than three knots — two is a there-and-back, which an open curve
+  already says;
+- the first knot repeated as the last — that is the OPEN-curve closing idiom
+  this word retires, and under `loop` it would be a zero-length segment with
+  a cusp exactly where the kink used to be. Refusing names the migration
+  mistake the moment it is made.
+
+**The gates, and the mutants that paid for them** (8/8 bitten):
+- *seam identity* — t=1 and t=0 are byte-identical, one lap forward and one
+  lap back likewise (bit-exact, the wrap is floored arithmetic);
+- *tangent continuity, measured against the workaround* — one test evaluates
+  BOTH spellings at ±0.0005 of the seam: the padded curve corners (>0.5 rad on
+  the square track), the loop does not (<0.05 rad, and <kink/10). Rule 1:
+  run where A ≠ B and assert the inequality;
+- *rotation invariance* — a closed curve through a rotated knot list is the
+  same curve one segment out of phase (`t − 1/n`), asserted at 1e-9 either
+  side of the seam. A clamped tangent pins a corner to wherever the list
+  starts; rotating the list would move it, and this gate would see it;
+- *the inverse, seam included* — round-tripped through the REAL
+  `along … loop` like the open gate. **t=0.995 is load-bearing:** its curve
+  point sits closer to the seam than to any coarse sample, the coarse winner
+  is the seam itself, and the bracket must straddle it — a clamped bracket
+  converges to 0 and answers half a percent of a lap wrong;
+- *canonical emit* — asserted separately, because the circle metric the
+  inverse gate uses CANNOT see it: −0.005 and 0.995 are the same circle
+  point. The one surviving mutant of the first pass (emit without the final
+  `@mod`) was killed by exactly this assert.

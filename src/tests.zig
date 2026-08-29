@@ -8063,6 +8063,242 @@ test "`nearest` refuses what `along` refuses, in the same words" {
     } else |_| {}
 }
 
+// ---------------------------------------------------------------------------
+// `loop` — the closed curve (ruled 2026-08-29, the seam-kink cure).
+//
+// `along ks loop` closes the curve back to its first knot and wraps t;
+// `nearest ks loop` searches that same closed curve. The gates below hold the
+// three claims the words make: the seam is not special (t=1 IS t=0, and
+// rotating the knot list only re-phases t), the tangent is continuous across
+// it (measured against the padded-knot workaround, which shows the kink in
+// the same breath — rule 1: run where A ≠ B and assert the inequality), and
+// `nearest … loop` stays `along … loop`'s inverse even when the search
+// bracket straddles the seam.
+// ---------------------------------------------------------------------------
+
+/// The x/y/z of a record slot, for the curve gates below.
+fn slotVec3(fx: *Fixture, slot: []const u8) ![3]f64 {
+    const out = fx.rt.readSlot(slot) orelse return error.NoSlot;
+    const f = try recordFields(testing.allocator, out);
+    defer freeFields(testing.allocator, f);
+    if (f.len != 3) return error.NotAVec3;
+    return .{ f[0].v, f[1].v, f[2].v };
+}
+
+/// The angle between two directions, for the seam-tangent gate.
+fn angleBetween(a: [3]f64, b: [3]f64) f64 {
+    var dot: f64 = 0;
+    var la: f64 = 0;
+    var lb: f64 = 0;
+    for (0..3) |c| {
+        dot += a[c] * b[c];
+        la += a[c] * a[c];
+        lb += b[c] * b[c];
+    }
+    const cosv = dot / (@sqrt(la) * @sqrt(lb));
+    return std.math.acos(@min(1.0, @max(-1.0, cosv)));
+}
+
+/// Distance between two parameters ON THE CIRCLE, because on a loop the seam
+/// is one point wearing two numbers: 0.99999 and 0 are 1e-5 apart, not one.
+fn circleDist(a: f64, b: f64) f64 {
+    const d = @abs(a - b);
+    return @min(d, 1 - d);
+}
+
+test "`along … loop`: t=1 IS t=0, and t wraps instead of clamping" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}] as track
+        \\plane.t | along track loop | write plane.a
+        \\plane.t | add 1 | along track loop | write plane.b
+        \\plane.t | sub 1 | along track loop | write plane.c
+    , .{.{ "plane.t", @as(f64, 0.25) }});
+    defer fx.deinit();
+
+    // One lap forward and one lap back are the same place, bit for bit.
+    const a = fx.rt.readSlot("programs.p.along1.out.out").?;
+    const b = fx.rt.readSlot("programs.p.along2.out.out").?;
+    const c = fx.rt.readSlot("programs.p.along3.out.out").?;
+    try testing.expect(std.mem.eql(u8, a, b));
+    try testing.expect(std.mem.eql(u8, a, c));
+
+    // And the seam is one point wearing two numbers: t=1 lands where t=0 does.
+    try feedValue(&fx.rt, testing.allocator, "plane.t", 1);
+    try fx.rt.tick(.{});
+    const at_one = try testing.allocator.dupe(u8, fx.rt.readSlot("programs.p.along1.out.out").?);
+    defer testing.allocator.free(at_one);
+    try feedValue(&fx.rt, testing.allocator, "plane.t", 0);
+    try fx.rt.tick(.{});
+    try testing.expect(std.mem.eql(u8, at_one, fx.rt.readSlot("programs.p.along1.out.out").?));
+}
+
+test "`along … loop`: the tangent is continuous across the seam — and the padded-knot workaround's is not" {
+    // The kink this word exists to remove, measured. The padded curve is the
+    // OLD closed-track spelling (rail.rill's original): first knot repeated as
+    // the last, t wrapped by `mod` outside. Its two one-sided tangents at the
+    // seam differ by a corner (the end tangents are clamped); the loop's two
+    // differ by O(h) of ordinary curvature. Same knots, same h, both angles
+    // asserted — the gate runs where A ≠ B.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}] as track
+        \\[{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}, {x: 0, y: 0, z: 0}] as padded
+        \\0.9995 | along padded | write plane.p_in
+        \\0.0005 | along padded | write plane.p_out
+        \\0.9995 | along track loop | write plane.q_in
+        \\0.0005 | along track loop | write plane.q_out
+    , .{});
+    defer fx.deinit();
+
+    const p_in = try slotVec3(&fx, "programs.p.along1.out.out");
+    const p_out = try slotVec3(&fx, "programs.p.along2.out.out");
+    const q_in = try slotVec3(&fx, "programs.p.along3.out.out");
+    const q_out = try slotVec3(&fx, "programs.p.along4.out.out");
+    const seam = [3]f64{ 0, 0, 0 }; // both curves pass through the first knot at the seam
+
+    const kink = angleBetween(
+        .{ seam[0] - p_in[0], seam[1] - p_in[1], seam[2] - p_in[2] },
+        .{ p_out[0] - seam[0], p_out[1] - seam[1], p_out[2] - seam[2] },
+    );
+    const smooth = angleBetween(
+        .{ seam[0] - q_in[0], seam[1] - q_in[1], seam[2] - q_in[2] },
+        .{ q_out[0] - seam[0], q_out[1] - seam[1], q_out[2] - seam[2] },
+    );
+    // The workaround corners (~90° on this track); the loop does not.
+    try testing.expect(kink > 0.5);
+    try testing.expect(smooth < 0.05);
+    try testing.expect(smooth < kink / 10.0);
+}
+
+test "`along … loop`: rotating the knot list only re-phases t — no seam anywhere" {
+    // The structural form of "the seam is not special": a closed curve through
+    // rotated knots is the SAME curve, one segment out of phase. A clamped end
+    // tangent would pin a corner to wherever the list happens to start, and
+    // rotating the list would move it — this gate would see the two curves
+    // disagree hardest exactly there.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}] as track
+        \\[{x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}, {x: 0, y: 0, z: 0}] as turned
+        \\plane.t | along track loop | write plane.a
+        \\plane.t | sub 0.25 | along turned loop | write plane.b
+    , .{.{ "plane.t", @as(f64, 0.99) }});
+    defer fx.deinit();
+
+    // 0.99 and 0.01 sit a hair either side of track's seam — where a pinned
+    // corner would disagree most; 0.30 and 0.625 are ordinary mid-curve.
+    for ([_]f64{ 0.99, 0.01, 0.30, 0.625 }) |t| {
+        try feedValue(&fx.rt, testing.allocator, "plane.t", t);
+        try fx.rt.tick(.{});
+        const a = try slotVec3(&fx, "programs.p.along1.out.out");
+        const b = try slotVec3(&fx, "programs.p.along2.out.out");
+        for (0..3) |c| try testing.expectApproxEqAbs(a[c], b[c], 1e-9);
+    }
+}
+
+test "`along` refuses a two-knot loop, at mount" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.t | along [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}] loop | write plane.out
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "along", "2 knots", "at least three" });
+    try testing.expect(fx.rt.readSlot("programs.p.along1.out.out") == null);
+}
+
+test "`nearest` refuses a two-knot loop, in the same words" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\{x: 0, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}] loop | write plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "nearest", "2 knots", "at least three" });
+    try testing.expect(fx.rt.readSlot("programs.p.nearest1.out.out") == null);
+}
+
+test "`along … loop` refuses the duplicated closing knot — the open-curve idiom it replaces" {
+    // [a, b, c, a] closed a track before `loop` existed. Under `loop` the
+    // closing segment already exists, so the duplicate would be a zero-length
+    // segment with a cusp exactly where the seam kink used to be. Refusing at
+    // mount names the migration mistake the moment it is made.
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\plane.t | along [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 5, y: 8, z: 0}, {x: 0, y: 0, z: 0}] loop | write plane.out
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "along", "same point", "drop the duplicate" });
+    try testing.expect(fx.rt.readSlot("programs.p.along1.out.out") == null);
+}
+
+test "`nearest … loop` refuses the duplicated closing knot, in the same words" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\{x: 1, y: 1, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 5, y: 8, z: 0}, {x: 0, y: 0, z: 0}] loop | write plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "nearest", "same point", "drop the duplicate" });
+    try testing.expect(fx.rt.readSlot("programs.p.nearest1.out.out") == null);
+}
+
+test "`nearest … loop` is the inverse of `along … loop` — across the seam included" {
+    // Round-tripped through the REAL `along … loop`, like the open-curve gate
+    // above, so the two words cannot drift onto different closed curves.
+    //
+    // 0.995 is load-bearing: its curve point sits closer to the seam than to
+    // any coarse sample, so the coarse winner is the seam itself and the
+    // narrowing bracket must straddle it — the case where an open-curve
+    // bracket, clamped at the ends, would converge to 0 and answer a full
+    // half-percent of a lap wrong.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\[{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}] as track
+        \\[0, 0.01, 0.25, 0.5, 0.75, 0.99, 0.995] | map (along track loop) as pts
+        \\pts | map (nearest track loop) | write plane.ts
+    , .{});
+    defer fx.deinit();
+
+    const got = fx.rt.readSlot("programs.p.map2.out.out").?;
+    const inner = try innerOf(testing.allocator, got);
+    defer testing.allocator.free(inner);
+    const view = struple.view(inner);
+    const want = [_]f64{ 0, 0.01, 0.25, 0.5, 0.75, 0.99, 0.995 };
+    for (want, 0..) |w, i| {
+        const cell = (try view.at(i)).?;
+        const t_back = types.asNumber(cell).?;
+        try testing.expect(circleDist(w, t_back) < 1e-4);
+        // …and CANONICALLY: in [0, 1), never −ε or 1+ε. circleDist cannot see
+        // this (−0.005 and 0.995 are the same circle point), so it is asserted
+        // on its own — the 0.995 case is the one whose search settles at a
+        // negative parameter and relies on the emit to wrap it.
+        try testing.expect(t_back >= 0.0 and t_back < 1.0);
+    }
+}
+
+test "`nearest … loop`: points off the curve near the seam land near the seam, not at t≈0.25" {
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        // The track's seam knot is the {0,0,0} corner; travel arrives along −y
+        // and leaves along +x. One point flanks the arriving edge, one the
+        // leaving edge, one sits square outside the corner itself.
+        \\[{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}] as track
+        \\{x: -3, y: 2, z: 0} | nearest track loop | write plane.arriving
+        \\{x: 2, y: -3, z: 0} | nearest track loop | write plane.leaving
+        \\{x: -3, y: -3, z: 0} | nearest track loop | write plane.corner
+    , .{});
+    defer fx.deinit();
+
+    const arriving = slotNum(&fx, "programs.p.nearest1.out.out").?;
+    const leaving = slotNum(&fx, "programs.p.nearest2.out.out").?;
+    const corner = slotNum(&fx, "programs.p.nearest3.out.out").?;
+    try testing.expect(arriving > 0.8 and arriving < 1.0);
+    try testing.expect(leaving > 0.0 and leaving < 0.2);
+    try testing.expect(circleDist(corner, 0) < 0.02);
+    // The answer is CANONICAL: in [0, 1), never −ε or 1+ε — circleDist would
+    // forgive an unwrapped emit here, so the range is asserted on its own.
+    try testing.expect(corner >= 0.0 and corner < 1.0);
+}
+
 test "beat 4b: `distance` is euclidean over record{x, y, z}" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,

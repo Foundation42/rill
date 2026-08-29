@@ -2774,24 +2774,68 @@ fn evalStep(ctx: *EvalCtx) EvalError!Emit {
 /// hundreds of times per tick and `blend4` packs a struple value each time. The
 /// two must not drift: `nearest` claims to be `along`'s inverse, and an inverse
 /// of a different curve is a lie. The gate below holds them together by
-/// round-tripping through the real `along`.
-fn curveAt(knots: []const [3]f64, at: f64) [3]f64 {
+/// round-tripping through the real `along` — in both modes.
+///
+/// Under `loop` there are n segments, not n−1: the closing segment from the
+/// last knot back to the first is a segment like any other, and the tangent
+/// neighbours wrap with it. `at` wraps too (floored, like the `mod` word), so
+/// any real parameter lands on the circuit — which is what lets `nearest`'s
+/// narrowing straddle the seam without noticing it.
+fn curveAt(knots: []const [3]f64, at: f64, loop: bool) [3]f64 {
     const n = knots.len;
-    var seg: usize = @intFromFloat(@floor(at));
-    if (seg > n - 2) seg = n - 2;
-    const u = at - @as(f64, @floatFromInt(seg));
+    var seg: usize = undefined;
+    var u: f64 = undefined;
+    var k: [4][3]f64 = undefined;
+    if (loop) {
+        const span: f64 = @floatFromInt(n);
+        const a = @mod(at, span);
+        seg = @intFromFloat(@floor(a));
+        if (seg > n - 1) seg = n - 1; // @mod may graze span from below
+        u = a - @as(f64, @floatFromInt(seg));
+        k = .{
+            knots[(seg + n - 1) % n],
+            knots[seg],
+            knots[(seg + 1) % n],
+            knots[(seg + 2) % n],
+        };
+    } else {
+        seg = @intFromFloat(@floor(at));
+        if (seg > n - 2) seg = n - 2;
+        u = at - @as(f64, @floatFromInt(seg));
+        k = .{
+            knots[if (seg == 0) 0 else seg - 1],
+            knots[seg],
+            knots[seg + 1],
+            knots[if (seg + 2 > n - 1) n - 1 else seg + 2],
+        };
+    }
     const w = catmullWeights(u);
-    const k = [4][3]f64{
-        knots[if (seg == 0) 0 else seg - 1],
-        knots[seg],
-        knots[seg + 1],
-        knots[if (seg + 2 > n - 1) n - 1 else seg + 2],
-    };
     var out: [3]f64 = .{ 0, 0, 0 };
     for (0..3) |c| {
         out[c] = w[0] * k[0][c] + w[1] * k[1][c] + w[2] * k[2][c] + w[3] * k[3][c];
     }
     return out;
+}
+
+/// What `loop` refuses, shared verbatim by `along` and `nearest` so the two
+/// words cannot drift on what a loop is. Three knots is the smallest closed
+/// circuit — through two, the wrapped basis degenerates to a straight
+/// there-and-back, which an open curve already says. And a first knot
+/// repeated as the last is the OPEN-curve closing idiom (rail.rill's
+/// original spelling): under `loop` the closing segment already exists, so
+/// the duplicate would add a zero-length segment with a cusp exactly where
+/// the seam kink used to be — the thing `loop` exists to remove.
+fn refuseOpenLoop(ctx: *EvalCtx, comptime word: []const u8, view: anytype, n: usize) EvalError!void {
+    if (n < 3) {
+        return ctx.refuse(word ++ ": {d} knots is not a loop — a loop needs at least three", .{n});
+    }
+    const first = (view.at(0) catch null) orelse
+        return ctx.refuse(word ++ ": '{s}' is a malformed array", .{ctx.portName(1)});
+    const last = (view.at(n - 1) catch null) orelse
+        return ctx.refuse(word ++ ": '{s}' is a malformed array", .{ctx.portName(1)});
+    if (std.mem.eql(u8, first, last)) {
+        return ctx.refuse(word ++ ": the first knot and the last are the same point — a loop closes itself; drop the duplicate", .{});
+    }
 }
 
 fn sqDist(a: [3]f64, b: [3]f64) f64 {
@@ -2840,6 +2884,8 @@ fn evalNearest(ctx: *EvalCtx) EvalError!Emit {
     if (n < 2) {
         return ctx.refuse("nearest: {d} knot{s} is not a path — `nearest` needs at least two", .{ n, if (n == 1) "" else "s" });
     }
+    const loop = ctx.statics[0].word.len > 0;
+    if (loop) try refuseOpenLoop(ctx, "nearest", view, n);
 
     const knots = ctx.arena.alloc([3]f64, n) catch return ctx.refuse("nearest: out of memory", .{});
     for (0..n) |i| {
@@ -2848,19 +2894,21 @@ fn evalNearest(ctx: *EvalCtx) EvalError!Emit {
         knots[i] = try axisOf(ctx, kn, ctx.portName(1));
     }
 
-    const span: f64 = @floatFromInt(n - 1);
-    const step = span / @as(f64, @floatFromInt((n - 1) * NEAREST_SAMPLES));
+    // A loop has one more segment than the open curve: the closing one.
+    const segs = if (loop) n else n - 1;
+    const span: f64 = @floatFromInt(segs);
+    const samples = segs * NEAREST_SAMPLES;
+    const step = span / @as(f64, @floatFromInt(samples));
 
     // Coarse pass over the WHOLE curve. Blade3D scanned only the knots and then
     // searched one segment, so a long segment whose interior was nearest but
     // whose endpoints were far returned the wrong point.
     var best_at: f64 = 0;
-    var best_d2 = sqDist(pos, curveAt(knots, 0));
+    var best_d2 = sqDist(pos, curveAt(knots, 0, loop));
     var i: usize = 1;
-    const samples = (n - 1) * NEAREST_SAMPLES;
     while (i <= samples) : (i += 1) {
         const at = @min(span, @as(f64, @floatFromInt(i)) * step);
-        const d2 = sqDist(pos, curveAt(knots, at));
+        const d2 = sqDist(pos, curveAt(knots, at, loop));
         if (d2 < best_d2) {
             best_d2 = d2;
             best_at = at;
@@ -2868,15 +2916,18 @@ fn evalNearest(ctx: *EvalCtx) EvalError!Emit {
     }
 
     // Narrow the bracket the coarse winner sits in. Fixed rounds, width
-    // termination — never a "the probes agree" test.
-    var lo = @max(0.0, best_at - step);
-    var hi = @min(span, best_at + step);
+    // termination — never a "the probes agree" test. On a loop the bracket may
+    // straddle the seam — `lo` below 0 or `hi` past the span — and `curveAt`
+    // wraps, so the narrowing never notices the seam; an open curve pins the
+    // bracket inside its ends instead.
+    var lo = if (loop) best_at - step else @max(0.0, best_at - step);
+    var hi = if (loop) best_at + step else @min(span, best_at + step);
     var round: usize = 0;
     while (round < NEAREST_ROUNDS) : (round += 1) {
         const third = (hi - lo) / 3.0;
         const m1 = lo + third;
         const m2 = hi - third;
-        if (sqDist(pos, curveAt(knots, m1)) < sqDist(pos, curveAt(knots, m2))) hi = m2 else lo = m1;
+        if (sqDist(pos, curveAt(knots, m1, loop)) < sqDist(pos, curveAt(knots, m2, loop))) hi = m2 else lo = m1;
     }
     // Pick the best of the bracket's ends and its middle, rather than trusting
     // the middle. When the minimum sits AT an end of the curve the narrowing
@@ -2884,17 +2935,21 @@ fn evalNearest(ctx: *EvalCtx) EvalError!Emit {
     // while `lo` climbs — so the midpoint answers 0.9999999999998 where the
     // true answer is 1. Comparing the ends costs two evaluations and makes
     // `nearest | along` land exactly on the last knot instead of near it.
+    // (A loop has no ends, but the comparison stays: it is two evaluations,
+    // and the bracket's best is the bracket's best either way.)
     const mid = (lo + hi) * 0.5;
     var at = mid;
-    var d2 = sqDist(pos, curveAt(knots, mid));
+    var d2 = sqDist(pos, curveAt(knots, mid, loop));
     for ([_]f64{ lo, hi }) |cand| {
-        const cd2 = sqDist(pos, curveAt(knots, cand));
+        const cd2 = sqDist(pos, curveAt(knots, cand, loop));
         if (cd2 < d2) {
             d2 = cd2;
             at = cand;
         }
     }
-    return emitF64(ctx, at / span);
+    // On a loop the seam is one point wearing two numbers; emit it canonically
+    // in [0, 1) — the floored `@mod` sends `span` to 0.
+    return emitF64(ctx, if (loop) @mod(at, span) / span else at / span);
 }
 
 fn evalAlong(ctx: *EvalCtx) EvalError!Emit {
@@ -2908,16 +2963,35 @@ fn evalAlong(ctx: *EvalCtx) EvalError!Emit {
     if (n < 2) {
         return ctx.refuse("along: {d} knot{s} is not a path — `along` needs at least two", .{ n, if (n == 1) "" else "s" });
     }
-    const at = @min(1.0, @max(0.0, t)) * @as(f64, @floatFromInt(n - 1));
-    var seg: usize = @intFromFloat(@floor(at));
-    if (seg > n - 2) seg = n - 2; // t == 1 lands on the last segment's end
-    const u = at - @as(f64, @floatFromInt(seg));
-    const idx = [4]usize{
-        if (seg == 0) 0 else seg - 1,
-        seg,
-        seg + 1,
-        if (seg + 2 > n - 1) n - 1 else seg + 2,
-    };
+    const loop = ctx.statics[0].word.len > 0;
+    var seg: usize = undefined;
+    var u: f64 = undefined;
+    var idx: [4]usize = undefined;
+    if (loop) {
+        try refuseOpenLoop(ctx, "along", view, n);
+        // A loop has no ends, so t WRAPS where the open curve clamps —
+        // floored like the `mod` word, so t=1 IS t=0 and −0.25 is 0.75. The
+        // closing segment from the last knot back to the first is a segment
+        // like any other, and the tangent neighbours wrap with it: entering
+        // the seam and leaving it read the same four knots, which is the
+        // whole cure for the once-per-lap kink.
+        const at = @mod(t, 1.0) * @as(f64, @floatFromInt(n));
+        seg = @intFromFloat(@floor(at));
+        if (seg > n - 1) seg = n - 1; // @mod may graze 1 from below
+        u = at - @as(f64, @floatFromInt(seg));
+        idx = .{ (seg + n - 1) % n, seg, (seg + 1) % n, (seg + 2) % n };
+    } else {
+        const at = @min(1.0, @max(0.0, t)) * @as(f64, @floatFromInt(n - 1));
+        seg = @intFromFloat(@floor(at));
+        if (seg > n - 2) seg = n - 2; // t == 1 lands on the last segment's end
+        u = at - @as(f64, @floatFromInt(seg));
+        idx = .{
+            if (seg == 0) 0 else seg - 1,
+            seg,
+            seg + 1,
+            if (seg + 2 > n - 1) n - 1 else seg + 2,
+        };
+    }
     var k: [4][]const u8 = undefined;
     for (idx, 0..) |ix, i| {
         k[i] = (view.at(ix) catch null) orelse return ctx.refuse("along: '{s}' is a malformed array", .{ctx.portName(1)});
@@ -3454,8 +3528,8 @@ const CORE = [_]registry.OpDef{
     .{ .name = "transpose", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "AoS ↔ SoA, self-inverse — `{a: [1,2], b: [3,4]}` ↔ `[{a:1,b:3},{a:2,b:4}]`. Ragged input refuses, both sides named.", .eval = evalTranspose },
     .{ .name = "shuffle", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Seeded Fisher–Yates — `shuffle [seed 7] | take 3` is three at random, no repeats. Seed defaults to 0; bit-identical across machines.", .eval = evalShuffle },
     .{ .name = "step", .inputs = &.{ p.occ("in", Tag.any), p.in("of", Tag.array), p.kwOpt("seed", Tag.number), p.kwOpt("max", Tag.number) }, .statics = &.{ .{ .name = "loop", .kind = .word, .flag = true, .optional = true }, .{ .name = "bounce", .kind = .word, .flag = true, .optional = true }, .{ .name = "reverse", .kind = .word, .flag = true, .optional = true }, .{ .name = "random", .kind = .word, .flag = true, .optional = true }, .{ .name = "shuffle", .kind = .word, .flag = true, .optional = true } }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Step sequencer — `plane.beat | step [60, 64, 67] loop`. Each rousing emits the NEXT element; by default it runs once and the wave ends. Order: sequential (`reverse` walks down) or `random`/`shuffle`; end: `loop`, `bounce`, or stop. `max n` caps emissions.", .eval = evalStep },
-    .{ .name = "nearest", .inputs = &.{ p.in("p", Tag.record), p.in("knots", Tag.array) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`. Fewer than two knots refuses.", .eval = evalNearest },
-    .{ .name = "along", .inputs = &.{ p.in("t", Tag.number), p.in("knots", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Travel a Catmull-Rom curve through the knots as t goes 0..1 — `along [a, b, c]`. Clamps outside 0..1; fewer than two knots refuses.", .eval = evalAlong },
+    .{ .name = "nearest", .inputs = &.{ p.in("p", Tag.record), p.in("knots", Tag.array) }, .statics = &.{.{ .name = "loop", .kind = .word, .flag = true, .optional = true }}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`. `loop` searches the closed curve, seam included, and answers in 0..1 with the seam at 0. Fewer than two knots refuses; a loop needs three.", .eval = evalNearest },
+    .{ .name = "along", .inputs = &.{ p.in("t", Tag.number), p.in("knots", Tag.array) }, .statics = &.{.{ .name = "loop", .kind = .word, .flag = true, .optional = true }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Travel a Catmull-Rom curve through the knots as t goes 0..1 — `along [a, b, c]`. Clamps outside 0..1. `loop` closes the curve back to the first knot and wraps t instead — a loop has no ends, and do not repeat the first knot as the last. Fewer than two knots refuses; a loop needs three.", .eval = evalAlong },
     // tier 2, beat 2b — contracts. One shape literal, two promises.
     .{ .name = "expect", .inputs = &.{p.opt("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .class = .reads, .fails_mount = true, .help = "Assert a shape ONCE, at mount — `expect {id: string, distance: number} [exact]`. A mismatch refuses the mount. Costs nothing afterwards; never falls back to a runtime check.", .eval = evalExpect },
     .{ .name = "match", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "shape", .kind = .shape }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Assert a shape on EVERY value — `match {id: string} [exact]`. A mismatch kills the wave and names the field and both sides.", .eval = evalMatch },

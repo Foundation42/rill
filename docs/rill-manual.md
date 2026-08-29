@@ -654,7 +654,7 @@ plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3
 | `take <n> [from <i>]` | at most `n` elements; a short array is **forgiven** |
 | `transpose` | record of arrays ↔ array of records, self-inverse |
 | `shuffle [seed <s>]` | seeded Fisher–Yates; seed defaults to 0, identical on every machine |
-| `along <knots>` | travel a Catmull-Rom curve through the knots as `t` goes 0..1 |
+| `along <knots> [loop]` | travel a Catmull-Rom curve through the knots as `t` goes 0..1; `loop` closes it back to the first knot |
 
 **`take` forgives and `nth` does not**, and the difference is what each
 one promises. `take 5` promises *at most five* — asking for the top three
@@ -689,6 +689,17 @@ magic box.
 **`along` passes through every knot** and clamps outside 0..1, because a
 path has ends. Fewer than two knots is refused: one knot is not a path.
 Knots may be records, and the curve then runs through each field.
+
+**`loop` closes the curve.** `along ks loop` adds the returning segment from
+the last knot back to the first and wraps `t` instead of clamping — a loop
+has no ends, so `t = 1` *is* `t = 0` and `1.02` is `0.02`. The tangents wrap
+with it: crossing the seam reads the same four knots as approaching it, so a
+camera riding the curve does not round a corner once per lap. Do not repeat
+the first knot as the last — that is the *open*-curve way of closing a
+circuit, and under `loop` it is refused: the closing segment already exists,
+and the duplicate would put a zero-length cusp exactly where the seam used to
+be. A loop needs at least three knots; two is a there-and-back, which an open
+curve already says.
 
 **Ragged input is refused, never matched.** `transpose` names both sides
 and both lengths rather than picking longest, shortest, or
@@ -774,7 +785,7 @@ plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | write plane.gu
 | `rand [seed <s>]` | a fresh value in 0..1 per rousing |
 | `distance <a> <b>` · `within <a> <b> <r>` | over `record{x, y, z}` on both sides |
 | `dot <a> <b>` | scalar product — **how much of `a` lies along `b`** |
-| `nearest <p> <knots>` | where `p` is on the curve, as `t` in 0..1 — **the inverse of `along`** |
+| `nearest <p> <knots> [loop]` | where `p` is on the curve, as `t` in 0..1 — **the inverse of `along`** |
 
 **`nearest` returns the parameter, not the point.** `nearest … | along …`
 recovers the point in one more word, while `t` on its own is progress round a
@@ -784,9 +795,12 @@ hypothetical: Blade3D's `GetClosestPoint` returned a position, no caller could
 recover the parameter, and its own source carries a comment wishing it could.
 
 **It is the inverse of `along`, and of no other curve.** Same uniform
-Catmull-Rom, same segment split, same duplicated endpoints. `p | nearest ks |
-along ks` lands back on the curve at the point closest to `p`, and if `p` was
-already on the curve it lands back on `p`.
+Catmull-Rom, same segment split, same duplicated endpoints — and same `loop`.
+`p | nearest ks | along ks` lands back on the curve at the point closest to
+`p`, and if `p` was already on the curve it lands back on `p`. On a closed
+curve say `loop` on **both** words: `nearest ks loop` searches the closed
+circuit — seam included, no corner case where the lap number rolls over — and
+answers in `[0, 1)` with the seam at 0.
 
 **`dot` is the whole of projection.** `a | dot b` is how much of `a` points
 along `b`; with a unit `b` it is the length of `a`'s shadow on that direction.
@@ -1227,7 +1241,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `abs` | `abs <in>` | Absolute value. Broadcasts over a record or an array. |
 | `add` | `add <a> <b>` | a + b. Broadcasts over a record or an array. |
 | `adsr` | `adsr <in> <attack> <decay> <sustain> <release>` | Gate in, envelope out: rise, decay to `sustain` while the gate holds, release when it drops. A held sustain costs nothing. §6b |
-| `along` | `along <t> <knots>` | Travel a smooth curve through the knots as t goes 0..1. Clamps outside; fewer than two knots refuses. §6d |
+| `along` | `along <t> <knots> [loop]` | Travel a smooth curve through the knots as t goes 0..1. Clamps outside — `loop` closes the curve and wraps t instead. Fewer than two knots refuses; a loop needs three. §6d |
 | `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a. Broadcasts over a record or an array. |
 | `arm` | `arm [<in>] [off <off>] [on <on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). Both controls carry their word — either may be given alone. |
 | `atan2` | `atan2 <y> <x>` | Angle of (x, y) in radians; `y` is the piped one — `dy \| atan2 dx`. |
@@ -1276,7 +1290,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `min` | `min <a> <b>` | The smaller of a and b. Broadcasts over a record or an array. |
 | `mod` | `mod <a> <b>` | Floored modulo — the sign follows the divisor, so `-90 \| mod 360` is 270. |
 | `mul` | `mul <a> <b>` | a × b. Broadcasts over a record or an array. |
-| `nearest` | `nearest <p> <knots>` | Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`. §6f |
+| `nearest` | `nearest <p> <knots> [loop]` | Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`, `loop` included. §6f |
 | `noise` | `noise <period> [octaves <octaves>] [seed <seed>]` | Smooth noise in 0..1 over fed time. Stateless, seeded, bit-identical across machines. §6f |
 | `not` | `not <a>` | Boolean not. Broadcasts over a record or an array. |
 | `notify` | `notify <in> [<value>] <path>` | Write an occurrence to a plane path — the same sink shape as `write`, stating the intent; no modes, because an occurrence has no lane to join. §4 |
