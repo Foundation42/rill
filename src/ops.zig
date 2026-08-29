@@ -1080,7 +1080,8 @@ fn evalIntegrate(ctx: *EvalCtx) EvalError!Emit {
 /// `lerp` (`range 0.5 1.5` and `lerp 0.5 1.5` are otherwise the same
 /// arithmetic): `lerp` blends and extrapolates past its ends, `range` maps a
 /// unit-domain source onto an interval and stays inside it. Same ruling as
-/// `along` outside 0..1 — clamp, and `wrap 0 1` first if you meant to.
+/// `along` outside 0..1 — clamp, and `| mod 1` first if you meant to
+/// (there is no `wrap` word; floored `mod` IS the wrap).
 fn evalRange(ctx: *EvalCtx) EvalError!Emit {
     const t = std.math.clamp(try num(ctx, 0), 0, 1);
     const lo = try num(ctx, 1);
