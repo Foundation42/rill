@@ -1259,7 +1259,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `fract` | `fract <in>` | Fractional part, always in 0..1 — `fract -0.25` is 0.75. Broadcasts over a record or an array. |
 | `frame` | `frame` | Fed frame count since mount, as a value. Source. §6b |
 | `hold` | `hold <in> <for>` | Take a value, then ignore changes for `for`. §6b |
-| `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. §4 |
+| `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. `inc` changes the number; `write … add` leans on it. §4 |
 | `integrate` | `integrate <in> max <max>` | Running sum over fed time, clamped to ±max. The clamp is required. §6b |
 | `keep` | `keep <in> (…)` | The elements a predicate says true for. Filters **elements**; `where` gates the stream. §6d |
 | `kick` | `kick <in> <attack> <decay>` | One-shot envelope from an occurrence — rises to 1 over `attack`, falls to 0 over `decay`, stops. Retriggers from the current level. §6b |

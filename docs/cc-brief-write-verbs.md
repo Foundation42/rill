@@ -156,13 +156,13 @@ remains here is surface: console, probe, docs, refs.)*
 - [x] Shipped rills rewritten (31 sites / 7 files): camera.rill thrust →
       `write … add` (composes with rail by construction), desat + flash
       lose their `mod.` spelling, rail/rider/follow mechanical.
-- [ ] Console: Cmd row `set` → `write <path> [value] [mode]`; `clear` from
+- [x] Console: Cmd row `set` → `write <path> [value] [mode]`; `clear` from
       the console mouth; `Verb.set` kept as the log discriminator; help +
       panel strings.
-- [ ] `probe`'s `mod/` view: per-mode aggregates + contributor counts.
-- [ ] The frozen-reference sweep: unmodulated frames bit-identical
+- [x] `probe`'s `mod/` view: per-mode aggregates + contributor counts.
+- [x] The frozen-reference sweep: unmodulated frames bit-identical
       before/after the whole campaign (ReleaseFast refs run at the end).
-- [ ] Docs: manual's write section, the kinship line (*`inc` changes the
+- [x] Docs: manual's write section, the kinship line (*`inc` changes the
       number; `write … add` leans on it*), ledger updates.
 
 ## Sizing honesty
@@ -173,7 +173,33 @@ the knob fast path under `live_mutex` — the lanes copy in `slew` is priced
 against ~74 f32s and per-mode columns must not turn a quiet frame
 expensive; the existing "empty lane costs nothing" invariant is the gate.
 
+### Beat 3 landing notes (2026-08-29)
+
+The console speaks every mode under CONSOLE_CASTER, re-running a line
+UPDATES its level (a one-shot keys one statement slot), and `write <path>
+clear` withdraws — the fold supplies the valueless clear's rousing as a
+literal head, which fires exactly once at the one-shot's mount. `set` is
+retired from the mouth WITH a forwarding address: the unfolded line reaches
+the rill parse and gets the refusal that names `write`; the retirement gate
+proves the knob does not move. The panel migrated with the mouth
+(mat-control, color-grader, the substrate facade's permit regex, the mock
+console's help). `probe` prints a laned dynamic path's breakdown beside its
+reply via `pathLaneSummary`, a function so its shape is gated. Four
+mutations, four kills. One tool-scar for the ledger: a broad sed migrating
+test spellings rewrote the retirement gate's own deliberate `set` line into
+`write`, and the gate failed by SUCCEEDING — expected 1, found the hard
+clamp of the value the line was never supposed to land.
+
 ## Landed
+
+**Beat 3 — 2026-08-29, and the campaign with it.** Console modes under
+CONSOLE_CASTER with `clear` as the exit; `set` retired from every mouth with
+a forwarding address; the panel migrated (four JS files and a permit regex);
+probe grew the laned-path breakdown. Four mutations, four kills. And the
+certification: **all nine frozen references unmoved, timings within band**,
+through the entire campaign — one verb, five modes, one lane machinery, and
+not a pixel owed for any of it.
+
 
 **Beat 2 — 2026-08-29.** One lane machinery, live. `PathLanes` rows keyed by
 path with per-mode columns — holds (whole bytes, a stack in (owner, stmt)
