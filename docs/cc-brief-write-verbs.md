@@ -116,23 +116,23 @@ replace), modes refused · honest migration, `set` retired from both mouths.
 
 ### Beat 2 — engine: one lane machinery (the center of mass)
 
-- [ ] `Contribution {owner, stmt, value|bytes}` tables keyed (path, mode);
+- [x] `Contribution {owner, stmt, value|bytes}` tables keyed (path, mode);
       `IntentSum` absorbed; `ADDITIVE_PATHS` + `isAdditivePath` deleted;
       `mod/` write branch in `writeThunk` deleted (its refusal text now
       names `write <path> add`).
-- [ ] Knob fold in `applyLanes`: per-mode lanes, combine order
+- [x] Knob fold in `applyLanes`: per-mode lanes, combine order
       `(base + Σadd) × Πmul × 2^Σstops`, knob-range clamp after, per-lane
       non-finite ignore-loudly, hold base swapping in AFTER the glide
       (release reveals glided authored — recon §7).
-- [ ] Dynamic-path fold at write/retract, aggregate published into the
+- [x] Dynamic-path fold at write/retract, aggregate published into the
       DynEntry (readers untouched); hold-bytes stack, retraction reveals
       prior stored value or honest absence.
-- [ ] Retraction: `laneDropOwner`/`intentDropOwner` unify over (owner) for
+- [x] Retraction: `laneDropOwner`/`intentDropOwner` unify over (owner) for
       unmount and (owner, path) for `clear`.
-- [ ] Mount-time acceptance in the rills mount path: knob masks from the
+- [x] Mount-time acceptance in the rills mount path: knob masks from the
       registry column, hold map = `camera/pose/*`, device paths modes-off,
       `live/` all-off (message updated — it still says `mod/`).
-- [ ] Gates: the **order-permute gate** (a target where the documented
+- [x] Gates: the **order-permute gate** (a target where the documented
       order differs numerically from every other; empty lanes watch
       nothing); level-not-delta (two writes from one statement in one tick
       = latest, not sum); statements sum across each other (the rail-v1
@@ -144,10 +144,16 @@ replace), modes refused · honest migration, `set` retired from both mouths.
 
 ### Beat 3 — migration and the seat (visible)
 
-- [ ] `camera/pose/*` onto `hold`: rail.rill says `write … hold`, the
+*(Scope shrank at beat 2's landing: the machinery and its first customers
+could not be separated without breaking the tree between commits, so the
+rill rewrites — camera/follow thrust `add`, desat `add`, flash `stops`,
+rail's pose `hold` — and the seat-hack deletion landed WITH beat 2. What
+remains here is surface: console, probe, docs, refs.)*
+
+- [x] `camera/pose/*` onto `hold`: rail.rill says `write … hold`, the
       bespoke `removeDynamicPrefix("camera/pose/")` unmount line and its
       stated edge are DELETED (the campaign's promised payoff).
-- [ ] Shipped rills rewritten (31 sites / 7 files): camera.rill thrust →
+- [x] Shipped rills rewritten (31 sites / 7 files): camera.rill thrust →
       `write … add` (composes with rail by construction), desat + flash
       lose their `mod.` spelling, rail/rider/follow mechanical.
 - [ ] Console: Cmd row `set` → `write <path> [value] [mode]`; `clear` from
@@ -168,6 +174,32 @@ against ~74 f32s and per-mode columns must not turn a quiet frame
 expensive; the existing "empty lane costs nothing" invariant is the gate.
 
 ## Landed
+
+**Beat 2 — 2026-08-29.** One lane machinery, live. `PathLanes` rows keyed by
+path with per-mode columns — holds (whole bytes, a stack in (owner, stmt)
+order), adds, muls, stops — folding at write into
+`(base + Σadd) × Πmul × 2^clamp(Σstops, ±8)` and publishing the aggregate
+into the DynEntry, so no reader changed. The base is captured when a path's
+first lane arrives and is what retraction reveals; with no base, the entry
+is removed — absence said, never invented. `IntentSum`, `ADDITIVE_PATHS`
+and the `mod/` write branch are deleted; the acceptance walk refuses
+unwelcome modes at MOUNT naming the accepted spelling, and program bare
+writes on knobs refuse the same way — authored is the person's now, which
+also emptied the log of per-frame program rows (the B-series tests flipped
+their claims and kept their numbers). Knob lanes went per-statement in the
+same stroke. The rill rewrites that could not be separated from the
+machinery landed with it: thrust/torque say `add`, desat says `add`, flash
+says `stops`, and rail's pose says `hold` — the bespoke camera-seat unmount
+hack is DELETED, its gate now watching the retraction machinery it was
+always meant to be.
+
+Sixteen new-or-flipped gates; ten mutations, ten kills — one survivor on
+the first pass (clear sparing holds; nothing asserted a hold-clear) fixed
+by extending the gate, per discipline. Deferred, stated: knob masks admit
+one mode each today, so multi-mode knob folds and the hold-on-knob
+glide-bypass (recon §7's warm release) have no live customer — the
+machinery exists on the dynamic side where multi-mode is real, and the
+knob side joins when a mask first widens.
 
 **Beat 1 — 2026-08-29.** The verb is real end to end: `write` with five flag
 statics (rill `ops.zig`), the vtable widened with (mode, stmt) through
