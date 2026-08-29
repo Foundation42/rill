@@ -1922,6 +1922,99 @@ fn evalWithin(ctx: *EvalCtx) EvalError!Emit {
     return Emit.first;
 }
 
+/// The raw vector product, shared by `cross` (which packs it) and `angle`
+/// (which measures it) so the two cannot disagree about handedness.
+fn crossOf(a: [3]f64, b: [3]f64) [3]f64 {
+    return .{
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    };
+}
+
+/// `angle <a> <b>` — the angle between two directions, in RADIANS, 0..π.
+///
+/// Blade3D never had this word: a graph chained Dot, two Normalizes and an
+/// Acos — the same six-nodes shape that earned `dot` its place. Radians and
+/// no degree twin, because the audit already ruled conversion is sayable in
+/// words that exist.
+///
+/// Computed as atan2(|a×b|, a·b), not acos of the normalised dot. The acos
+/// spelling loses its precision exactly at the answers people test for — 0
+/// and π, "aligned" and "opposed" — where its argument grazes ±1 and needs a
+/// clamp to stay legal at all; atan2 is exact at both ends and clamps
+/// nothing. It also makes the extremes EXACT: orthogonal is atan2(len, 0),
+/// which is π/2 by definition, aligned is atan2(0, +) = 0, opposed is
+/// atan2(0, −) = π.
+///
+/// A zero-length vector REFUSES: it has no direction, so "its angle" is a
+/// claim about nothing — and answering 0 would make a dead sensor read as
+/// dead ahead. Same family voice as the missing axis: name the port.
+fn evalAngle(ctx: *EvalCtx) EvalError!Emit {
+    const a = try axis(ctx, 0, ctx.portName(0));
+    const b = try axis(ctx, 1, ctx.portName(1));
+    inline for (.{ a, b }, 0..) |v, i| {
+        if (v[0] == 0 and v[1] == 0 and v[2] == 0) {
+            return ctx.refuse("angle: '{s}' is {{x: 0, y: 0, z: 0}} — a zero-length vector has no direction, so there is no angle to measure", .{ctx.portName(i)});
+        }
+    }
+    const c = crossOf(a, b);
+    const sin_part = @sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    const cos_part = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return emitF64(ctx, std.math.atan2(sin_part, cos_part));
+}
+
+/// `inside <p> <min> <max>` — is p inside the axis-aligned box? The AABB
+/// companion to `within`'s sphere, and Blade3D's "Point In AABB" reborn: the
+/// original took min/max corners too (an XNA BoundingBox IS Min and Max), so
+/// two corner records is the shape the pattern has always had, not a rill
+/// invention. Three mandatory positional ports, unmarked — `adsr`'s
+/// precedent for order-meaningful same-typed arguments.
+///
+/// Bounds are INCLUSIVE, exactly as Blade3D's were: a point ON the wall is
+/// inside, the same way `within` keeps a point ON the sphere (`d <= r`). The
+/// two words must agree about their boundary or "at the edge" would flicker
+/// by primitive.
+///
+/// An inverted box (min above max on an axis) is an EMPTY box and answers
+/// FALSE — it does not refuse. A box computed from live data can legitimately
+/// invert for a frame (two corners crossing), and `within` already answers
+/// false to a negative radius rather than killing the wave; an empty region
+/// contains nothing, and that is an answer, not an error.
+fn evalInside(ctx: *EvalCtx) EvalError!Emit {
+    const point = try axis(ctx, 0, ctx.portName(0));
+    const lo = try axis(ctx, 1, ctx.portName(1));
+    const hi = try axis(ctx, 2, ctx.portName(2));
+    var in = true;
+    inline for (0..3) |i| {
+        if (point[i] < lo[i] or point[i] > hi[i]) in = false;
+    }
+    try ctx.out[0].appendBool(in);
+    return Emit.first;
+}
+
+/// `cross <a> <b>` — the vector product, record{x, y, z} out, RIGHT-HANDED:
+/// x × y = z. The word the engine keeps re-deriving (gizmos carries its own
+/// copy), and the same six-nodes argument that seated `dot`: sayable today as
+/// six field reads, six `mul`s and three `sub`s, and nobody should. The
+/// output is a record in the spatial contract's own field order — x, y, z —
+/// so it feeds straight back into `dot`, `angle`, `distance` and a knot list.
+fn evalCross(ctx: *EvalCtx) EvalError!Emit {
+    const a = try axis(ctx, 0, ctx.portName(0));
+    const b = try axis(ctx, 1, ctx.portName(1));
+    const c = crossOf(a, b);
+    var entries = std.ArrayListUnmanaged([2][]const u8).empty;
+    inline for (.{ "x", "y", "z" }, 0..) |name, i| {
+        var kp = struple.Packer.init(ctx.arena);
+        try kp.appendString(name);
+        var vp = struple.Packer.init(ctx.arena);
+        try vp.appendF64(c[i]);
+        try entries.append(ctx.arena, .{ kp.bytes(), vp.bytes() });
+    }
+    try ctx.out[0].appendMap(entries.items);
+    return Emit.first;
+}
+
 // ---------------------------------------------------------------------------
 // Events and levels (tier 2, beat 4a)
 //
@@ -3501,6 +3594,9 @@ const CORE = [_]registry.OpDef{
     .{ .name = "distance", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Distance between two positions — both record{x, y, z}; a missing axis is named.", .eval = evalDistance },
     .{ .name = "dot", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Scalar product of two positions or directions — both record{x, y, z}. How much of a lies along b.", .eval = evalDot },
     .{ .name = "within", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record), p.in("r", Tag.number) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Is a within r of b? Both record{x, y, z}.", .eval = evalWithin },
+    .{ .name = "angle", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Angle between two directions, radians 0..π — both record{x, y, z}. A zero-length vector refuses: no direction, no angle.", .eval = evalAngle },
+    .{ .name = "inside", .inputs = &.{ p.in("p", Tag.record), p.in("min", Tag.record), p.in("max", Tag.record) }, .outputs = &.{p.val("out", Tag.boolean)}, .routes = .anywhere, .help = "Is p inside the axis-aligned box from min to max? Bounds inclusive — the wall counts, like `within`'s sphere. An inverted box is empty and answers false.", .eval = evalInside },
+    .{ .name = "cross", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Vector product of two directions — record{x, y, z} out, right-handed: x cross y is z.", .eval = evalCross },
     // tier 2, beat 4a — events and levels.
     .{ .name = "pulse", .inputs = &.{ p.in("period", Tag.duration), p.kwOpt("width", Tag.duration) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .class = .reads, .ticks = true, .help = "Value source: 1 for `width`, else 0, once per period — `pulse 1s [width 100ms]`. Width defaults to a tenth of the period. `every` is the occurrence source.", .eval = evalPulse },
     .{ .name = "once", .inputs = &.{p.occ("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .class = .reads, .help = "Pass the first value, then deaf until remount — `once 1 | ramp 2s` fires at mount; piped, it passes the first arrival.", .eval = evalOnce },

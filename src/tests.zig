@@ -2149,6 +2149,9 @@ test "every core op declares its class deliberately" {
         .{ .name = "dot", .class = .pure },
         .{ .name = "nearest", .class = .pure }, // a search, but a pure one: same p, same knots, same t
         .{ .name = "within", .class = .pure },
+        .{ .name = "angle", .class = .pure },
+        .{ .name = "inside", .class = .pure },
+        .{ .name = "cross", .class = .pure },
         .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
         .{ .name = "merge", .class = .pure },
@@ -8299,6 +8302,135 @@ test "`nearest … loop`: points off the curve near the seam land near the seam,
     try testing.expect(corner >= 0.0 and corner < 1.0);
 }
 
+// ---------------------------------------------------------------------------
+// angle / inside / cross — the Blade3D audit's last three words (2026-08-29).
+//
+// Each gate watches the property the word CLAIMS, per the discipline: angle's
+// exactness at the ends and its symmetry, inside's boundary behaviour exactly
+// as documented (the wall counts; an inverted box answers, never refuses),
+// cross's handedness and its perpendicularity — the last one proved IN the
+// language, `cross | dot`, because feeding the family back into itself is the
+// reason the output is a record.
+// ---------------------------------------------------------------------------
+
+test "`angle`: exact at the answers people test for — 0 aligned, π/2 square on, π opposed" {
+    // atan2(|a×b|, a·b), so the extremes are exact by construction: square on
+    // is atan2(+, 0) which IS π/2, aligned is atan2(0, +) = 0, opposed is
+    // atan2(0, −) = π. The acos spelling would need a clamp and would wobble
+    // exactly here. Deliberately non-unit vectors throughout: no
+    // normalisation is part of the claim.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: 3, y: 0, z: 0} | angle {x: 7, y: 0, z: 0} | write plane.aligned
+        \\{x: 2, y: 0, z: 0} | angle {x: 0, y: 5, z: 0} | write plane.square
+        \\{x: 1, y: 0, z: 0} | angle {x: -4, y: 0, z: 0} | write plane.opposed
+        \\{x: 1, y: 1, z: 0} | angle {x: 0, y: 3, z: 0} | write plane.diagonal
+    , .{});
+    defer fx.deinit();
+
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.angle1.out.out").?);
+    try testing.expectEqual(std.math.pi / 2.0, slotNum(&fx, "programs.p.angle2.out.out").?);
+    try testing.expectEqual(std.math.pi, slotNum(&fx, "programs.p.angle3.out.out").?);
+    try testing.expectApproxEqAbs(std.math.pi / 4.0, slotNum(&fx, "programs.p.angle4.out.out").?, 1e-12);
+}
+
+test "`angle` is symmetric, bit for bit" {
+    // The word claims AN angle between two directions, not an angle FROM one
+    // TO the other — so the two orders must agree exactly, which they do by
+    // construction: the cross length loses its sign and every product is
+    // computed in the same order either way.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: 0.3, y: -1.7, z: 2.2} | angle {x: 5.1, y: 0.4, z: -0.9} | write plane.ab
+        \\{x: 5.1, y: 0.4, z: -0.9} | angle {x: 0.3, y: -1.7, z: 2.2} | write plane.ba
+    , .{});
+    defer fx.deinit();
+
+    const ab = fx.rt.readSlot("programs.p.angle1.out.out").?;
+    const ba = fx.rt.readSlot("programs.p.angle2.out.out").?;
+    try testing.expect(std.mem.eql(u8, ab, ba));
+}
+
+test "`angle` refuses a zero-length vector, naming the port — 'a'" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\{x: 0, y: 0, z: 0} | angle {x: 1, y: 0, z: 0} | write plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "angle", "'a'", "no direction" });
+    try testing.expect(fx.rt.readSlot("programs.p.angle1.out.out") == null);
+}
+
+test "`angle` refuses a zero-length vector, naming the port — 'b'" {
+    var fx: Fixture = undefined;
+    try mountWatched(testing.allocator, &fx,
+        \\{x: 1, y: 0, z: 0} | angle {x: 0, y: 0, z: 0} | write plane.out
+    , .{});
+    defer fx.deinit();
+    try expectRefusalNames(&.{ "angle", "'b'", "no direction" });
+    try testing.expect(fx.rt.readSlot("programs.p.angle1.out.out") == null);
+}
+
+test "`inside`: the wall counts, every axis is tested, and an inverted box answers false" {
+    // The boundary rows run where inclusive and exclusive DIFFER — points
+    // exactly ON a face and ON a corner (rule 1). The three outside rows each
+    // fail on exactly ONE axis, so a dropped axis test has a row that notices
+    // it alone. The inverted row asserts an ANSWER (false), not a refusal —
+    // the slot must exist.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: 5, y: 5, z: 5} | inside {x: 0, y: 0, z: 0} {x: 10, y: 10, z: 10} | write plane.center
+        \\{x: 10, y: 5, z: 5} | inside {x: 0, y: 0, z: 0} {x: 10, y: 10, z: 10} | write plane.on_face
+        \\{x: 0, y: 0, z: 0} | inside {x: 0, y: 0, z: 0} {x: 10, y: 10, z: 10} | write plane.on_corner
+        \\{x: 11, y: 5, z: 5} | inside {x: 0, y: 0, z: 0} {x: 10, y: 10, z: 10} | write plane.past_x
+        \\{x: 5, y: -1, z: 5} | inside {x: 0, y: 0, z: 0} {x: 10, y: 10, z: 10} | write plane.under_y
+        \\{x: 5, y: 5, z: 99} | inside {x: 0, y: 0, z: 0} {x: 10, y: 10, z: 10} | write plane.past_z
+        \\{x: 5, y: 5, z: 5} | inside {x: 0, y: 0, z: 10} {x: 10, y: 10, z: 0} | write plane.inverted
+    , .{});
+    defer fx.deinit();
+
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.inside1.out.out").?).?);
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.inside2.out.out").?).?);
+    try testing.expect(types.asBool(fx.rt.readSlot("programs.p.inside3.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.inside4.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.inside5.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.inside6.out.out").?).?);
+    // Inverted on z: EMPTY, so false — and it answered rather than refused.
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.inside7.out.out").?).?);
+}
+
+test "`cross` is right-handed, ordered x-y-z, and perpendicular to both inputs — proved in the language" {
+    // x × y = z and y × x = −z is the handedness claim, asserted exactly. The
+    // perpendicularity rows chain `cross | dot` IN rill with integer-valued
+    // vectors, so the zeros are exact — and the chain existing at all is the
+    // point: the output record feeds the family it came from.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\{x: 1, y: 0, z: 0} | cross {x: 0, y: 1, z: 0} | write plane.z_axis
+        \\{x: 0, y: 1, z: 0} | cross {x: 1, y: 0, z: 0} | write plane.minus_z
+        \\{x: 1, y: 2, z: 3} | cross {x: 4, y: 5, z: 6} as c
+        \\c | dot {x: 1, y: 2, z: 3} | write plane.perp_a
+        \\c | dot {x: 4, y: 5, z: 6} | write plane.perp_b
+    , .{});
+    defer fx.deinit();
+
+    const z = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.cross1.out.out").?);
+    defer freeFields(testing.allocator, z);
+    try testing.expectEqual(@as(usize, 3), z.len);
+    try testing.expectEqualStrings("x", fieldName(z[0]));
+    try testing.expectEqualStrings("y", fieldName(z[1]));
+    try testing.expectEqualStrings("z", fieldName(z[2]));
+    try testing.expectEqual(@as(f64, 0), z[0].v);
+    try testing.expectEqual(@as(f64, 0), z[1].v);
+    try testing.expectEqual(@as(f64, 1), z[2].v);
+
+    const mz = try slotVec3(&fx, "programs.p.cross2.out.out");
+    try testing.expectEqual([3]f64{ 0, 0, -1 }, mz);
+
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.dot1.out.out").?);
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.dot2.out.out").?);
+}
+
 test "beat 4b: `distance` is euclidean over record{x, y, z}" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
@@ -9373,9 +9505,14 @@ const intent_exempt = [_][]const u8{
     "first", "last", "len", "take", "keep", "map", "sort", "reduce", "stats",
     "partition", "transpose", "shuffle", "sample", "record",
 
-    // SPATIAL helpers. Ordinary functions of two positions; nothing about
-    // reaching for them needs unlearning, which is what §6a is for.
-    "distance", "along", "within",
+    // SPATIAL helpers. Ordinary functions of positions and directions; nothing
+    // about reaching for them needs unlearning, which is what §6a is for.
+    // (`dot` and `nearest` are NOT here — each carries an intent row, because
+    // each replaced a wrong instinct: projection spelled longhand, and a
+    // position where a parameter was wanted.) `angle`, `inside` and `cross`
+    // joined 2026-08-29 by the same test: a reader reaching for them is
+    // reaching for a function they already know the name of.
+    "distance", "along", "within", "angle", "inside", "cross",
 
     // Time, rate and LATCHING. `cooldown`, `throttle` and `hold` are named for
     // what they do to a stream; `arm`/`disarm`/`toggle`/`latch` are the state

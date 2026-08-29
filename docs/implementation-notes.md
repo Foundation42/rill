@@ -2354,3 +2354,63 @@ helper so they cannot drift on what a loop is:
   inverse gate uses CANNOT see it: −0.005 and 0.995 are the same circle
   point. The one surviving mutant of the first pass (emit without the final
   `@mod`) was killed by exactly this assert.
+
+## `angle`, `inside`, `cross` — the audit's last three words (2026-08-29)
+
+**Ruled:** the three words the Blade3D audit left standing land together, and
+each carries the decision its guardrail asked for.
+
+**`angle <a> <b>` → radians, 0..π, and no degree twin** — the audit already
+rejected deg/rad words because conversion is sayable. Blade3D never had this
+operator: a graph chained Dot, two Normalizes and an Acos, the same six-nodes
+shape that seated `dot`. The implementation is **atan2(|a×b|, a·b), not acos
+of the normalised dot** — acos needs a clamp to stay legal and loses its
+precision exactly at 0 and π, the answers people test for; atan2 makes all
+three landmarks EXACT (square on is atan2(+,0), which IS π/2). **A
+zero-length vector refuses**, naming the port: it has no direction, so "its
+angle" is a claim about nothing, and answering 0 would make a dead sensor
+read as dead ahead. (Blade3D offered no precedent to follow or reject — the
+operator did not exist to have the bug.) The cross product inside is shared
+with `cross` through one helper, `crossOf`, so the two words cannot disagree
+about handedness.
+
+**`inside <p> <min> <max>` → boolean, min/max corners, INCLUSIVE** —
+Blade3D's "Point In AABB" took min/max corners (an XNA BoundingBox is Min and
+Max), so the corner spelling is the pattern's own shape; three mandatory
+positional ports are `adsr`'s precedent for order-meaningful same-typed
+arguments. Bounds are inclusive as Blade3D's were (`<`/`>` reject), and that
+is now a FAMILY invariant: the point ON the wall is inside exactly as
+`within` keeps the point ON the sphere (`d <= r`) — two primitives that
+disagreed at their boundaries would flicker against each other at the edge.
+**An inverted box answers false rather than refusing**: it is an EMPTY box,
+empty contains nothing, and a box computed from live corners may legitimately
+invert for a frame — `within` already answers false to a negative radius
+rather than killing the wave. The gate asserts the ANSWER exists (a refusal
+would leave the slot null), and a mutant that auto-corrected the corners with
+min/max was bitten by it.
+
+**`cross <a> <b>` → record{x, y, z}, right-handed** — x × y = z, matching
+XNA's `Vector3.Cross` in Blade3D and everything else in the pair of repos
+(gizmos carries its own copy; deduplicating the engine is not this note's
+business). The output is a record in the spatial contract's field order, and
+the perpendicularity gate is deliberately written IN the language —
+`cross … | dot …` with integer-valued vectors so the zeros are exact —
+because feeding the family back into itself is the reason the output is a
+record at all.
+
+**§6a and the class table, extended deliberately:** all three are `.pure`,
+and all three joined the SPATIAL-helpers exemption — a reader reaching for
+them is reaching for a function they already know the name of, which is the
+group's test. The exemption comment now also records why `dot` and `nearest`
+are NOT in it (each replaced a wrong instinct and so earned an intent row) —
+the distinction was implicit before and is the thing the group asserts.
+
+**Gates and mutants, 9/9 bitten:** atan2 arguments swapped (exactness),
+`@abs` on the dot (opposed collapsed onto aligned), the `b` zero-check
+dropped (its own refusal gate — each port pays separately), the cross length
+replaced by a signed component sum (symmetry, bit-for-bit), exclusive bounds
+(the wall rows), the z-axis test dropped (each outside row fails on exactly
+one axis, so a dropped axis has a row that notices it alone), the inverted
+box auto-corrected (the empty-box row), the cross hand swapped (x×y = z
+asserted exactly), and the field order scrambled (the shape row reads the
+names back).

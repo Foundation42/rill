@@ -772,6 +772,8 @@ noise 80ms | range 0.6 1 | write plane.lights.torch.level
 plane.entities.raider.pos | within plane.gate.pos 10 | write plane.signals.alarm
 plane.car.pos | nearest plane.track.knots | write plane.ui.lap_progress
 plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | write plane.guard.sees
+plane.guard.facing | angle plane.guard.to_player | write plane.guard.off_axis
+plane.player.pos | inside {x: -20, y: 0, z: -20} {x: 20, y: 8, z: 20} | write plane.signals.in_courtyard
 ```
 
 | op | does |
@@ -785,6 +787,9 @@ plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | write plane.gu
 | `rand [seed <s>]` | a fresh value in 0..1 per rousing |
 | `distance <a> <b>` · `within <a> <b> <r>` | over `record{x, y, z}` on both sides |
 | `dot <a> <b>` | scalar product — **how much of `a` lies along `b`** |
+| `angle <a> <b>` | radians between two directions, 0..π — never a degree |
+| `cross <a> <b>` | the vector product, right-handed — `record{x, y, z}` out |
+| `inside <p> <min> <max>` | is `p` in the axis-aligned box? — `within`'s boxy sibling |
 | `nearest <p> <knots> [loop]` | where `p` is on the curve, as `t` in 0..1 — **the inverse of `along`** |
 
 **`nearest` returns the parameter, not the point.** `nearest … | along …`
@@ -807,6 +812,20 @@ along `b`; with a unit `b` it is the length of `a`'s shadow on that direction.
 Facing checks fall out of it (`facing | dot to_target` is 1 dead ahead, 0 side
 on, −1 behind), and so does splitting a world-space error into a body's own
 axes — one `dot` per axis.
+
+**The rest of the vector family reads the same way.** `angle` is the unsigned
+angle between two directions, in radians — 0 aligned, π/2 square on, π
+opposed, and never a degree (conversion is already sayable). A zero-length
+vector refuses: it has no direction, so there is no angle to measure, and
+answering 0 would make a dead sensor read as dead ahead. `cross` is the
+right-handed vector product (x × y = z), a `record{x, y, z}` that feeds
+straight back into `dot`, `angle` and `distance` — `facing | cross to_target`
+is the axis you would turn about. `inside` is `within`'s boxy sibling: min
+and max corners, and the two words agree at their boundaries — a point ON
+the wall is inside, exactly as `within` keeps a point ON the sphere. An
+inverted box (min above max on an axis) is an EMPTY box and answers false
+rather than refusing, because a box computed from live corners may
+legitimately invert for a frame, and empty-contains-nothing is an answer.
 
 **Levels emit at mount; crossings do not.** `above`/`below` publish their level
 straight away, `toggle` its initial `false`, `tally` its `0` — a program
@@ -1243,6 +1262,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `adsr` | `adsr <in> <attack> <decay> <sustain> <release>` | Gate in, envelope out: rise, decay to `sustain` while the gate holds, release when it drops. A held sustain costs nothing. §6b |
 | `along` | `along <t> <knots> [loop]` | Travel a smooth curve through the knots as t goes 0..1. Clamps outside — `loop` closes the curve and wraps t instead. Fewer than two knots refuses; a loop needs three. §6d |
 | `and` | `and <a> <b>` | Boolean and — the conjunction idiom's other half. §6a. Broadcasts over a record or an array. |
+| `angle` | `angle <a> <b>` | Angle between two directions, radians 0..π — both record{x, y, z}. A zero-length vector refuses. §6f |
 | `arm` | `arm [<in>] [off <off>] [on <on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). Both controls carry their word — either may be given alone. |
 | `atan2` | `atan2 <y> <x>` | Angle of (x, y) in radians; `y` is the piped one — `dy \| atan2 dx`. |
 | `below` | `below <in> <on> <off>` | Boolean with hysteresis, falling: below `on`, until above `off`. Emits its level at mount. §6f |
@@ -1255,6 +1275,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `const` | `const <value>` | Emit a constant, once, at mount. |
 | `cooldown` | `cooldown <in> <window>` | Pass one, then deaf for the window. §6 |
 | `cos` | `cos <in>` | Cosine, radians. Broadcasts over a record or an array. |
+| `cross` | `cross <a> <b>` | Vector product of two directions — record{x, y, z} out, right-handed: x cross y is z. §6f |
 | `debounce` | `debounce <in> <quiet>` | Pass only after a quiet period; storms collapse to their last edge. §6 |
 | `delay` | `delay <in> <by>` | Emit each occurrence `by` later. §6 |
 | `diff` | `diff <in>` | Rate of change per second. Baselines silently; stops ticking at zero. §6b |
@@ -1274,6 +1295,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `frame` | `frame` | Fed frame count since mount, as a value. Source. §6b |
 | `hold` | `hold <in> <for>` | Take a value, then ignore changes for `for`. §6b |
 | `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. `inc` changes the number; `write … add` leans on it. §4 |
+| `inside` | `inside <p> <min> <max>` | Is p inside the axis-aligned box from min to max? Bounds inclusive; an inverted box is empty and answers false. §6f |
 | `integrate` | `integrate <in> max <max>` | Running sum over fed time, clamped to ±max. The clamp is required. §6b |
 | `keep` | `keep <in> (…)` | The elements a predicate says true for. Filters **elements**; `where` gates the stream. §6d |
 | `kick` | `kick <in> <attack> <decay>` | One-shot envelope from an occurrence — rises to 1 over `attack`, falls to 0 over `decay`, stops. Retriggers from the current level. §6b |
