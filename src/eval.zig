@@ -170,6 +170,11 @@ pub const Runtime = struct {
     /// Last fed time (dump-serialized: the monotonicity contract and every
     /// stored deadline are relative to *fed* history, which restore resumes).
     now: Now = .{},
+    /// The tick BEFORE `now` — the floor of any register's billable window
+    /// (ruled 2026-08-29): a node that slept through wheel ticks must not
+    /// bill its sleep, so temporal ops clamp elapsed time to what passed
+    /// since the wheel last turned.
+    prev_now: Now = .{},
 
     tick_index: u64 = 0,
     last_tick_ns: u64 = 0, // measured, never serialized
@@ -399,6 +404,7 @@ pub const Runtime = struct {
         if (now.time_ns < self.now.time_ns or now.frame < self.now.frame) {
             return error.TimeRegression;
         }
+        self.prev_now = self.now;
         self.now = now;
 
         var timer: ?std.time.Timer = std.time.Timer.start() catch null;
@@ -545,6 +551,8 @@ pub const Runtime = struct {
             .host = self.host_ctx,
             .now_ns = self.now.time_ns,
             .now_frame = self.now.frame,
+            .prev_ns = self.prev_now.time_ns,
+            .prev_frame = self.prev_now.frame,
             .wake_fn = WakeThunk.wake,
             .wake_ctx = &wake_thunk,
             .call_fn = if (n.body != null) CallThunk.call else null,
@@ -734,6 +742,8 @@ pub const Runtime = struct {
             .host = self.host_ctx,
             .now_ns = self.now.time_ns,
             .now_frame = self.now.frame,
+            .prev_ns = self.prev_now.time_ns,
+            .prev_frame = self.prev_now.frame,
             .wake_fn = WakeThunk.wake,
             .wake_ctx = &wake_thunk,
             .detail = &self.detail,

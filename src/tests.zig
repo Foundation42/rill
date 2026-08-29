@@ -3973,6 +3973,69 @@ test "beat 1a: `integrate` needs its clamp, and honours it" {
     try testing.expectEqual(@as(f64, -2), slotNum(&fx, out).?);
 }
 
+test "integrate does not bill its sleep: one press is one tick, not eighty seconds" {
+    // Chris's rail camera, 2026-08-29 — the first bug the flight recorder
+    // caught. The camera parked on the spline for eighty seconds (the W
+    // branch quiet, so the integrate node slept with its clock frozen), then
+    // one press of W made `rate * dt` integrate the new rate across the
+    // whole silence: t slammed from 0.5 to the pin in a single frame (one
+    // CSV row), the target teleported half a track, and the spring cut a
+    // chord through the middle of the loop — "aimed toward the COG", exactly
+    // as reported.
+    //
+    // The ruling: a register's billable window FLOORS at the wheel's
+    // previous tick. Sleep is not process time; what arrives on a tick is
+    // treated as having stood through that one tick and no further.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | integrate max 0.5 | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    defer fx.deinit();
+    const out = "programs.p.integrate1.out.out";
+
+    try run(&fx, sec, 80); // parked: the branch is silent for eighty seconds
+    try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
+
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1)); // the W press
+    try run(&fx, 16 * ms, 2); // the delta's own eval, then one armed tick
+    const after_press = slotNum(&fx, out).?;
+    // The old code pinned this at 0.5 in one tick. One frame of rate 1 is
+    // 0.016 — assert BOTH sides, because "it moved a little" and "it did not
+    // slam" are different claims and the second is the bug.
+    try testing.expect(after_press > 0.001);
+    try testing.expect(after_press < 0.1);
+
+    // And the totals still arrive: a full second of held input is one unit's
+    // worth (clamped here), through the same ticks as ever.
+    try run(&fx, 16 * ms, 60);
+    try testing.expectEqual(@as(f64, 0.5), slotNum(&fx, out).?);
+}
+
+test "ease glides out of a long sleep instead of snapping" {
+    // Integrate's ruling, caught by inspection while fixing it: a converged
+    // ease stops arming ticks and sleeps, and a retarget after a quiet
+    // minute computed k = 1 - exp(-60s/tau) ≈ 1 — the glide it exists to
+    // provide, skipped exactly when someone was looking at it. With the
+    // billable window floored at the previous tick, the retarget bills one
+    // tick's worth and the fade takes its stated time from the wake.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        "plane.v | ease 2s | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    defer fx.deinit();
+    const out = "programs.p.ease1.out.out";
+
+    try run(&fx, sec, 60); // converged at 0, asleep
+    try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 10));
+    try run(&fx, 16 * ms, 1);
+    const woke = slotNum(&fx, out).?;
+    // Old: ≈ 10 (the snap). New: one frame into a 2s glide — barely moving.
+    try testing.expect(woke < 1.0);
+
+    // The glide still completes; nothing was lost, only deferred to where a
+    // fade belongs.
+    try run(&fx, sec, 20);
+    try testing.expectApproxEqAbs(@as(f64, 10), slotNum(&fx, out).?, 0.01);
+}
+
 test "beat 1a: `range` clamps where `lerp` extrapolates" {
     // The one difference between them, and the reason `range` is a word:
     // `lerp` blends two things, `range` is the EXIT from the unit interval

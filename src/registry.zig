@@ -250,6 +250,9 @@ pub const EvalCtx = struct {
     /// consume these and the wheel; everything else ignores them.
     now_ns: u64 = 0,
     now_frame: u64 = 0,
+    /// The wheel's previous tick, both lanes — see `prevOn`.
+    prev_ns: u64 = 0,
+    prev_frame: u64 = 0,
     /// Timer wheel arm: ask the runtime to re-evaluate this node once fed
     /// time reaches `deadline` (a deadline at or before the current tick
     /// fires on the *next* tick — arming never re-enters the sweep). Null
@@ -311,6 +314,18 @@ pub const EvalCtx = struct {
     /// operators make against their stored absolute deadlines.
     pub fn nowOn(self: *const EvalCtx, frames: bool) u64 {
         return if (frames) self.now_frame else self.now_ns;
+    }
+
+    /// The wheel's PREVIOUS tick on a lane — the floor of any billable
+    /// window (ruled 2026-08-29). A register that stopped arming ticks
+    /// sleeps with its own clock frozen; when a delta finally wakes it, the
+    /// gap since that frozen clock is SLEEP, not elapsed process time, and
+    /// billing it at the newly arrived value is how a parked rail camera
+    /// integrated one W press across eighty silent seconds and slammed half
+    /// a track in a frame. What arrives on a tick is treated as having
+    /// stood through that one tick and no further.
+    pub fn prevOn(self: *const EvalCtx, frames: bool) u64 {
+        return if (frames) self.prev_frame else self.prev_ns;
     }
 
     pub fn wake(self: *EvalCtx, deadline: Deadline) EvalError!void {

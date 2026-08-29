@@ -695,7 +695,13 @@ fn evalEase(ctx: *EvalCtx) EvalError!Emit {
     const chosen = if (rising and ctx.in[2] != null) try dur(ctx, 2) else if (!rising and ctx.in[3] != null) try dur(ctx, 3) else tau_d;
     const tau = try periodOf(chosen);
 
-    const dt = elapsed(st.frames, st.at, now);
+    // The billable window floors at the wheel's previous tick — integrate's
+    // ruling (2026-08-29), and the same failure in a prettier dress: a
+    // converged ease stops arming and sleeps, and a retarget after a quiet
+    // minute computed k = 1 - exp(-60s/tau) ≈ 1 and SNAPPED — the glide it
+    // exists to provide, skipped exactly when someone was looking at it.
+    const start = @max(st.at, ctx.prevOn(st.frames));
+    const dt = elapsed(st.frames, start, now);
     // 1 - exp(-dt/tau): the exact leak over dt, so the answer does not depend
     // on how often the wheel happened to wake us. A per-tick constant would
     // make the same fade take different times at different frame rates.
@@ -1046,7 +1052,16 @@ fn evalIntegrate(ctx: *EvalCtx) EvalError!Emit {
         try armNextTick(ctx, false);
         return emitF64(ctx, 0);
     }
-    const dt = elapsed(false, st.at, now);
+    // The billable window FLOORS at the wheel's previous tick (ruled
+    // 2026-08-29). Pinned or fed a zero rate, this op stops arming and
+    // sleeps with `st.at` frozen; without the floor, the delta that finally
+    // woke it billed the NEW rate across the whole sleep — Chris parked the
+    // rail camera, pressed W once, and t slammed from 0.5 to the pin in a
+    // single frame (one row of the flight recorder's CSV). The camera then
+    // chased a target half a track away, straight through the middle of the
+    // loop. What arrives on a tick stood through that one tick, no further.
+    const start = @max(st.at, ctx.prevOn(false));
+    const dt = elapsed(false, start, now);
     const next = std.math.clamp(st.a + rate * dt, -cap, cap);
     const moving = rate != 0 and next != st.a;
     st.at = now;
