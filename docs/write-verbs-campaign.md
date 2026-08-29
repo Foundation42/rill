@@ -1,9 +1,12 @@
 # The write verb: intent at the call site
 
-Campaign note, REVISION 3 — Chris's idea 2026-08-29, drafted by CC, reviewed
-by Claude Chat, revised again on Chris's grep observation the same day. §5 is
-the short list that needs Chris's voice; §6 is proposed-and-seconded,
-proceeding unless overruled; §7 is the ledger of rejects.
+Campaign note, REVISION 3.1 — Chris's idea 2026-08-29, drafted by CC,
+reviewed by Claude Chat, revised on Chris's grep observation, reviewed again.
+Second review endorsed the shape and seconded all five §5 rulings; its three
+residual cracks (the device row, the dynamic-path hold base, `clear`'s
+grammar) are folded in below. §5 awaits Chris's five one-liners; §6 is
+proposed-and-seconded, proceeding unless overruled; §7 is the ledger of
+rejects.
 
 Changed in revision 3 (Chris): **one base verb, mode as a modifier.** The
 distinct-verbs form (rev 2) lost the one thing `set` had always given for
@@ -107,6 +110,20 @@ x | write plane.foo stops       stops lane: × 2^clamp(s, −8, +8) (rests at 0)
 - Greps: `write plane` — every mutation site; `write .* hold` — every
   seat; `write .* stops` — every exposure toucher. One grammar row instead
   of six verb rows.
+- **The fifth overload, said rather than surviving by omission** (review
+  round 2): an input control is a target like any other, and a DRIVE is the
+  bridge's notion of replace — bare `write input/kbd/w 1` queues the drive
+  exactly as `set` did. The modulation modes are refused on device paths at
+  mount (a lane over a momentary drive is a category error) until a
+  customer argues otherwise.
+- **`clear` is the one valueless mode**, so the grammar row is
+  `write <path> [value] [mode]` with the mode words a CLOSED enum — the
+  `step` bare-word-flag discipline — which is what keeps `write knob 5
+  hold` from ever mistaking a mode for a value. `clear`'s scope is pinned:
+  per **(writer, path), across all modes** — a program's clear withdraws
+  every contribution its statements hold on that path, the console's
+  withdraws the console's. It is not statement-keyed; a writer leaves a
+  lane entirely or not at all.
 
 The hold split (review round, seconded by CC, now a modifier): blend mode
 and lifetime were bundled in the first draft's "program set = assign".
@@ -135,6 +152,11 @@ live  = clamp_knob_range( (base + Σ adds) × Π muls × 2^clamp(Σ stops, −8,
 - **`hold` replaces only the base.** Modulation rides on top: a kick still
   shakes a railed camera. The Bitwig story survives — a hold just swaps
   whose value the modulators orbit.
+- **On a dynamic path, the stored value plays the role authored plays on a
+  knob** (review round 2): it is the base, holds stack over it in owner
+  order, and retraction reveals it — or reveals its ABSENCE, if nothing was
+  stored before the first hold: an entry is removed, never invented.
+  Nested holds behave identically on both target classes.
 - **The knob's range clamp applies to the final live value**, after the
   whole fold.
 - **`hold` bypasses the glide.** `live` is `glided ∘ lanes`; a held base
