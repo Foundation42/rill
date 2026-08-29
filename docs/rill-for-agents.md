@@ -19,7 +19,7 @@ every 1f { cast $torchlight 0.8 radius 2.5 at plane.sensors.hearth.pos decay 4s 
 ```
 
 ```rill
-plane.sensors.hearth.$torchlight | mul 0.5 | add 0.5 | set plane.render.grade.exposure
+plane.sensors.hearth.$torchlight | mul 0.5 | add 0.5 | write plane.render.grade.exposure
 ```
 
 Two statements, two programs. The first deposits warmth into a field
@@ -48,9 +48,9 @@ two lines; refer back to them.
 4. **No arrows.** There is no `->`, no `=>`, no trigger-fires-command.
    A threshold is a value that flows onward. Effects are sinks reached
    by flow.
-5. **Effects don't ride the stream.** A `set`/`notify`/`inc`/`cast` is
+5. **Effects don't ride the stream.** A `write`/`notify`/`inc`/`cast` is
    a sink: the wave ends there, nothing flows through it.
-   `x | set p | tap t` does not parse. Side effects branch off with
+   `x | write p | tap t` does not parse. Side effects branch off with
    `also { … }`; the main stream carries values only — and **the last
    effect is the main stream's sink**: a chain of side-branches whose
    tail just hangs has over-learned this lesson.
@@ -180,7 +180,7 @@ and the epoch is saved with it, so a restored program continues rather
 than restarting.
 
 ```rill
-lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure
 plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
 ```
 
@@ -217,7 +217,7 @@ where they bite.
 | arrays | `[a, b, c]` (live, immutable, not a buffer) · `nth <in> <i>` (0-based) · `choose <i> <of>` (`nth` with the index piped) · `window` → array · `stats` → record. Out of range and fractional indices REFUSE — never a clamp, never a round |
 | sequencing | `step <in> <of> [seed <seed>] [max <max>] [loop] [bounce] [reverse] [random] [shuffle]` o→v — a ROUSING in, the NEXT element out. Two independent choices plus a modifier: ORDER is sequential (`reverse` walks down) / `random` (with replacement) / `shuffle` (fresh permutation per pass); END is once-and-the-wave-ends (default) / `loop` / `bounce`. So `shuffle loop` re-draws every pass and `loop reverse` cycles backwards. Combinations that cannot mean anything REFUSE at mount naming both words. The array is LIVE — the cursor carries and clamps, never restarts — and it rides the dump. Output is a VALUE, so two identical elements in a row are one write |
 | over arrays | `map <in> (…)` · `keep <in> (…)` · `reduce <in> [init <init>] (…)` (LEFT fold: accumulator first, element second; no init ⇒ first element seeds; empty with no init ERRORS). A body is a SECTION — an operator with ports left open — and the CONSUMER declares how many it fills (`map` 1, `reduce` 2); wrong arity is refused at parse naming both counts. `(.field)` is a section too. One operator per body (a def body is deferred). `keep` filters ELEMENTS, `where` gates the STREAM |
-| order & shape | `sort <in> [desc] [by (…)]` (STABLE; ties keep input order; no `by` ⇒ elements are their own keys; orders numbers by VALUE) · `first`/`last` (leading/trailing element; an EMPTY array ends the wave silently — a value cannot be invented, the `where` precedent — while `nth` past the end still ERRORS, because a position is a claim) · `len` → count (this is how absence is said: `contacts | len | set …`, never a sentinel) · `take <in> <n> [from <from>]` (short array FORGIVEN — `nth` past the end errors; a count is satisfiable, a value is not) · `transpose` (record-of-arrays ↔ array-of-records, self-inverse; ragged REFUSES naming both sides) · `shuffle <in> [seed <seed>]` (seed default 0, cross-machine identical) · `along <t> <knots>` (Catmull-Rom through the knots as t goes 0..1; clamps outside; <2 knots REFUSES; record knots interpolate per field) |
+| order & shape | `sort <in> [desc] [by (…)]` (STABLE; ties keep input order; no `by` ⇒ elements are their own keys; orders numbers by VALUE) · `first`/`last` (leading/trailing element; an EMPTY array ends the wave silently — a value cannot be invented, the `where` precedent — while `nth` past the end still ERRORS, because a position is a claim) · `len` → count (this is how absence is said: `contacts | len | write …`, never a sentinel) · `take <in> <n> [from <from>]` (short array FORGIVEN — `nth` past the end errors; a count is satisfiable, a value is not) · `transpose` (record-of-arrays ↔ array-of-records, self-inverse; ragged REFUSES naming both sides) · `shuffle <in> [seed <seed>]` (seed default 0, cross-machine identical) · `along <t> <knots>` (Catmull-Rom through the knots as t goes 0..1; clamps outside; <2 knots REFUSES; record knots interpolate per field) |
 | events & levels | `pulse <period> [width <width>]` →v — a VALUE, 1/0 (`every` is the occurrence source; width defaults to period/10) · `once <in>` o→o (first value, then deaf; unpiped `once 1` fires at tick 0 by §3.8) · `toggle <in>` o→v · `tally <in>` o→v · `above <in> <on> <off>` / `below <in> <on> <off>` v→v (HYSTERESIS; the FIRST number trips and the second releases for both words — `above 0.3 0.2`, `below 0.2 0.3` — and each REFUSES the other's order at mount, naming both numbers). **Levels emit at tick 0** — `above`/`below` their level, `toggle` false, `tally` 0 — while crossings (`dropped_below`/`rose_above`/`edge`) baseline SILENTLY |
 | noise & space | `noise <period> [octaves <octaves>] [seed <seed>]` →v → 0..1 smooth, STATELESS, f32 inside · `rand <in> [seed <seed>]` o→v → 0..1 per rousing. Seeds default to 0, offset the LATTICE as well as the gradients (smooth noise is zero at its lattice points for every seed, so seeds sharing a period would otherwise coincide at each boundary), and are the decorrelator; `rand` and `shuffle` share one generator, `noise` is a lattice hash · `distance <a> <b>` · `within <a> <b> <r>` · `dot <a> <b>` — all need `record{x, y, z}` on BOTH sides, and a missing axis is named. `dot` is the scalar product: how much of a lies along b, so with a unit b it is 1 dead ahead, 0 side on, −1 behind · `nearest <p> <knots>` v→v → t in 0..1 — the INVERSE of `along`, same uniform Catmull-Rom, and it emits the PARAMETER not the point (`| along` recovers the point; `| diff` says which way you are travelling). Fewer than two knots refuses |
 | contracts | `match <in> <shape>` (EVERY value; mismatch kills the wave) · `expect [<in>] <shape>` (ONCE, at mount; mismatch REFUSES THE MOUNT, and it never checks again — a later violation passes through). Shape literal: `{id: string, distance?: number}`, nested, `[number]`, words `number boolean string any`; open by default, `exact` closes every record in it |
@@ -299,10 +299,10 @@ first, so `sound play` is one operator.
 |---|---|---|
 | `if plane.hp < 20 { … }` | no `if`; conditions flow | `plane.hp \| dropped_below 20 \| …` |
 | `plane.hp < 20 -> notify …` | no arrows | `plane.hp \| dropped_below 20 \| notify …` |
-| `x \| set plane.a \| tap t` | effects end waves | `x \| also { set plane.a } \| tap t` |
+| `x \| write plane.a \| tap t` | effects end waves | `x \| also { write plane.a } \| tap t` |
 | `x \| untag #a \| tag #b \| follow` | effect pipeline = imperative sequencing | one branch per effect, `also { }` each |
 | `every 1f { step1; step2 }` expecting order | a block is fan-out | pipeline the sequence, or accept parallel branches |
-| `plane.x \| add 1 \| set plane.x` | reads what it writes — cycle, refused | `<rousing> \| inc plane.x 1` |
+| `plane.x \| add 1 \| write plane.x` | reads what it writes — cycle, refused | `<rousing> \| inc plane.x 1` |
 | one file, three commented "sections" | one file is ONE program; a section writing a path another subscribes to refuses the whole file | three programs (a program may not both write and subscribe to one path, even unconnected) |
 | `also { plane.y \| … }` | a branch can't open a source — it is fed the block's source and nothing else | name the condition as a stream, gate with `where` (the conjunction idiom, §5a) |
 | `dropped_below t` as "is below t" | a crossing is an event, not a state — it fires once, on the way through | `< t` (a comparator is the state) |
@@ -312,8 +312,8 @@ first, so `sound play` is one operator.
 | `sample 5` | durations carry units | `sample 5s` (or `5f` if you mean frames) |
 | `lerp a b t` with all three bound | the PIPED value is `t` (flipped 2026-08-25, before the corpus had a caller) | `s \| lerp 0.5 1.5` — s, lerped between 0.5 and 1.5 |
 | `lerp` on a knob that can overshoot | `lerp` EXTRAPOLATES past its ends — a 0..1 source that strays gives you an exposure outside the interval you named | `range lo hi` — the exit from the unit interval, and it clamps |
-| `x \| mul 2 { set plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { set plane.a }` |
-| `x \| plane.y` | a pipe feeds an OPERATOR; a path on the right is a write | `x \| set plane.y` (the error asks: did you forget `set`?) |
+| `x \| mul 2 { write plane.a }` | blocks live at the head; mid-chain is `also` | `x \| mul 2 \| also { write plane.a }` |
+| `x \| plane.y` | a pipe feeds an OPERATOR; a path on the right is a write | `x \| write plane.y` (the error asks: did you forget `write`?) |
 | `as $x` / `def $f(…)` | sigils name store rows, never streams/ops | pick an unsigiled name |
 | `tag @tom #a #b` | ONE tag per call — a second `#` has nowhere honest to bind | two statements, one tag each |
 | `tag tom #garrison` / `entity bind wall …` | the sigil is required on EVERY surface | `tag @tom #garrison` / `entity bind @wall …` |
@@ -335,7 +335,7 @@ fell *after* the sighting):
 plane.environment.ambient_light | < 0.25 as dark
 plane.sensors.watchtower.visible_enemies | rose_above 0 as sighting
 sighting | cast $alarm 1.0 radius 500 at plane.sensors.watchtower.pos decay 10s
-sighting | where dark | set plane.keep.braziers.lit 1
+sighting | where dark | write plane.keep.braziers.lit 1
 ```
 
 Every non-trivial program needs this shape.

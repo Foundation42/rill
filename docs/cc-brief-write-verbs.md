@@ -100,16 +100,16 @@ replace), modes refused · honest migration, `set` retired from both mouths.
 
 ### Beat 1 — rill: the verb (small)
 
-- [ ] `write` registry row: `.statics = {path, mode?}`, mode a closed-word
+- [x] `write` registry row: `.statics = {path, mode?}`, mode a closed-word
       static (`hold|add|mul|stops|clear`); `evalSink` grows mode+stmt
       plumbing; `clear` valueless (refuse a piped value loudly).
-- [ ] Vtable widen (`plane.zig` writeFn + `registry.zig` write_fn +
+- [x] Vtable widen (`plane.zig` writeFn + `registry.zig` write_fn +
       `EvalCtx.write`): every caller states `.base, 0`.
-- [ ] `set` row deleted. The parse error for `set` **names `write`** — the
+- [x] `set` row deleted. The parse error for `set` **names `write`** — the
       README front-door lesson, pre-paid.
-- [ ] Migration sweep: 364 sink sites in tests.zig (mechanical), manual
+- [x] Migration sweep: 364 sink sites in tests.zig (mechanical), manual
       (69 refs), README (5), rill-for-agents, rillbook cells.
-- [ ] Gates: all six forms parse; mode words are a closed enum
+- [x] Gates: all six forms parse; mode words are a closed enum
       (`write knob 5 hold` binds 5 as value, `write knob 5 bogus` refuses
       at parse); `clear` refuses a value; `set` refuses naming `write`.
       Mutations: mode static dropped → red; enum opened → red.
@@ -169,4 +169,20 @@ expensive; the existing "empty lane costs nothing" invariant is the gate.
 
 ## Landed
 
-*(marked as beats close)*
+**Beat 1 — 2026-08-29.** The verb is real end to end: `write` with five flag
+statics (rill `ops.zig`), the vtable widened with (mode, stmt) through
+runtime queue, mock, C ABI (which REFUSES non-base rather than dropping it),
+and both matryoshka hosts (`writeThunk`, `oneShotWrite`) — non-base modes
+refuse loudly there until beat 2 wires the lanes. `set` is gone; the parse
+refusal names `write`. The console FOLD emits `write plane.…` for both the
+`set` and `write` surface spellings, so muscle memory keeps working while
+every write that runs says what it is. Migrated: 365 rill-test sites, both
+manuals + README + the idioms book (all gated by parseManual), 7 shipped
+rills + 4 scenario fixtures + inline sources in matryoshka, and the G2
+canonical-dump hash (structural move, op name rides the dump — recorded at
+the hash). Seven new gates, six mutations, six kills (the seventh gate,
+mode-word closure, is killed by the same mode-scan mutation). Two findings:
+`notify` shares `evalSink` with one static — found by an index panic, now a
+guarded and gated case; and a standalone `clear` has no rousing (nothing
+fresh, the node never evaluates), so clear is pipe-roused in programs and
+the console's valueless form is beat 3's Cmd-row concern, as §3.1 hints.

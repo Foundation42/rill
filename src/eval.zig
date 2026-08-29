@@ -67,9 +67,11 @@ const WheelEntry = struct { deadline: u64, node: NodeId };
 const ValueBuf = std.ArrayListUnmanaged(u8);
 
 const QueuedWrite = struct {
-    path: []const u8, // program-arena-owned (a `set` static)
+    path: []const u8, // program-arena-owned (a `write` static)
     value: []const u8, // tick-arena-owned
-    kind: DeltaKind, // what the write MEANS, which decides how it coalesces
+    kind: DeltaKind, // what the payload MEANS, which decides how it coalesces
+    mode: plane_mod.WriteMode, // how it COMBINES — the writer's stated intent
+    stmt: u32, // the sink node's parse-order id: the statement identity
 };
 
 pub const LogFn = *const fn (ctx: ?*anyopaque, label: []const u8, val: []const u8) void;
@@ -494,7 +496,7 @@ pub const Runtime = struct {
             self.write_queue.clearRetainingCapacity();
         }
         for (self.write_queue.items) |w| {
-            try self.plane.write(w.path, w.value, w.kind);
+            try self.plane.write(w.path, w.value, w.kind, w.mode, w.stmt);
         }
 
         self.tick_index += 1;
@@ -540,6 +542,7 @@ pub const Runtime = struct {
             .statics = n.statics,
             .state = &self.node_state[node_id],
             .state_gpa = self.gpa,
+            .node_id = @intCast(node_id),
             .write_fn = queueWriteThunk,
             .write_ctx = self,
             .cast_fn = castThunk,
@@ -731,6 +734,7 @@ pub const Runtime = struct {
             .statics = b.statics,
             .state = &self.node_state[body_id],
             .state_gpa = self.gpa,
+            .node_id = @intCast(body_id),
             .write_fn = queueWriteThunk,
             .write_ctx = self,
             .cast_fn = castThunk,
@@ -788,14 +792,14 @@ pub const Runtime = struct {
         };
     }
 
-    fn queueWriteThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) registry.EvalError!void {
+    fn queueWriteThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind, mode: plane_mod.WriteMode, stmt: u32) registry.EvalError!void {
         const self: *Runtime = @ptrCast(@alignCast(ctx));
         // Copy the value with the runtime's own allocator: the caller's bytes
         // may live in the tick arena, but the queue outlives nothing — it is
         // flushed and cleared within the same tick, so gpa + explicit free
         // keeps ownership obvious.
         const copy = self.gpa.dupe(u8, val) catch return error.OutOfMemory;
-        self.write_queue.append(self.gpa, .{ .path = path, .value = copy, .kind = kind }) catch {
+        self.write_queue.append(self.gpa, .{ .path = path, .value = copy, .kind = kind, .mode = mode, .stmt = stmt }) catch {
             self.gpa.free(copy);
             return error.OutOfMemory;
         };

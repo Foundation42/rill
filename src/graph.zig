@@ -220,7 +220,7 @@ pub const Program = struct {
     /// Ruled 2026-08-26, after Chris bound a muzzle flash to a mouse button and
     /// then made the obvious edit — "I wanted the flash brighter":
     ///
-    ///     lmb | rose_above 0.5 | mul 2 | kick 15ms 150ms | set …
+    ///     lmb | rose_above 0.5 | mul 2 | kick 15ms 150ms | write …
     ///                           ^^^^^
     ///
     /// It fired once and never again. `rose_above` emits an occurrence, but

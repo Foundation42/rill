@@ -21,7 +21,7 @@ nothing moves. rill is that, with a world instead of a grid.
 ## 1. Your first rill
 
 ```rill
-plane.player.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+plane.player.health | clamp 0 100 | div 100 | write plane.ui.healthbar
 ```
 
 Read it aloud: *the player's health, clamped to 0–100, divided by 100,
@@ -35,7 +35,7 @@ Three things to notice:
   any position subscribes; there is no special subscribe form.
 - `|` feeds the left value into the right operator's first port —
   exactly like a shell pipe, and it is deliberately the 90% case.
-- `set` is a **sink**: the wave of change ends there, in the world.
+- `write` is a **sink**: the wave of change ends there, in the world.
 
 Mounting and unmounting belong to the host (in Matryoshka:
 `rill mount healthbar <the text>`, `rill unmount healthbar`,
@@ -48,7 +48,7 @@ Comments run to end of line with `//`:
 
 ```rill
 // the healthbar, normalised
-plane.player.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+plane.player.health | clamp 0 100 | div 100 | write plane.ui.healthbar
 ```
 
 ---
@@ -69,7 +69,7 @@ is still an occurrence — `kick`'s "twice is twice" survives being
 scaled, offset or clamped on the way:
 
 ```rill
-plane.fire | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.flash
+plane.fire | rose_above 0.5 | mul 2 | kick 15ms 150ms | write plane.flash
 ```
 
 This is the same rule that already makes an elementwise operator's
@@ -106,7 +106,7 @@ single-assignment and must be defined before use:
 
 ```rill
 plane.stats.mana | clamp 0 100 as mana
-mana | div 100 | set plane.ui.manabar
+mana | div 100 | write plane.ui.manabar
 mana | dropped_below 10 | notify plane.signals.low_mana
 ```
 
@@ -116,7 +116,7 @@ A bare name in argument position pulls that stream in (fan-in), and
 ```rill
 plane.player.health as hp
 plane.player.mana as mp
-{ health: hp, mana: mp } | set plane.ui.vitals
+{ health: hp, mana: mp } | write plane.ui.vitals
 ```
 
 Records project with `.field` — `vitals.health` — and the sugar
@@ -128,7 +128,7 @@ paths in one stroke.
 ## 4. Sinks — how a program touches the world
 
 Every effect is a **sink**: the wave ends there. Nothing flows onward
-through a `set` — a pipeline that "does something and continues" is
+through a `write` — a pipeline that "does something and continues" is
 imperative thinking wearing pipes (see §5 for the honest spelling).
 
 All sinks share one shape: **`<verb> <path> [value]`**, where port 0 is
@@ -139,8 +139,8 @@ value decides **what**:
 > because something flowed.**
 
 ```rill
-plane.hp | clamp 0 100 | set plane.ui.bar                // what's flowing
-plane.signals.horn | set plane.gate.drawbridge_target 1  // this, because something flowed
+plane.hp | clamp 0 100 | write plane.ui.bar                // what's flowing
+plane.signals.horn | write plane.gate.drawbridge_target 1  // this, because something flowed
 ```
 
 ```rill
@@ -273,7 +273,7 @@ in steps.
 | "nothing has happened for 5s" | `plane.heartbeat \| debounce 5s \| notify plane.signals.stale` | absence is unobservable; `debounce` fires once, 5s after the last heartbeat — silence given a voice |
 | "read the field here" | `plane.sensors.<post>.$chan` | a read names where it samples; a rill has no *here* |
 | "cast from where I am" | `cast … at <a position you can read>` | a cast names where it deposits; a rill has no *here* |
-| "make the gate close" | `set plane.keep.gate.drawbridge_target 1` | intent to an actuator target; physics is the engine's |
+| "make the gate close" | `write plane.keep.gate.drawbridge_target 1` | intent to an actuator target; physics is the engine's |
 | "this program does three things" | three programs, or one with named streams — never one file with sections | a program may not both write and subscribe to one path |
 | "override the derived tag for @tom" | a DIFFERENT tag (`tag @tom #alert-manual`), gated beside the derived one | a derived tag on its population is owned by its rule; a hand tag below the band is withdrawn next frame and `left` says so — if you want an override, you want a different tag |
 
@@ -293,7 +293,7 @@ gate with `where`:
 plane.environment.ambient_light | < 0.25 as dark
 plane.sensors.watchtower.visible_enemies | rose_above 0 as sighting
 sighting | cast $alarm 1.0 radius 500 at plane.sensors.watchtower.pos decay 10s
-sighting | where dark | set plane.keep.braziers.lit 1
+sighting | where dark | write plane.keep.braziers.lit 1
 ```
 
 Every rill program past the trivial needs this shape.
@@ -367,9 +367,9 @@ going dark or blowing out. Reach for `lerp` when you are genuinely
 blending two things and want to be able to overshoot.
 
 ```rill
-lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
-clock | set plane.ui.elapsed
-lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle
+lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure
+clock | write plane.ui.elapsed
+lfo tri 8s | shape smooth | range 0 90 | write plane.lights.sweep.angle
 ```
 
 The first line is the whole point of the family: *breathe the exposure
@@ -381,9 +381,9 @@ every element, so there is no vector family to learn and no separate
 "map":
 
 ```rill
-plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos
-plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load
-plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact
+plane.entities.player.pos | add {x: 0, y: 2, z: 0} | write plane.lights.follow.pos
+plane.gpu.traversal_ms | window 10s | mul 2 | stats | write plane.ui.load
+plane.sensors.gate.contacts | > 0 | write plane.ui.any_contact
 ```
 
 `and`, `or` and `not` are ordinary operators too, and they broadcast the
@@ -410,11 +410,11 @@ operator's own state is not a path.
 | `integrate max <m>` | running sum over fed time, clamped to ±m |
 
 ```rill
-plane.sensors.hearth.heat | ease 400ms | set plane.lights.hearth.level
-plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure
-once 1 | ramp 2s from 0 | set plane.render.grade.exposure
+plane.sensors.hearth.heat | ease 400ms | write plane.lights.hearth.level
+plane.render.grade.exposure_target | ramp 2s | write plane.render.grade.exposure
+once 1 | ramp 2s from 0 | write plane.render.grade.exposure
 plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
-plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu
+plane.field.rumble | abs | ease 20ms down 400ms | write plane.ui.vu
 ```
 
 The last one is the envelope follower — fast to rise, slow to fall — and
@@ -443,11 +443,11 @@ a number whose only job was being fallen from.
 | `adsr <a> <d> <s> <r>` | a **gate** in: rise, decay to `s` while it holds, release when it drops |
 
 ```rill
-plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash
-plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount
-plane.events.hit | kick 20ms 400ms | shape out | set plane.ui.hit_flash
-plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain
-plane.sensors.gate.contacts | len | > 0 | adsr 200ms 400ms 0.6 2s | set plane.lights.alert.level
+plane.events.hit | kick 20ms 400ms | write plane.ui.hit_flash
+plane.events.impact | kick 10ms 300ms | mul 0.4 | write plane.camera.shake_amount
+plane.events.hit | kick 20ms 400ms | shape out | write plane.ui.hit_flash
+plane.input.key_c | adsr 10ms 80ms 0.7 400ms | write plane.audio.voice.gain
+plane.sensors.gate.contacts | len | > 0 | adsr 200ms 400ms 0.6 2s | write plane.lights.alert.level
 ```
 
 **A retrigger restarts from where it is, never from zero.** Hits arriving
@@ -507,9 +507,9 @@ emits one and `stats` consumes one, so the literal is the missing half
 of something that existed rather than a new thing.
 
 ```rill
-plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure
-plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] | set plane.lights.key.pos
-plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample
+plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | write plane.render.grade.exposure
+plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] | write plane.lights.key.pos
+plane.gpu.traversal_ms | window 10s | nth 0 | write plane.ui.oldest_sample
 ```
 
 The first line is the point of the family. Written as control flow it
@@ -548,9 +548,9 @@ One thing, one spelling.
 *walks*. Each rousing emits the next element:
 
 ```rill
-plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] loop | set plane.lights.key.pos
+plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] loop | write plane.lights.key.pos
 plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note
-plane.events.idle | step plane.ui.hints random seed 3 max 5 | set plane.ui.hint
+plane.events.idle | step plane.ui.hints random seed 3 max 5 | write plane.ui.hint
 ```
 
 There are two independent choices and one modifier, and they are written
@@ -595,9 +595,9 @@ Three operators take a **body**: a section, which is an operator with
 ports left open.
 
 ```rill
-plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats
-plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak
-plane.sensors.gate.contacts | map (.distance) | stats | set plane.ui.spread
+plane.sensors.gate.contacts | keep (.armed) | write plane.ui.threats
+plane.gpu.traversal_ms | window 5s | reduce (max) | write plane.ui.peak
+plane.sensors.gate.contacts | map (.distance) | stats | write plane.ui.spread
 ```
 
 | op | does | fills |
@@ -641,10 +641,10 @@ have to guess between two independent questions.
 **Order and shape.**
 
 ```rill
-plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
-plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats
-plane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals
-plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest
+plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | write plane.ui.threats
+plane.player.{health, mana} | window 10s | transpose | write plane.ui.vitals
+plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | write plane.lights.key.pos
 ```
 
 | op | does |
@@ -676,8 +676,8 @@ is smuggled in: if a downstream reader needs to know there were none, ask
 `len` and say so.
 
 ```rill
-plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
-plane.sensors.gate.contacts | len | set plane.ui.contacts
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest
+plane.sensors.gate.contacts | len | write plane.ui.contacts
 ```
 
 Two lines, two questions. The first goes quiet when the gate is clear and
@@ -704,9 +704,9 @@ assertion, not a branch. Two words, because there are two different
 promises and you should say which one you are buying.
 
 ```rill
-plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat
-plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade
-plane.window.samples | match [number] | stats | set plane.ui.load
+plane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat
+plane.render.grade | expect {exposure: number, contrast: number} | write plane.ui.grade
+plane.window.samples | match [number] | stats | write plane.ui.load
 ```
 
 | op | when it checks | on failure |
@@ -754,13 +754,13 @@ where you write down what you did.
 ## 6f. Events, levels, noise and space
 
 ```rill
-plane.input.key_l | toggle | set plane.lights.key.on
-plane.events.kill | tally | set plane.ui.kills
-plane.world.light | below 0.2 0.3 | set plane.lights.street.on
-noise 80ms | range 0.6 1 | set plane.lights.torch.level
-plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
-plane.car.pos | nearest plane.track.knots | set plane.ui.lap_progress
-plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | set plane.guard.sees
+plane.input.key_l | toggle | write plane.lights.key.on
+plane.events.kill | tally | write plane.ui.kills
+plane.world.light | below 0.2 0.3 | write plane.lights.street.on
+noise 80ms | range 0.6 1 | write plane.lights.torch.level
+plane.entities.raider.pos | within plane.gate.pos 10 | write plane.signals.alarm
+plane.car.pos | nearest plane.track.knots | write plane.ui.lap_progress
+plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | write plane.guard.sees
 ```
 
 | op | does |
@@ -964,7 +964,7 @@ walk in §12's demo is exactly a camera-bound ear crossing a brazier's
 glow. The plain placed form:
 
 ```rill
-plane.sensors.hearth.$torchlight | range 1 1.5 | set plane.render.grade.exposure
+plane.sensors.hearth.$torchlight | range 1 1.5 | write plane.render.grade.exposure
 ```
 
 That is the lamplighter: the lamp literally dims as the fire dies. Two
@@ -1040,7 +1040,7 @@ addressable for live tuning:
 
 ```rill
 def healthbar(hp: number) = hp | clamp 0 100 | div 100
-plane.player.health | healthbar | set plane.ui.hp
+plane.player.health | healthbar | write plane.ui.hp
 ```
 
 defs close over nothing: a `plane.…` path inside a def body is a parse
@@ -1051,14 +1051,14 @@ reusable across worlds.
 
 ```rill
 use plane.render.grade as g
-plane.hour | select plane.night_exposure plane.day_exposure | set g.exposure
+plane.hour | select plane.night_exposure plane.day_exposure | write g.exposure
 ```
 
 Wait — `select` takes a *condition* first:
 
 ```rill
 use plane.render.grade as g
-plane.is_night | select plane.night_exposure plane.day_exposure | set g.exposure
+plane.is_night | select plane.night_exposure plane.day_exposure | write g.exposure
 ```
 
 Both versions above parse; only the second means what it says.
@@ -1102,54 +1102,54 @@ every 1f { cast $torchlight 0.8 radius 2.5 at plane.sensors.hearth.pos decay 4s 
 ```
 
 ```rill
-plane.sensors.hearth.$torchlight | range 1 1.5 | set plane.render.grade.exposure
+plane.sensors.hearth.$torchlight | range 1 1.5 | write plane.render.grade.exposure
 ```
 
 **The breathing exposure** — the founding example of tier 2, and the
 sentence it started as:
 
 ```rill
-lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure
 ```
 
 **The fade that stops** — animate once at mount, then cost nothing:
 
 ```rill
-once 1 | ramp 2s from 0 | set plane.render.grade.exposure
+once 1 | ramp 2s from 0 | write plane.render.grade.exposure
 ```
 
 **The threshold that does not chatter** — a noisy reading into a switch:
 
 ```rill
-plane.world.light | below 0.2 0.3 | set plane.lights.street.on
+plane.world.light | below 0.2 0.3 | write plane.lights.street.on
 ```
 
 **The nearest threat** — a list into one answer, and the count that says
 when there is none:
 
 ```rill
-plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest
-plane.sensors.gate.contacts | len | set plane.ui.contacts
+plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest
+plane.sensors.gate.contacts | len | write plane.ui.contacts
 ```
 
 **The boundary contract** — refuse a malformed list where it arrives,
 and pin what a program reads:
 
 ```rill
-plane.sensors.gate.contacts | match [{id: string, distance: number}] | set plane.ui.threats
+plane.sensors.gate.contacts | match [{id: string, distance: number}] | write plane.ui.threats
 ```
 
 **Flash on hit** — an event into a shape, with nothing invented in
 between:
 
 ```rill
-plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash
+plane.events.hit | kick 20ms 400ms | write plane.ui.hit_flash
 ```
 
 **The camera shake** — three independent axes from one seed each:
 
 ```rill
-{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake
+{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | write plane.camera.shake
 ```
 
 **The supervisor** — a rill watching the machines:
@@ -1161,7 +1161,7 @@ plane.programs.gate-guard.errors | inc plane.ops.gate_guard_errors 1
 **The vitals HUD** — one record, live:
 
 ```rill
-plane.player.{health, mana} | set plane.ui.vitals
+plane.player.{health, mana} | write plane.ui.vitals
 ```
 
 **The keep, in four programs** — the conjunction idiom, the terminal
@@ -1175,27 +1175,27 @@ the muster writes, so the value must be seeded (0) before it mounts.
 plane.environment.ambient_light | < 0.25 as dark
 plane.sensors.watchtower.visible_enemies | rose_above 0 as sighting
 sighting | cast $alarm 1.0 radius 500 at plane.sensors.watchtower.pos decay 10s
-sighting | where dark | set plane.keep.braziers.lit 1
+sighting | where dark | write plane.keep.braziers.lit 1
 ```
 
 ```rill
 // gatehouse
 plane.sensors.gate.$alarm | rose_above 0.2
-  | also { set plane.keep.gate.portcullis_target 0 }
-  | set plane.keep.gate.drawbridge_target 1
+  | also { write plane.keep.gate.portcullis_target 0 }
+  | write plane.keep.gate.drawbridge_target 1
 plane.sensors.gate.nearest_distance | dropped_below 50 | notify plane.keep.archers.loose
 ```
 
 ```rill
 // muster — `delay` stands in for the muster action until R3
-plane.sensors.courtyard.$alarm | rose_above 0.2 | delay 90s | set plane.keep.garrison.formed 1
+plane.sensors.courtyard.$alarm | rose_above 0.2 | delay 90s | write plane.keep.garrison.formed 1
 ```
 
 ```rill
 // sally port — its own program: it reads what muster writes
 // (seed plane.keep.garrison.formed 0 before mounting)
 plane.keep.garrison.formed | > 0.5 as wall_up
-plane.sensors.gate.nearest_velocity | dropped_below 0.1 | where wall_up | set plane.keep.sally_port.open_target 1
+plane.sensors.gate.nearest_velocity | dropped_below 0.1 | where wall_up | write plane.keep.sally_port.open_target 1
 ```
 
 ## 12. The operator index
@@ -1212,7 +1212,7 @@ with it (`ease 0.3 up 0.1`); `(…)` is a section body; `…` is variadic.
 lines look longer than what you type.
 
 It is arity, not surface syntax: a static is written where its own
-section shows it (`set plane.a 1`, `cast $alarm radius 30 at <ref>`),
+section shows it (`write plane.a 1`, `cast $alarm radius 30 at <ref>`),
 and it is listed after the ports here so the arity reads at a glance.
 
 | operator | arity and port order | what it does |
@@ -1279,7 +1279,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `nearest` | `nearest <p> <knots>` | Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`. §6f |
 | `noise` | `noise <period> [octaves <octaves>] [seed <seed>]` | Smooth noise in 0..1 over fed time. Stateless, seeded, bit-identical across machines. §6f |
 | `not` | `not <a>` | Boolean not. Broadcasts over a record or an array. |
-| `notify` | `notify <in> [<value>] <path>` | Write an occurrence to a plane path — the same write as `set`, stating the intent. §4 |
+| `notify` | `notify <in> [<value>] <path>` | Write an occurrence to a plane path — the same sink shape as `write`, stating the intent; no modes, because an occurrence has no lane to join. §4 |
 | `nth` | `nth <in> <i>` | The i-th element, 0-based. Out of range is an **error**, never a clamp. §6c |
 | `once` | `once <in>` | The first value, then deaf until remount. §6f |
 | `or` | `or <a> <b>` | Boolean or. Broadcasts over a record or an array. |
@@ -1296,7 +1296,6 @@ and it is listed after the ports here so the arity reads at a glance.
 | `round` | `round <in>` | Round to nearest. Broadcasts over a record or an array. |
 | `sample` | `sample <in> <period>` | At most one emission per period; the latest value wins. §6 |
 | `select` | `select <cond> <a> <b>` | cond ? a : b — all branches exist, one is chosen per tick. §6a |
-| `set` | `set <in> [<value>] <path>` | Write to a plane path. Piped, the input is the rousing and `value` is what is written. §4 |
 | `shape` | `shape <t> <curve>` | Ease a 0..1 value into 0..1. Curves: `linear smooth in out inout`. §6b |
 | `shuffle` | `shuffle <in> [seed <seed>]` | Seeded Fisher–Yates; `shuffle \| take 3` is three at random. §6d |
 | `sign` | `sign <in>` | −1, 0 or 1 (nan stays nan). Broadcasts over a record or an array. |
@@ -1320,6 +1319,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `where` | `where <in> <pred>` | Pass arrivals while the predicate is true; otherwise silence. §6a |
 | `window` | `window <in> <span>` | Rolling buffer over fed time, emitted as an array. §6c |
 | `within` | `within <a> <b> <r>` | Is a within r of b? Both `record{x, y, z}`. §6f |
+| `write` | `write <in> [<value>] <path> [hold] [add] [mul] [stops] [clear]` | Write to a plane path. Bare is the durable replace (the old `set`); `hold` is the seat (retracts on unmount), `add`/`mul`/`stops` are lane levels (likewise), `clear` withdraws this writer's contributions and takes no value. Piped, the input is the rousing and `value` is what is written. §4 |
 
 Two operators are registered and are not in this list, because you never
 write them: `array` is what `[a, b, c]` builds, and `project` is what

@@ -245,7 +245,7 @@ test "G1: wire-time type check rejects mesh → number with a pointed message" {
 
 const g2_source =
     \\plane.player.{health, stamina} as vitals
-    \\vitals.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+    \\vitals.health | clamp 0 100 | div 100 | write plane.ui.healthbar
     \\select plane.player.underwater 1 0 | mul 0.5 as tint
     \\plane.player.health | dropped_below 20 | tap low
 ;
@@ -299,7 +299,7 @@ test "G2: two runs over the same feed produce bit-identical dumps per tick" {
 test "G3: two writes to one path in a tick evaluate downstream once, with the last value" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.hp | add 0 | set plane.out
+        \\plane.hp | add 0 | write plane.out
     , .{});
     defer fx.deinit();
     const add_id = nodeIdOf(&fx.prog, "add1").?;
@@ -412,10 +412,10 @@ test "G5: partition routes every input to exactly one side" {
 // ---------------------------------------------------------------------------
 
 test "G6: read-your-own-write is rejected with the loop named" {
-    try expectParseError("plane.x | add 1 | set plane.x", "cycle");
+    try expectParseError("plane.x | add 1 | write plane.x", "cycle");
     // segment-prefix overlap counts too, either direction
-    try expectParseError("plane.a.b | add 1 | set plane.a", "cycle");
-    try expectParseError("plane.a | add 1 | set plane.a.b", "cycle");
+    try expectParseError("plane.a.b | add 1 | write plane.a", "cycle");
+    try expectParseError("plane.a | add 1 | write plane.a.b", "cycle");
 }
 
 // ---------------------------------------------------------------------------
@@ -429,7 +429,7 @@ test "G7: def internals are addressable, overridable, and the override survives 
         \\  x | mul 2 as doubled
         \\  doubled | add 100
         \\
-        \\plane.v | scaled | set plane.out
+        \\plane.v | scaled | write plane.out
     ;
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx, src, .{.{ "plane.v", @as(i64, 10) }});
@@ -505,7 +505,7 @@ test "G8: dump → load → dump is byte-identical" {
 test "mount runs tick 0: the program is live before the first delta" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.hp | clamp 0 100 | div 100 | set plane.ui.bar
+        \\plane.hp | clamp 0 100 | div 100 | write plane.ui.bar
     , .{.{ "plane.hp", @as(i64, 250) }});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 1), fx.mock.writes.items.len);
@@ -538,7 +538,7 @@ test "defs close over nothing: plane paths inside a def body are rejected" {
 test "select chooses per tick without an if statement" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\select plane.under 10 20 | set plane.grade
+        \\select plane.under 10 20 | write plane.grade
     , .{.{ "plane.under", false }});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 20), types.asNumber(fx.mock.writes.items[0].value).?);
@@ -579,7 +579,10 @@ test "G2: frozen reference — the canonical dump hashes to a committed value" {
     // moved from "number" to "any". No mounted-program SEMANTICS changed —
     // the values and the propagation are identical, which the test below
     // pins directly rather than asserting here.
-    try testing.expectEqualStrings("939db860a972a4f14e600ade2ca922a3f43549cd02391548e94a1f246477ced6", &hex);
+    // Hash moved 2026-08-29: `set` became `write` (write-verbs beat 1), and
+    // the op NAME rides the canonical dump. Structural, not a value drift —
+    // the same class of move as the slot-type test beside this one.
+    try testing.expectEqualStrings("193bb6768a28bda6862db0045be9c8138c4b60f56c8c618ef1c460bcb297c84b", &hex);
 }
 
 test "G2's hash moved because the slot TYPE moved, not because a value did" {
@@ -621,7 +624,7 @@ test "use: aliases expand in chains, args, record sugar, and sinks" {
     try mountFixture(testing.allocator, &fx,
         \\use plane.player as p
         \\use p.vitals as v
-        \\p.health | clamp 0 100 | div 100 | set plane.ui.hp
+        \\p.health | clamp 0 100 | div 100 | write plane.ui.hp
         \\v.{mana, stamina} as pools
         \\select p.underwater 1 0 as tint
     , .{ .{ "plane.player.health", @as(i64, 50) }, .{ "plane.player.underwater", false } });
@@ -644,7 +647,7 @@ test "use: aliases expand in chains, args, record sugar, and sinks" {
 test "use: cycle detection sees through aliases" {
     try expectParseError(
         \\use plane.a as pa
-        \\pa.x | add 1 | set pa.x
+        \\pa.x | add 1 | write pa.x
     , "cycle");
 }
 
@@ -1383,7 +1386,7 @@ test "resultSlot: an expression line has a value; an effect line has none" {
     // expression feeding it — never the write itself
     var fx2: Fixture = undefined;
     try mountFixture(testing.allocator, &fx2,
-        \\plane.a | add 1 | set plane.out
+        \\plane.a | add 1 | write plane.out
     , .{.{ "plane.a", @as(i64, 4) }});
     defer fx2.deinit();
     const sid2 = fx2.prog.resultSlot() orelse return error.TestUnexpectedResult;
@@ -1592,11 +1595,11 @@ fn parseOk(gpa: std.mem.Allocator, reg: *rill.Registry, source: []const u8) !ril
 test "also: the branch leaves from the very slot the main wire continues from" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg, "plane.hp | rose_above 0 | also { set plane.log } | tap seen");
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | rose_above 0 | also { write plane.log } | tap seen");
     defer prog.deinit();
 
     const upstream = prog.node(nodeIdOf(&prog, "rose_above1").?).outputs[0];
-    const set_in = prog.slot(prog.node(nodeIdOf(&prog, "set1").?).inputs[0]);
+    const set_in = prog.slot(prog.node(nodeIdOf(&prog, "write1").?).inputs[0]);
     const tap_in = prog.slot(prog.node(nodeIdOf(&prog, "tap1").?).inputs[0]);
 
     // Identity on the stream is not an op that promises to return its input —
@@ -1613,7 +1616,7 @@ test "also: N occurrences run the block N times" {
     var reg = try rill.Registry.init(testing.allocator);
     defer reg.deinit();
     try rill.registerCore(&reg);
-    var prog = try parseOk(testing.allocator, &reg, "plane.alerts | also { set plane.log } | tap attack");
+    var prog = try parseOk(testing.allocator, &reg, "plane.alerts | also { write plane.log } | tap attack");
     defer prog.deinit();
 
     var mock = rill.MockPlane.init(testing.allocator);
@@ -1631,7 +1634,7 @@ test "also: N occurrences run the block N times" {
 
     // The side branch is roused exactly as often as the main wire, because
     // the rounds machinery cannot tell them apart — which is the point.
-    try testing.expectEqual(@as(u64, 3), rt.eval_count[nodeIdOf(&prog, "set1").?]);
+    try testing.expectEqual(@as(u64, 3), rt.eval_count[nodeIdOf(&prog, "write1").?]);
     try testing.expectEqual(@as(u64, 3), rt.eval_count[nodeIdOf(&prog, "tap1").?]);
     try testing.expectEqual(@as(usize, 3), mock.writes.items.len);
 }
@@ -1642,21 +1645,21 @@ test "also: a multi-statement block is more branches off the same slot" {
     var prog = try parseOk(testing.allocator, &reg,
         \\plane.hp | rose_above 0
         \\  | also {
-        \\      set plane.a
-        \\      set plane.b
+        \\      write plane.a
+        \\      write plane.b
         \\    }
         \\  | tap seen
     );
     defer prog.deinit();
 
     const upstream = prog.node(nodeIdOf(&prog, "rose_above1").?).outputs[0];
-    try testing.expectEqual(upstream, prog.slot(prog.node(nodeIdOf(&prog, "set1").?).inputs[0]).source.wire);
-    try testing.expectEqual(upstream, prog.slot(prog.node(nodeIdOf(&prog, "set2").?).inputs[0]).source.wire);
+    try testing.expectEqual(upstream, prog.slot(prog.node(nodeIdOf(&prog, "write1").?).inputs[0]).source.wire);
+    try testing.expectEqual(upstream, prog.slot(prog.node(nodeIdOf(&prog, "write2").?).inputs[0]).source.wire);
     try testing.expectEqual(@as(usize, 3), prog.downstream[upstream].len);
 }
 
 test "also: the block's writes join the write list — the cycle check sees through it" {
-    try expectParseError("plane.x | rose_above 0 | also { set plane.x } | tap t", "cycle");
+    try expectParseError("plane.x | rose_above 0 | also { write plane.x } | tap t", "cycle");
 }
 
 test "also: no name escapes the block" {
@@ -1685,7 +1688,7 @@ test "also: a branch ending in an effect never warns, value or no value" {
     // `set` yields nothing; `emitter mode` is an effect that still hands a
     // value back. Neither discarded anything — both wrote.
     var prog = try parseOk(testing.allocator, &reg,
-        \\plane.hp | also { set plane.a } | tap seen
+        \\plane.hp | also { write plane.a } | tap seen
         \\plane.hp | also { emitter mode ambient } | tap heard
     );
     defer prog.deinit();
@@ -1696,13 +1699,13 @@ test "also: the shapes that cannot mean anything are refused" {
     // A block with no branch passes the value along and does nothing.
     try expectParseError("plane.hp | also { } | tap t", "empty block");
     // Nothing to branch off.
-    try expectParseError("also { set plane.a }", "needs a value to pass along");
-    try expectParseError("plane.hp | also { also { set plane.a } }", "needs a value to pass along");
+    try expectParseError("also { write plane.a }", "needs a value to pass along");
+    try expectParseError("plane.hp | also { also { write plane.a } }", "needs a value to pass along");
     // A branch head that isn't an operator was never wired to the source, so
     // it could never rouse — the silent failure this syntax exists to avoid.
-    try expectParseError("plane.hp | also { plane.other | set plane.a } | tap t", "begin with an operator");
-    try expectParseError("plane.hp | also { 42 | set plane.a } | tap t", "begin with an operator");
-    try expectParseError("plane.hp | also { set plane.a", "unclosed block");
+    try expectParseError("plane.hp | also { plane.other | write plane.a } | tap t", "begin with an operator");
+    try expectParseError("plane.hp | also { 42 | write plane.a } | tap t", "begin with an operator");
+    try expectParseError("plane.hp | also { write plane.a", "unclosed block");
     // `also` is the syntax's word, so it cannot also be a stream's.
     try expectParseError("plane.hp | mul 2 as also", "reserved");
 }
@@ -1729,7 +1732,7 @@ test "also: a record argument still closes its own brace" {
     var reg = try rill.Registry.init(testing.allocator);
     defer reg.deinit();
     try rill.registerCore(&reg);
-    var prog = try parseOk(testing.allocator, &reg, "plane.hp | also { latch trigger: plane.tick | set plane.a } | tap t");
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | also { latch trigger: plane.tick | write plane.a } | tap t");
     defer prog.deinit();
     try testing.expect(nodeIdOf(&prog, "latch1") != null);
 }
@@ -1753,7 +1756,7 @@ test "registry: a reserved word cannot name an operator" {
 
 // ---------------------------------------------------------------------------
 // `inc` — the third write kind. Counters were inexpressible: `plane.x | add 1
-// | set plane.x` reads a path it writes and §4.4 rightly refuses it.
+// | write plane.x` reads a path it writes and §4.4 rightly refuses it.
 // ---------------------------------------------------------------------------
 
 test "inc: each rousing adds `by`, and the amount is never the in-flowing value" {
@@ -2149,7 +2152,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "choose", .class = .pure },
         .{ .name = "project", .class = .pure },
         .{ .name = "merge", .class = .pure },
-        .{ .name = "set", .class = .effect },
+        .{ .name = "write", .class = .effect },
         .{ .name = "notify", .class = .effect },
         .{ .name = "inc", .class = .effect },
         .{ .name = "cast", .class = .effect }, // writes the world — through the field store, not a path
@@ -2296,7 +2299,7 @@ test "reserved delta kinds are refused, never quietly treated as values" {
     // A membership WRITE is refused at the plane too, for the same reason: a
     // tag stored as a value would silently lose idempotence, which is the one
     // property that distinguishes it from accumulate.
-    try testing.expectError(error.Denied, mock.asPlane().write("plane.tags", enc, .membership));
+    try testing.expectError(error.Denied, mock.asPlane().write("plane.tags", enc, .membership, .base, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -2312,7 +2315,7 @@ test "set: a rousing writes a constant, in one node" {
     // Ironwood's gate.rill: "at the sound of the alarm, drop the portcullis."
     // Before the `value` port this took three nodes to say one word — hold the
     // constant in a latch, sample it on the rousing, pipe it to the sink.
-    var prog = try parseOk(testing.allocator, &reg, "plane.signals.horn | set plane.gate.portcullis 1");
+    var prog = try parseOk(testing.allocator, &reg, "plane.signals.horn | write plane.gate.portcullis 1");
     defer prog.deinit();
     try testing.expectEqual(@as(usize, 1), prog.nodeCount());
 
@@ -2344,7 +2347,7 @@ test "set: the older forms are unchanged" {
     defer reg.deinit();
     try rill.registerCore(&reg);
     // Piped, value unbound: write what's flowing.
-    var prog = try parseOk(testing.allocator, &reg, "plane.hp | clamp 0 100 | set plane.ui.bar");
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | clamp 0 100 | write plane.ui.bar");
     defer prog.deinit();
     var mock = rill.MockPlane.init(testing.allocator);
     defer mock.deinit();
@@ -2355,7 +2358,7 @@ test "set: the older forms are unchanged" {
 
     // Unpiped: the value binds port 0 and is both rousing and payload — the
     // console's entire `set <path> <value>` grammar, untouched.
-    var prog2 = try parseOk(testing.allocator, &reg, "set plane.ui.bar 0.5");
+    var prog2 = try parseOk(testing.allocator, &reg, "write plane.ui.bar 0.5");
     defer prog2.deinit();
     var mock2 = rill.MockPlane.init(testing.allocator);
     defer mock2.deinit();
@@ -2369,7 +2372,7 @@ test "set: a change in the value alone is not a write" {
     var reg = try rill.Registry.init(testing.allocator);
     defer reg.deinit();
     try rill.registerCore(&reg);
-    var prog = try parseOk(testing.allocator, &reg, "plane.pulse | set plane.out plane.amount");
+    var prog = try parseOk(testing.allocator, &reg, "plane.pulse | write plane.out plane.amount");
     defer prog.deinit();
     var mock = rill.MockPlane.init(testing.allocator);
     defer mock.deinit();
@@ -2390,25 +2393,186 @@ test "set: a change in the value alone is not a write" {
     try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
 }
 
-test "set and notify are the same shape, and that is the point" {
+test "write: the mode rides the call, and a value beside it binds its own slot" {
+    // The campaign's core claim (write-verbs beat 1, ruled 2026-08-29): the
+    // blend intent is chosen at the CALL SITE and arrives at the host as
+    // data — never inferred from the target's class. One case per mode, each
+    // with a value in the adjacent slot, which is also the disambiguation
+    // gate: `write plane.k 1 hold` must bind 1 as the payload and hold as
+    // the mode, or the whole one-row grammar is a bug factory.
+    const Case = struct { src: []const u8, mode: rill.WriteMode };
+    for ([_]Case{
+        .{ .src = "write plane.k 1", .mode = .base },
+        .{ .src = "write plane.k 1 hold", .mode = .hold },
+        .{ .src = "write plane.k 1 add", .mode = .add },
+        .{ .src = "write plane.k 1 mul", .mode = .mul },
+        .{ .src = "write plane.k 1 stops", .mode = .stops },
+    }) |case| {
+        var reg = try rill.Registry.init(testing.allocator);
+        defer reg.deinit();
+        try rill.registerCore(&reg);
+        var prog = try parseOk(testing.allocator, &reg, case.src);
+        defer prog.deinit();
+        var mock = rill.MockPlane.init(testing.allocator);
+        defer mock.deinit();
+        var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+        defer rt.deinit();
+        try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+        try testing.expectEqual(case.mode, mock.writes.items[0].mode);
+        try testing.expectEqual(@as(f64, 1), types.asNumber(mock.writes.items[0].value).?);
+    }
+}
+
+test "write … clear rides the pipe, carries nothing, and refuses a value" {
+    const Seen = struct {
+        var n: usize = 0;
+        var detail: [160]u8 = undefined;
+        var detail_len: usize = 0;
+        fn hook(_: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+            n += 1;
+            detail_len = @min(ev.detail.len, detail.len);
+            @memcpy(detail[0..detail_len], ev.detail[0..detail_len]);
+        }
+    };
     var reg = try rill.Registry.init(testing.allocator);
     defer reg.deinit();
     try rill.registerCore(&reg);
-    const set = reg.get(reg.find("set").?);
+
+    // The withdrawing form: roused by the pipe, no payload — the value slot
+    // empty ON PURPOSE, and the write that reaches the host says .clear with
+    // zero bytes.
+    var prog = try parseOk(testing.allocator, &reg, "plane.t | write plane.k clear");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    try feedValue(&rt, testing.allocator, "plane.t", @as(i64, 1));
+    try rt.tick(.{});
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+    try testing.expectEqual(rill.WriteMode.clear, mock.writes.items[0].mode);
+    try testing.expectEqual(@as(usize, 0), mock.writes.items[0].value.len);
+
+    // A value beside clear is a category error, refused in words — binding
+    // it silently would let "clear 0.5" read as writing a half.
+    Seen.n = 0;
+    var prog2 = try parseOk(testing.allocator, &reg, "plane.t | write plane.k 5 clear");
+    defer prog2.deinit();
+    var mock2 = rill.MockPlane.init(testing.allocator);
+    defer mock2.deinit();
+    var rt2 = try rill.Runtime.mount(testing.allocator, &prog2, mock2.asPlane(), .{ .error_fn = Seen.hook });
+    defer rt2.deinit();
+    try feedValue(&rt2, testing.allocator, "plane.t", @as(i64, 1));
+    try rt2.tick(.{});
+    try testing.expectEqual(@as(usize, 0), mock2.writes.items.len);
+    try testing.expect(Seen.n > 0);
+    try testing.expect(std.mem.indexOf(u8, Seen.detail[0..Seen.detail_len], "takes no value") != null);
+}
+
+test "write: one mode only — two flags refuse in words" {
+    const Seen = struct {
+        var n: usize = 0;
+        var detail: [160]u8 = undefined;
+        var detail_len: usize = 0;
+        fn hook(_: ?*anyopaque, ev: rill.eval.ErrorEvent) void {
+            n += 1;
+            detail_len = @min(ev.detail.len, detail.len);
+            @memcpy(detail[0..detail_len], ev.detail[0..detail_len]);
+        }
+    };
+    Seen.n = 0;
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "write plane.k 1 hold add");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .error_fn = Seen.hook });
+    defer rt.deinit();
+    try testing.expectEqual(@as(usize, 0), mock.writes.items.len);
+    try testing.expect(Seen.n > 0);
+    try testing.expect(std.mem.indexOf(u8, Seen.detail[0..Seen.detail_len], "one mode only") != null);
+}
+
+test "write: the mode words are a closed set — a stray word refuses" {
+    // The closed enum is what keeps `write knob 5 bogus` from quietly
+    // binding somewhere; the refusal names the stray.
+    try expectParseError("write plane.k 1 bogus", "bogus");
+}
+
+test "the renamed front door: `set` refuses by naming `write`" {
+    // The README lesson pre-paid: every rill ever written says `set`, and
+    // the refusal must hand the author the new word, not a shrug.
+    try expectParseError("plane.a | set plane.k", "became `write`");
+}
+
+test "write: statement identity rides the call, distinct per statement" {
+    // Per-statement LEVELS (ruled 2026-08-29) fold by (owner, stmt) — so two
+    // statements in one file must reach the host as two identities, or beat
+    // 2 rebuilds the replace-vs-sum bug with better paperwork.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg,
+        \\plane.a | write plane.x
+        \\plane.a | write plane.y
+    );
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    try feedValue(&rt, testing.allocator, "plane.a", @as(i64, 3));
+    try rt.tick(.{});
+    try testing.expectEqual(@as(usize, 2), mock.writes.items.len);
+    try testing.expect(mock.writes.items[0].stmt != mock.writes.items[1].stmt);
+}
+
+test "notify stays base: an occurrence has no lane to join" {
+    // notify shares write's eval with ONE static — the guard this pins was
+    // found by an index panic, and without it the next statics reshuffle
+    // finds it again the hard way.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "plane.a | notify plane.k");
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    try feedValue(&rt, testing.allocator, "plane.a", @as(i64, 1));
+    try rt.tick(.{});
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+    try testing.expectEqual(rill.WriteMode.base, mock.writes.items[0].mode);
+}
+
+test "write and notify share the sink PORT shape; the mode statics are write's alone" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const wr = reg.get(reg.find("write").?);
     const notify = reg.get(reg.find("notify").?);
     // They diverged for exactly one day — notify grew the payload port first,
     // because the pipe took its only port and the sentinel was unsayable, and
     // `set` met the identical wall one scenario later. The port is the sink
-    // SHAPE now, not one op's exception. What is left is intent.
-    try testing.expectEqual(set.inputs.len, notify.inputs.len);
-    for (set.inputs, notify.inputs) |a, b| {
+    // SHAPE now, not one op's exception. What is left is intent — and since
+    // write-verbs (2026-08-29) `write` carries that intent as five flag
+    // statics that notify deliberately does not have: an occurrence has no
+    // lane to join.
+    try testing.expectEqual(wr.inputs.len, notify.inputs.len);
+    for (wr.inputs, notify.inputs) |a, b| {
         try testing.expectEqualStrings(a.name, b.name);
         try testing.expectEqual(a.optional, b.optional);
     }
-    try testing.expectEqual(set.class, notify.class);
-    try testing.expectEqual(@as(usize, 0), set.outputs.len);
+    try testing.expectEqual(wr.class, notify.class);
+    try testing.expectEqual(@as(usize, 0), wr.outputs.len);
     // This is the slot the G2 hash moved for: unbound, but present.
-    try testing.expect(set.inputs[1].optional);
+    try testing.expect(wr.inputs[1].optional);
+    // The statics split: path + five mode flags vs path alone.
+    try testing.expectEqual(@as(usize, 6), wr.statics.len);
+    try testing.expectEqual(@as(usize, 1), notify.statics.len);
 }
 
 // ---------------------------------------------------------------------------
@@ -2464,11 +2628,11 @@ test "cast: what refuses to parse, refuses loudly" {
     // gets named, which is where the eye needs to land.
     try expectParseError("plane.x | cast $f 1 radiu 2 at plane.p", "needs 'radius <value>'");
     // No bare channel read in v1: a field is read at a standpoint.
-    try expectParseError("$alarm | mul 2 | set plane.x", "standpoint");
+    try expectParseError("$alarm | mul 2 | write plane.x", "standpoint");
     // The sigil belongs to channels alone.
     try expectParseError("plane.x | mul 2 as $x", "cannot wear");
     try expectParseError("plane.x | mul 2 as @x", "cannot wear");
-    try expectParseError("@tom | mul 2 | set plane.x", "entity reference");
+    try expectParseError("@tom | mul 2 | write plane.x", "entity reference");
     try expectParseError("use plane.a as $s", "cannot wear");
     try expectParseError("def $d(x) = x | mul 2", "cannot wear");
 }
@@ -2477,7 +2641,7 @@ test "cast: a channel name is a legal plane-path segment" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
     var prog = try parseOk(testing.allocator, &reg,
-        "plane.sensors.gate.$alarm | rose_above 0.5 | set plane.ui.alert");
+        "plane.sensors.gate.$alarm | rose_above 0.5 | write plane.ui.alert");
     defer prog.deinit();
     try testing.expectEqualStrings("plane.sensors.gate.$alarm", prog.subs.items[0].path);
 }
@@ -2653,13 +2817,13 @@ test "block rule: any source takes a block, and branches are branches" {
     defer reg.deinit();
     var prog = try parseOk(testing.allocator, &reg,
         \\plane.hp {
-        \\    set plane.a
-        \\    set plane.b
+        \\    write plane.a
+        \\    write plane.b
         \\}
     );
     defer prog.deinit();
-    const s1 = prog.slot(prog.node(nodeIdOf(&prog, "set1").?).inputs[0]).source;
-    const s2 = prog.slot(prog.node(nodeIdOf(&prog, "set2").?).inputs[0]).source;
+    const s1 = prog.slot(prog.node(nodeIdOf(&prog, "write1").?).inputs[0]).source;
+    const s2 = prog.slot(prog.node(nodeIdOf(&prog, "write2").?).inputs[0]).source;
     try testing.expectEqualStrings("plane.hp", s1.plane);
     try testing.expectEqualStrings("plane.hp", s2.plane);
 }
@@ -2668,9 +2832,9 @@ test "block rule: the also guards carry over, and mid-chain blocks name their sp
     // A block is a fan-out, not a body — every also-rule holds at the head.
     try expectParseError("every 1f { }", "empty block");
     try expectParseError("every 1f { tap t as x }", "no name escapes");
-    try expectParseError("every 1f { plane.x | set plane.a }", "begin with an operator");
+    try expectParseError("every 1f { plane.x | write plane.a }", "begin with an operator");
     // Mid-chain, the word is `also` — one spelling per position.
-    try expectParseError("plane.x | mul 2 { set plane.a }", "ride 'also");
+    try expectParseError("plane.x | mul 2 { write plane.a }", "ride 'also");
 }
 
 test "block rule: a serialized caster survives the round trip, cadence intact" {
@@ -2730,7 +2894,7 @@ test "comments: `//` to end of line, full-line and trailing, either side of a na
     try mountFixture(testing.allocator, &fx,
         \\// a full-line comment
         \\plane.hp | mul 2 // after a number token
-        \\  | set plane.out// flush against a name: the name cannot eat the slashes
+        \\  | write plane.out// flush against a name: the name cannot eat the slashes
     , .{.{ "plane.hp", @as(i64, 4) }});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 8), types.asNumber(fx.mock.store.get("plane.out").?).?);
@@ -2877,7 +3041,7 @@ test "the manuals parse: every printed example compiles" {
 const accepts_anything = [_][]const u8{
     // sources — no input port to feed
     "clock", "frame",  "pi",    "tau",    "const", // sinks and passthroughs — any value is a legal payload
-    "set",   "notify", "tap",   "record",
+    "write", "notify", "tap",   "record",
     // value-agnostic flow: these move bytes without reading them
     "latch", "changed", "where", "partition", "sample",
     "debounce", "throttle", "cooldown", "delay", "window", "arm", "disarm",
@@ -2903,8 +3067,8 @@ const driver_overrides = [_]struct { name: []const u8, source: []const u8 }{
     .{ .name = "tag", .source = "plane.bad | tag @e #t" },
     .{ .name = "untag", .source = "plane.bad | untag @e #t" },
     .{ .name = "inc", .source = "plane.bad | inc plane.out plane.bad" },
-    .{ .name = "project", .source = "plane.bad | project f | set plane.out" },
-    .{ .name = "stats", .source = "plane.bad | stats | set plane.out" },
+    .{ .name = "project", .source = "plane.bad | project f | write plane.out" },
+    .{ .name = "stats", .source = "plane.bad | stats | write plane.out" },
 };
 
 /// A syntactically valid filler for a port, from its declared type — so the
@@ -2934,7 +3098,7 @@ fn staticFiller(kind: registry.StaticKind) []const u8 {
     };
 }
 
-/// Build `plane.bad | <op> <fillers…> | set plane.out` from the definition.
+/// Build `plane.bad | <op> <fillers…> | write plane.out` from the definition.
 /// Returns null when the shape can't be driven generically (a tail port takes
 /// the rest of the line; a variadic op has no declared ports).
 fn driverFor(gpa: std.mem.Allocator, def: registry.OpDef) !?[]u8 {
@@ -2965,7 +3129,7 @@ fn driverFor(gpa: std.mem.Allocator, def: registry.OpDef) !?[]u8 {
         try src.appendSlice(gpa, fillerFor(p));
     }
     if (def.outputs.len > 0 and !def.class.writes()) {
-        try src.appendSlice(gpa, " | set plane.out");
+        try src.appendSlice(gpa, " | write plane.out");
     }
     return try src.toOwnedSlice(gpa);
 }
@@ -3269,7 +3433,7 @@ test "beat 1b: a scalar broadcasts over a record — the follow row, one line" {
     // rebuilt record. Now it is the sentence.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos",
+        "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | write plane.lights.follow.pos",
         .{.{ "plane.entities.player.pos", .{ .x = @as(f64, 1), .y = @as(f64, 5), .z = @as(f64, -3) } }});
     defer fx.deinit();
 
@@ -3292,8 +3456,8 @@ test "beat 1b: a scalar broadcasts over a record — the follow row, one line" {
 test "beat 1b: scalar over record, record over scalar, and both orders agree" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.p | mul 2 | set plane.a
-        \\plane.p | sub 1 | set plane.b
+        \\plane.p | mul 2 | write plane.a
+        \\plane.p | sub 1 | write plane.b
     , .{.{ "plane.p", .{ .x = @as(f64, 3), .y = @as(f64, 4) } }});
     defer fx.deinit();
     const a = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?);
@@ -3309,7 +3473,7 @@ test "beat 1b: scalar over record, record over scalar, and both orders agree" {
 test "beat 1b: record ⊗ record is elementwise on the same field set" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.a | add plane.b | set plane.o", .{
+        "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
         .{ "plane.b", .{ .x = @as(f64, 10), .y = @as(f64, 20) } },
     });
@@ -3326,7 +3490,7 @@ test "beat 1b: record ⊗ record with a different field set REFUSES, naming the 
     // one's clothes — and it is exactly what ICE users learned to dread.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        "plane.a | add plane.b | set plane.o", .{
+        "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = @as(f64, 3) } },
         .{ "plane.b", .{ .x = @as(f64, 10), .y = @as(f64, 20) } },
     });
@@ -3340,7 +3504,7 @@ test "beat 1b: record ⊗ record with a different field set REFUSES, naming the 
 test "beat 1b: the missing field is named on whichever side lacks it" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        "plane.a | add plane.b | set plane.o", .{
+        "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1) } },
         .{ "plane.b", .{ .x = @as(f64, 1), .w = @as(f64, 2) } },
     });
@@ -3351,7 +3515,7 @@ test "beat 1b: the missing field is named on whichever side lacks it" {
 test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with both" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | window 10s | mul 2 | set plane.o", .{.{ "plane.v", @as(f64, 3) }});
+        "plane.v | window 10s | mul 2 | write plane.o", .{.{ "plane.v", @as(f64, 3) }});
     defer fx.deinit();
     // `window 10s | mul 2` IS map — the draft's own claim, executed.
     const arr = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?);
@@ -3361,7 +3525,7 @@ test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with b
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        "plane.a | add plane.b | set plane.o", .{
+        "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", [_]f64{ 1, 2, 3 } },
         .{ "plane.b", [_]f64{ 10, 20 } },
     });
@@ -3374,7 +3538,7 @@ test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with b
 test "beat 1b: a record and an array have no elementwise meaning" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        "plane.a | add plane.b | set plane.o", .{
+        "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
         .{ "plane.b", [_]f64{ 1, 2 } },
     });
@@ -3385,7 +3549,7 @@ test "beat 1b: a record and an array have no elementwise meaning" {
 test "beat 1b: nesting recurses, and a non-numeric leaf is named where it lives" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.a | mul 2 | set plane.o",
+        "plane.a | mul 2 | write plane.o",
         .{.{ "plane.a", .{ .inner = .{ .x = @as(f64, 3) } } }});
     defer fx.deinit();
     const nested = try fieldValue(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?, "inner");
@@ -3398,7 +3562,7 @@ test "beat 1b: nesting recurses, and a non-numeric leaf is named where it lives"
     // A string two levels down is named by its PATH, not merely reported.
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        "plane.a | mul 2 | set plane.o",
+        "plane.a | mul 2 | write plane.o",
         .{.{ "plane.a", .{ .inner = .{ .name = "tom" } } }});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "mul", "string", "not a number", ".inner.name" });
@@ -3407,7 +3571,7 @@ test "beat 1b: nesting recurses, and a non-numeric leaf is named where it lives"
 test "beat 1b: comparators broadcast — beat 3's keep depends on it" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.a | > 0 | set plane.o", .{.{ "plane.a", [_]f64{ 1, -2, 3 } }});
+        "plane.a | > 0 | write plane.o", .{.{ "plane.a", [_]f64{ 1, -2, 3 } }});
     defer fx.deinit();
     const bits = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.gt1.out.out").?);
     defer testing.allocator.free(bits);
@@ -3417,8 +3581,8 @@ test "beat 1b: comparators broadcast — beat 3's keep depends on it" {
 test "beat 1b: and/or/not broadcast over containers too" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.flags | not | set plane.a
-        \\plane.flags | and true | set plane.b
+        \\plane.flags | not | write plane.a
+        \\plane.flags | and true | write plane.b
     , .{.{ "plane.flags", [_]bool{ true, false } }});
     defer fx.deinit();
     const n = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.not1.out.out").?);
@@ -3436,8 +3600,8 @@ test "beat 1b: `=` does NOT broadcast, deliberately" {
     // REPLACE a good answer with a different one. Whole-value equality stays.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.a | = plane.b | set plane.same
-        \\plane.a | = plane.c | set plane.other
+        \\plane.a | = plane.b | write plane.same
+        \\plane.a | = plane.c | write plane.other
     , .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
         .{ "plane.b", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
@@ -3461,20 +3625,20 @@ test "beat 1b: the tier-1 math words are re-scored against containers" {
     // array — not just the two that happened to have a customer.
     const Case = struct { src: []const u8, node: []const u8, want: [2]f64 };
     const cases = [_]Case{
-        .{ .src = "plane.v | add 1 | set plane.o", .node = "add1", .want = .{ 4, -1 } },
-        .{ .src = "plane.v | sub 1 | set plane.o", .node = "sub1", .want = .{ 2, -3 } },
-        .{ .src = "plane.v | mul 3 | set plane.o", .node = "mul1", .want = .{ 9, -6 } },
-        .{ .src = "plane.v | div 2 | set plane.o", .node = "div1", .want = .{ 1.5, -1 } },
-        .{ .src = "plane.v | min 0 | set plane.o", .node = "min1", .want = .{ 0, -2 } },
-        .{ .src = "plane.v | max 0 | set plane.o", .node = "max1", .want = .{ 3, 0 } },
-        .{ .src = "plane.v | abs | set plane.o", .node = "abs1", .want = .{ 3, 2 } },
-        .{ .src = "plane.v | floor | set plane.o", .node = "floor1", .want = .{ 3, -2 } },
-        .{ .src = "plane.v | ceil | set plane.o", .node = "ceil1", .want = .{ 3, -2 } },
-        .{ .src = "plane.v | round | set plane.o", .node = "round1", .want = .{ 3, -2 } },
-        .{ .src = "plane.v | sign | set plane.o", .node = "sign1", .want = .{ 1, -1 } },
-        .{ .src = "plane.v | pow 2 | set plane.o", .node = "pow1", .want = .{ 9, 4 } },
-        .{ .src = "plane.v | mod 4 | set plane.o", .node = "mod1", .want = .{ 3, 2 } },
-        .{ .src = "plane.v | sqrt | set plane.o", .node = "sqrt1", .want = .{ 1.7320508075688772, std.math.nan(f64) } },
+        .{ .src = "plane.v | add 1 | write plane.o", .node = "add1", .want = .{ 4, -1 } },
+        .{ .src = "plane.v | sub 1 | write plane.o", .node = "sub1", .want = .{ 2, -3 } },
+        .{ .src = "plane.v | mul 3 | write plane.o", .node = "mul1", .want = .{ 9, -6 } },
+        .{ .src = "plane.v | div 2 | write plane.o", .node = "div1", .want = .{ 1.5, -1 } },
+        .{ .src = "plane.v | min 0 | write plane.o", .node = "min1", .want = .{ 0, -2 } },
+        .{ .src = "plane.v | max 0 | write plane.o", .node = "max1", .want = .{ 3, 0 } },
+        .{ .src = "plane.v | abs | write plane.o", .node = "abs1", .want = .{ 3, 2 } },
+        .{ .src = "plane.v | floor | write plane.o", .node = "floor1", .want = .{ 3, -2 } },
+        .{ .src = "plane.v | ceil | write plane.o", .node = "ceil1", .want = .{ 3, -2 } },
+        .{ .src = "plane.v | round | write plane.o", .node = "round1", .want = .{ 3, -2 } },
+        .{ .src = "plane.v | sign | write plane.o", .node = "sign1", .want = .{ 1, -1 } },
+        .{ .src = "plane.v | pow 2 | write plane.o", .node = "pow1", .want = .{ 9, 4 } },
+        .{ .src = "plane.v | mod 4 | write plane.o", .node = "mod1", .want = .{ 3, 2 } },
+        .{ .src = "plane.v | sqrt | write plane.o", .node = "sqrt1", .want = .{ 1.7320508075688772, std.math.nan(f64) } },
     };
     inline for (cases) |c| {
         // as a record…
@@ -3512,7 +3676,7 @@ test "beat 1b: a scalar program is bit-identical to what it was before broadcast
     // program that never uses it. Same arithmetic, same encoding, same bytes.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | add 1 | mul 2 | > 5 | set plane.o", .{.{ "plane.v", @as(f64, 3) }});
+        "plane.v | add 1 | mul 2 | > 5 | write plane.o", .{.{ "plane.v", @as(f64, 3) }});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 4), slotNum(&fx, "programs.p.add1.out.out").?);
     try testing.expectEqual(@as(f64, 8), slotNum(&fx, "programs.p.mul1.out.out").?);
@@ -3523,11 +3687,11 @@ test "beat 1b: the math completions" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\pi as half_turn
-        \\half_turn | set plane.pi
-        \\tau | set plane.tau
-        \\plane.v | mul half_turn | sin | set plane.s
-        \\plane.v | atan2 0 | set plane.at
-        \\plane.v | fract | set plane.fr
+        \\half_turn | write plane.pi
+        \\tau | write plane.tau
+        \\plane.v | mul half_turn | sin | write plane.s
+        \\plane.v | atan2 0 | write plane.at
+        \\plane.v | fract | write plane.fr
     , .{.{ "plane.v", @as(f64, 1) }});
     defer fx.deinit();
     try testing.expectEqual(std.math.pi, slotNum(&fx, "programs.p.pi1.out.out").?);
@@ -3542,8 +3706,8 @@ test "beat 1b: `mod` and `fract` follow the divisor, which is what angles need" 
     // people forget to test.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.a | mod 360 | set plane.m
-        \\plane.a | fract | set plane.f
+        \\plane.a | mod 360 | write plane.m
+        \\plane.a | fract | write plane.f
     , .{.{ "plane.a", @as(f64, -90.25) }});
     defer fx.deinit();
     try testing.expectApproxEqAbs(@as(f64, 269.75), slotNum(&fx, "programs.p.mod1.out.out").?, 1e-12);
@@ -3582,7 +3746,7 @@ test "beat 1a: the breathing exposure is one line" {
     // `sin` and no `wave` there was no sine to be had.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure", .{});
+        "lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure", .{});
     defer fx.deinit();
 
     // One line, three nodes, one program, no seed: nothing is read from the
@@ -3622,7 +3786,7 @@ test "beat 1a: a register STOPS — the eval counter goes flat inside epsilon" {
     // across a hundred more frames.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.target | ease 100ms | set plane.out",
+        "plane.target | ease 100ms | write plane.out",
         .{.{ "plane.target", @as(f64, 1.0) }});
     defer fx.deinit();
 
@@ -3651,14 +3815,14 @@ test "beat 1a: every self-arming register stops, not just ease" {
     // campaign's load-bearing claim and one op proving it is one op.
     const Case = struct { src: []const u8, node: []const u8, seed: f64, then: f64 };
     const cases = [_]Case{
-        .{ .src = "plane.v | ease 50ms | set plane.o", .node = "ease1", .seed = 0, .then = 1 },
-        .{ .src = "plane.v | ramp 200ms | set plane.o", .node = "ramp1", .seed = 0, .then = 1 },
+        .{ .src = "plane.v | ease 50ms | write plane.o", .node = "ease1", .seed = 0, .then = 1 },
+        .{ .src = "plane.v | ramp 200ms | write plane.o", .node = "ramp1", .seed = 0, .then = 1 },
         // diff stops when the rate reaches zero: a value that stopped moving
         // has velocity zero, and reporting the last velocity forever is the
         // bug this op exists to avoid.
-        .{ .src = "plane.v | diff | set plane.o", .node = "diff1", .seed = 0, .then = 5 },
+        .{ .src = "plane.v | diff | write plane.o", .node = "diff1", .seed = 0, .then = 5 },
         // integrate stops at its clamp — the bound is also the cutoff.
-        .{ .src = "plane.v | integrate max 1 | set plane.o", .node = "integrate1", .seed = 0, .then = 100 },
+        .{ .src = "plane.v | integrate max 1 | write plane.o", .node = "integrate1", .seed = 0, .then = 100 },
     };
     inline for (cases) |c| {
         var fx: Fixture = undefined;
@@ -3683,8 +3847,8 @@ test "beat 1a: restore mid-animation does not jump" {
     // The epoch lives in op state instead, and this is what says so.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\clock | set plane.ui.elapsed
-        \\lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure
+        \\clock | write plane.ui.elapsed
+        \\lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure
     , .{});
     defer fx.deinit();
 
@@ -3723,8 +3887,8 @@ test "beat 1a: an animation replays bit-identically" {
     var a: Fixture = undefined;
     var b: Fixture = undefined;
     const src =
-        \\lfo tri 1s | range 0 10 | set plane.a
-        \\plane.v | ease 40ms | set plane.b
+        \\lfo tri 1s | range 0 10 | write plane.a
+        \\plane.v | ease 40ms | write plane.b
     ;
     try mountFixture(testing.allocator, &a, src, .{.{ "plane.v", @as(f64, 0) }});
     defer a.deinit();
@@ -3755,7 +3919,7 @@ test "beat 1a: `lfo` and `clock | wave` are the same waveform, bit for bit" {
     inline for (.{ "sine", "tri", "saw", "square" }) |shape| {
         var fx: Fixture = undefined;
         try mountFixture(testing.allocator, &fx,
-            "lfo " ++ shape ++ " 3s | set plane.a\nclock | wave " ++ shape ++ " 3s | set plane.b", .{});
+            "lfo " ++ shape ++ " 3s | write plane.a\nclock | wave " ++ shape ++ " 3s | write plane.b", .{});
         defer fx.deinit();
         for (1..40) |i| {
             try fx.rt.tick(.{ .time_ns = 100 * ms * i, .frame = @intCast(i) });
@@ -3771,10 +3935,10 @@ test "beat 1a: the waveforms are the waveforms" {
     // the arithmetic is exact: a quarter of 4f is 1f.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\lfo sine 4f | set plane.sine
-        \\lfo tri 4f | set plane.tri
-        \\lfo saw 4f | set plane.saw
-        \\lfo square 4f | set plane.square
+        \\lfo sine 4f | write plane.sine
+        \\lfo tri 4f | write plane.tri
+        \\lfo saw 4f | write plane.saw
+        \\lfo square 4f | write plane.square
     , .{});
     defer fx.deinit();
     const at = struct {
@@ -3812,7 +3976,7 @@ test "beat 1a: `ramp` lands its target exactly, and retargets from where it is" 
     // short of full would be a visible band.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | ramp 100ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+        "plane.v | ramp 100ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ramp1.out.out";
 
@@ -3841,7 +4005,7 @@ test "beat 1a: `ramp` interrupted mid-tween resumes from where it is" {
     // Interrupting mid-flight is the case that distinguishes them.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | ramp 100ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+        "plane.v | ramp 100ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ramp1.out.out";
 
@@ -3871,7 +4035,7 @@ test "beat 1a: `ease` stops inside epsilon and never snaps" {
     // of every fade would be a step.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | ease 20ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+        "plane.v | ease 20ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1));
     try run(&fx, 8 * ms, 60);
@@ -3886,7 +4050,7 @@ test "beat 1a: `ease up down` is the envelope follower" {
     // the point: rise and fall over the same interval must not match.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | abs | ease 20ms down 400ms | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+        "plane.v | abs | ease 20ms down 400ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ease1.out.out";
 
@@ -3904,7 +4068,7 @@ test "beat 1a: `ease up down` is the envelope follower" {
 test "beat 1a: `hold` ignores the storm, and does not tick" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | hold 100ms | set plane.o", .{.{ "plane.v", @as(f64, 1) }});
+        "plane.v | hold 100ms | write plane.o", .{.{ "plane.v", @as(f64, 1) }});
     defer fx.deinit();
     const out = "programs.p.hold1.out.out";
     const node = nodeIdOf(&fx.prog, "hold1").?;
@@ -3932,7 +4096,7 @@ test "beat 1a: `diff` baselines silently, then reports the rate" {
     // probe reviewer invented a sensor field because nothing derived it.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.d | diff | set plane.o", .{.{ "plane.d", @as(f64, 100) }});
+        "plane.d | diff | write plane.o", .{.{ "plane.d", @as(f64, 100) }});
     defer fx.deinit();
     const out = "programs.p.diff1.out.out";
 
@@ -3953,11 +4117,11 @@ test "beat 1a: `diff` baselines silently, then reports the rate" {
 test "beat 1a: `integrate` needs its clamp, and honours it" {
     // The clamp is REQUIRED, not optional: op state rides in every dump, so an
     // unbounded accumulator is a corpse that gets copied.
-    try expectParseError("plane.v | integrate | set plane.o", "max");
+    try expectParseError("plane.v | integrate | write plane.o", "max");
 
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | integrate max 2 | set plane.o", .{.{ "plane.v", @as(f64, 1) }});
+        "plane.v | integrate max 2 | write plane.o", .{.{ "plane.v", @as(f64, 1) }});
     defer fx.deinit();
     const out = "programs.p.integrate1.out.out";
     try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
@@ -3988,7 +4152,7 @@ test "integrate does not bill its sleep: one press is one tick, not eighty secon
     // treated as having stood through that one tick and no further.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | integrate max 0.5 | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+        "plane.v | integrate max 0.5 | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.integrate1.out.out";
 
@@ -4019,7 +4183,7 @@ test "ease glides out of a long sleep instead of snapping" {
     // tick's worth and the fade takes its stated time from the wake.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.v | ease 2s | set plane.o", .{.{ "plane.v", @as(f64, 0) }});
+        "plane.v | ease 2s | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ease1.out.out";
 
@@ -4042,8 +4206,8 @@ test "beat 1a: `range` clamps where `lerp` extrapolates" {
     // and stays inside the interval it was given. Same ruling as `along`.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.t | range 0.5 1.5 | set plane.ranged
-        \\plane.t | lerp 0.5 1.5 | set plane.lerped
+        \\plane.t | range 0.5 1.5 | write plane.ranged
+        \\plane.t | lerp 0.5 1.5 | write plane.lerped
     , .{.{ "plane.t", @as(f64, 2.0) }});
     defer fx.deinit();
     // The inequality FIRST (the ledger rule from beat 1a's retarget survivor:
@@ -4068,10 +4232,10 @@ test "beat 1a: `range` clamps where `lerp` extrapolates" {
 test "beat 1a: `shape` eases the unit interval" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.t | shape smooth | set plane.a
-        \\plane.t | shape in | set plane.b
-        \\plane.t | shape out | set plane.c
-        \\plane.t | shape linear | set plane.d
+        \\plane.t | shape smooth | write plane.a
+        \\plane.t | shape in | write plane.b
+        \\plane.t | shape out | write plane.c
+        \\plane.t | shape linear | write plane.d
     , .{.{ "plane.t", @as(f64, 0.5) }});
     defer fx.deinit();
     // Every curve passes through the midpoint of the ends it was given…
@@ -4089,8 +4253,8 @@ test "beat 1a: `shape` eases the unit interval" {
 test "beat 1a: an unknown shape is refused at parse, naming the list" {
     // `one_of` on a string port, checked at wire time — so a typo is caught
     // when the program is written, not three seconds into the animation.
-    try expectParseError("lfo sqare 4s | set plane.o", "sine");
-    try expectParseError("plane.t | shape bouncy | set plane.o", "smooth");
+    try expectParseError("lfo sqare 4s | write plane.o", "sine");
+    try expectParseError("plane.t | shape bouncy | write plane.o", "smooth");
 }
 
 test "beat 1a: `clock` and `frame` count from mount, not from zero" {
@@ -4103,7 +4267,7 @@ test "beat 1a: `clock` and `frame` count from mount, not from zero" {
     defer fx.mock.deinit();
     var diag = rill.Diag{};
     fx.prog = try rill.parse(testing.allocator, &fx.reg, "p",
-        "clock | set plane.secs\nframe | set plane.frames", &diag);
+        "clock | write plane.secs\nframe | write plane.frames", &diag);
     defer fx.prog.deinit();
     // Mounted mid-session, at t=90s / frame 5400 — the one-shot console
     // dispatch does this on every line.
@@ -4125,15 +4289,15 @@ test "beat 1a: an op-internal register is not a cycle, and the plane one still i
     // through the plane is refused, as it was before this beat.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.target | ease 100ms | set plane.smoothed", .{.{ "plane.target", @as(f64, 1) }});
+        "plane.target | ease 100ms | write plane.smoothed", .{.{ "plane.target", @as(f64, 1) }});
     defer fx.deinit();
     try testing.expect(fx.prog.findCycle() == null);
 
     // …and the same idea routed through the plane is still refused, at PARSE,
     // naming both the write and the subscription. A register does not buy a
     // way around §4.4; it makes going around it unnecessary.
-    try expectParseError("plane.smoothed | ease 100ms | set plane.smoothed", "cycle");
-    try expectParseError("plane.smoothed | ease 100ms | set plane.smoothed", "plane.smoothed");
+    try expectParseError("plane.smoothed | ease 100ms | write plane.smoothed", "cycle");
+    try expectParseError("plane.smoothed | ease 100ms | write plane.smoothed", "plane.smoothed");
 }
 
 // ---------------------------------------------------------------------------
@@ -4353,7 +4517,7 @@ test "paths: integer segments are legitimate — id-keyed rows parse" {
     // tokenizer's trailing-dot rule already splits `1.pos` correctly.
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg, "plane.ents.1.pos | set plane.debug.tom");
+    var prog = try parseOk(testing.allocator, &reg, "plane.ents.1.pos | write plane.debug.tom");
     defer prog.deinit();
     try testing.expectEqualStrings("plane.ents.1.pos", prog.subs.items[0].path);
 }
@@ -4434,14 +4598,14 @@ test "tag: a set-subscription on the tag is a cycle; the service leaves are sibl
     // subscribing `joined`/`count` is not special-cased into legality: it
     // simply never overlaps.
     try expectParseError(
-        \\plane.tags.garrison | set plane.hud.n
+        \\plane.tags.garrison | write plane.hud.n
         \\plane.x | tag @tom #garrison
     , "cycle");
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
     var prog = try parseOk(testing.allocator, &reg,
-        \\plane.tags.garrison.joined | set plane.hud.last_join
-        \\plane.tags.garrison.count | set plane.hud.n
+        \\plane.tags.garrison.joined | write plane.hud.last_join
+        \\plane.tags.garrison.count | write plane.hud.n
         \\plane.x | tag @tom #garrison
     );
     defer prog.deinit();
@@ -4455,7 +4619,7 @@ test "tag: what refuses to parse, refuses loudly" {
     try expectParseError("plane.x | tag @tom garrison", "'#'-sigil");
     try expectParseError("plane.x | tag @tom", "needs a condition argument");
     // A bare condition is not an expression — the read spelling is named.
-    try expectParseError("#garrison | set plane.x", "plane.tags.garrison.count");
+    try expectParseError("#garrison | write plane.x", "plane.tags.garrison.count");
     // The sigil guards hold for `#` as they do for `$` and `@`.
     try expectParseError("plane.x | mul 2 as #x", "cannot wear");
     try expectParseError("use plane.a as #s", "cannot wear");
@@ -4470,7 +4634,7 @@ test "tag: a def body's membership write still reaches the cycle check" {
     // drop registerWrites from instantiate and this parses.
     try expectParseError(
         \\def enlist(x) = x | also { tag @tom #garrison }
-        \\plane.tags.garrison | enlist | set plane.y
+        \\plane.tags.garrison | enlist | write plane.y
     , "cycle");
 }
 
@@ -4583,7 +4747,7 @@ test "cast: `to` refuses a sigil-less word, and an optional static must be kw" {
 test "lerp: the piped value is t — `s | lerp 0.5 1.5` reads as the sentence says" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        "plane.s | lerp 0.5 1.5 | set plane.out", .{
+        "plane.s | lerp 0.5 1.5 | write plane.out", .{
         .{ "plane.s", @as(f64, 0.25) },
     });
     defer fx.deinit();
@@ -4593,9 +4757,9 @@ test "lerp: the piped value is t — `s | lerp 0.5 1.5` reads as the sentence sa
 test "and/or/not: the conjunction idiom's missing words" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.dark | and plane.calm | set plane.both
-        \\plane.dark | or plane.calm | set plane.either
-        \\plane.dark | not | set plane.lit
+        \\plane.dark | and plane.calm | write plane.both
+        \\plane.dark | or plane.calm | write plane.either
+        \\plane.dark | not | write plane.lit
     , .{
         .{ "plane.dark", true },
         .{ "plane.calm", false },
@@ -4607,7 +4771,7 @@ test "and/or/not: the conjunction idiom's missing words" {
 }
 
 test "^: the archetype sigil lexes one token, guarded — engine-owned, never an expression" {
-    try expectParseError("^raider | set plane.x", "engine-owned");
+    try expectParseError("^raider | write plane.x", "engine-owned");
     try expectParseError("plane.x | mul 2 as ^x", "cannot wear");
     try expectParseError("def ^d(x) = x | mul 2", "cannot wear");
 }
@@ -4661,7 +4825,7 @@ test "MockPlane.putValue: containers encode as containers, strings stay strings"
 test "beat 2a: the array literal is a value, in order" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[0.2, 1, 0.6, 0.05] | set plane.out
+        \\[0.2, 1, 0.6, 0.05] | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -4678,7 +4842,7 @@ test "beat 2a: the array literal is a value, in order" {
 test "beat 2a: an array holding a path is LIVE, like a record" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[plane.a, plane.b] | nth 1 | set plane.out
+        \\[plane.a, plane.b] | nth 1 | write plane.out
     , .{ .{ "plane.a", @as(f64, 1) }, .{ "plane.b", @as(f64, 2) } });
     defer fx.deinit();
 
@@ -4694,7 +4858,7 @@ test "beat 2a: `choose` — pick an exposure by time-of-day band, one line" {
     // §4's "pick an exposure by time-of-day band", which was a `select` chain.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.time.band | choose [0.2, 1, 0.6, 0.05] | set plane.render.grade.exposure
+        \\plane.time.band | choose [0.2, 1, 0.6, 0.05] | write plane.render.grade.exposure
     , .{.{ "plane.time.band", @as(f64, 0) }});
     defer fx.deinit();
 
@@ -4712,8 +4876,8 @@ test "beat 2a: `nth` and `choose` are one computation with the hot port swapped"
     // arithmetic differs. If they ever disagree, one of them is a bug.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[10, 20, 30] | nth plane.i | set plane.byList
-        \\plane.i | choose [10, 20, 30] | set plane.byIndex
+        \\[10, 20, 30] | nth plane.i | write plane.byList
+        \\plane.i | choose [10, 20, 30] | write plane.byIndex
     , .{.{ "plane.i", @as(f64, 0) }});
     defer fx.deinit();
 
@@ -4730,7 +4894,7 @@ test "beat 2a: `nth` and `choose` are one computation with the hot port swapped"
 test "beat 2a: `nth` reads what `window` wrote — one array kind, not two" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.hp | window 5s | nth 0 | set plane.out
+        \\plane.hp | window 5s | nth 0 | write plane.out
     , .{.{ "plane.hp", @as(f64, 100) }});
     defer fx.deinit();
 
@@ -4748,7 +4912,7 @@ test "beat 2a: an out-of-range index refuses and names the length — never a cl
     // wave died instead, so a clamping implementation cannot pass it.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.i | choose [10, 20, 30] | set plane.out
+        \\plane.i | choose [10, 20, 30] | write plane.out
     , .{.{ "plane.i", @as(f64, 3) }});
     defer fx.deinit();
 
@@ -4761,7 +4925,7 @@ test "beat 2a: an out-of-range index refuses and names the length — never a cl
 test "beat 2a: a fractional index refuses rather than rounding" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.i | choose [10, 20, 30] | set plane.out
+        \\plane.i | choose [10, 20, 30] | write plane.out
     , .{.{ "plane.i", @as(f64, 1.5) }});
     defer fx.deinit();
 
@@ -4773,7 +4937,7 @@ test "beat 2a: a fractional index refuses rather than rounding" {
 test "beat 2a: indexing a non-array names the type word, both sides" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.rec | nth 0 | set plane.out
+        \\plane.rec | nth 0 | write plane.out
     , .{.{ "plane.rec", .{ .x = @as(f64, 1), .y = @as(f64, 2) } }});
     defer fx.deinit();
 
@@ -4785,7 +4949,7 @@ test "beat 2a: indexing a non-array names the type word, both sides" {
 test "beat 2a: the empty array is a value, and indexing it says so" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[] | nth 0 | set plane.out
+        \\[] | nth 0 | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -4802,9 +4966,9 @@ test "beat 2a: the empty array is a value, and indexing it says so" {
 test "beat 2a: arrays nest, and hold records" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[[1, 2], [3, 4]] | nth 1 | nth 0 | set plane.out
+        \\[[1, 2], [3, 4]] | nth 1 | nth 0 | write plane.out
         \\[{x: 1, y: 2}, {x: 3, y: 4}] | nth 1 as second
-        \\second.x | set plane.fx
+        \\second.x | write plane.fx
     , .{});
     defer fx.deinit();
 
@@ -4815,7 +4979,7 @@ test "beat 2a: arrays nest, and hold records" {
 test "beat 2a: beat 1b's broadcast reaches an array literal unchanged" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[1, 2, 3] | mul 2 | set plane.out
+        \\[1, 2, 3] | mul 2 | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -4845,8 +5009,8 @@ test "beat 2a: brackets became tokens and the tail still captures them verbatim"
 }
 
 test "beat 2a: an unmatched bracket is a loud parse error, not an inert raw token" {
-    try expectParseError("plane.a | mul [1, 2 | set plane.out", "|");
-    try expectParseError("plane.a | mul 2] | set plane.out", "]");
+    try expectParseError("plane.a | mul [1, 2 | write plane.out", "|");
+    try expectParseError("plane.a | mul 2] | write plane.out", "]");
 }
 
 test "beat 2a: the time-of-day row is CORRECT, not merely one line" {
@@ -4856,11 +5020,11 @@ test "beat 2a: the time-of-day row is CORRECT, not merely one line" {
     // at every hour, including the band edges where an off-by-one would live.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure
+        \\plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | write plane.render.grade.exposure
         \\plane.world.hour | < 6 as night
         \\plane.world.hour | < 18 as day
         \\night | select 0.2 1.0 as lit
-        \\day | select lit 0.4 | set plane.before.exposure
+        \\day | select lit 0.4 | write plane.before.exposure
     , .{.{ "plane.world.hour", @as(f64, 0) }});
     defer fx.deinit();
 
@@ -4920,7 +5084,7 @@ test "beat 2b: `match` refuses a malformed contact list, naming the field and bo
     // *silent* — a shape mismatch was discovered downstream, or not at all.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat
+        \\plane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat
     , .{.{ "plane.sensors.gate.nearest", .{ .id = "raider-3", .distance = "close" } }});
     defer fx.deinit();
 
@@ -4931,7 +5095,7 @@ test "beat 2b: `match` refuses a malformed contact list, naming the field and bo
 test "beat 2b: `match` passes what fits, unchanged" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat
+        \\plane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat
     , .{.{ "plane.sensors.gate.nearest", .{ .id = "raider-3", .distance = @as(f64, 8) } }});
     defer fx.deinit();
 
@@ -4948,7 +5112,7 @@ test "beat 2b: shapes are OPEN by default and `exact` closes them" {
     // `exact` that did nothing, both fail here.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | match {id: string} | set plane.open_out
+        \\plane.c | match {id: string} | write plane.open_out
     , .{.{ "plane.c", .{ .id = "x", .extra = @as(f64, 1) } }});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -4956,7 +5120,7 @@ test "beat 2b: shapes are OPEN by default and `exact` closes them" {
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\plane.c | match {id: string} exact | set plane.exact_out
+        \\plane.c | match {id: string} exact | write plane.exact_out
     , .{.{ "plane.c", .{ .id = "x", .extra = @as(f64, 1) } }});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "match", "extra", "not in the shape", "exact" });
@@ -4966,7 +5130,7 @@ test "beat 2b: shapes are OPEN by default and `exact` closes them" {
 test "beat 2b: `exact` closes every record in the shape, not only the outermost" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | match {pos: {x: number, y: number}} exact | set plane.out
+        \\plane.c | match {pos: {x: number, y: number}} exact | write plane.out
     , .{.{ "plane.c", .{ .pos = .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = @as(f64, 3) } } }});
     defer fx.deinit();
 
@@ -4976,7 +5140,7 @@ test "beat 2b: `exact` closes every record in the shape, not only the outermost"
 test "beat 2b: shapes nest, and the refusal names the path it took" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | match {pos: {x: number, y: number, z: number}, kind: string} | set plane.out
+        \\plane.c | match {pos: {x: number, y: number, z: number}, kind: string} | write plane.out
     , .{.{ "plane.c", .{ .kind = "raider", .pos = .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = "deep" } } }});
     defer fx.deinit();
 
@@ -4986,14 +5150,14 @@ test "beat 2b: shapes nest, and the refusal names the path it took" {
 test "beat 2b: `[number]` checks every element, and names the index" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[1, 2, 3] | match [number] | set plane.good
+        \\[1, 2, 3] | match [number] | write plane.good
     , .{});
     defer fx.deinit();
     try testing.expect(fx.rt.readSlot("programs.p.match1.out.out") != null);
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\[1, "two", 3] | match [number] | set plane.bad
+        \\[1, "two", 3] | match [number] | write plane.bad
     , .{});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "match", "'[1]'", "string", "not number" });
@@ -5002,7 +5166,7 @@ test "beat 2b: `[number]` checks every element, and names the index" {
 test "beat 2b: a missing field is named, and `?` makes it optional" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | match {id: string, distance: number} | set plane.out
+        \\plane.c | match {id: string, distance: number} | write plane.out
     , .{.{ "plane.c", .{ .id = "x" } }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "match", "'.distance'", "missing" });
@@ -5011,7 +5175,7 @@ test "beat 2b: a missing field is named, and `?` makes it optional" {
     // `?` must be the only difference.
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\plane.c | match {id: string, distance?: number} | set plane.out
+        \\plane.c | match {id: string, distance?: number} | write plane.out
     , .{.{ "plane.c", .{ .id = "x" } }});
     defer fx2.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -5021,14 +5185,14 @@ test "beat 2b: a missing field is named, and `?` makes it optional" {
 test "beat 2b: `any` requires presence and nothing else" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | match {id: any} | set plane.out
+        \\plane.c | match {id: any} | write plane.out
     , .{.{ "plane.c", .{ .id = @as(f64, 7) } }});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\plane.c | match {id: any} | set plane.out
+        \\plane.c | match {id: any} | write plane.out
     , .{.{ "plane.c", .{ .other = @as(f64, 7) } }});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "match", "'.id'", "missing" });
@@ -5045,7 +5209,7 @@ test "beat 2b: `expect` REFUSES THE MOUNT — the mount returns an error, not a 
     try mock.putValue("plane.c", .{ .id = @as(f64, 3) });
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
-        \\plane.c | expect {id: string} | set plane.out
+        \\plane.c | expect {id: string} | write plane.out
     , &diag);
     defer prog.deinit();
 
@@ -5060,7 +5224,7 @@ test "beat 2b: `expect` REFUSES THE MOUNT — the mount returns an error, not a 
 test "beat 2b: `expect` mounts what fits, and passes it through" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | expect {id: string, distance: number} | set plane.out
+        \\plane.c | expect {id: string, distance: number} | write plane.out
     , .{.{ "plane.c", .{ .id = "raider-3", .distance = @as(f64, 8) } }});
     defer fx.deinit();
 
@@ -5079,7 +5243,7 @@ test "beat 2b: `expect` NEVER falls back to a runtime check" {
     // `expect` reading. A fallback-to-runtime implementation cannot pass it.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | expect {id: string} | set plane.out
+        \\plane.c | expect {id: string} | write plane.out
     , .{.{ "plane.c", .{ .id = "raider-3" } }});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -5104,7 +5268,7 @@ test "beat 2b: `expect` on a path with nothing at mount refuses the mount" {
     defer mock.deinit();
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
-        \\plane.absent | expect {id: string} | set plane.out
+        \\plane.absent | expect {id: string} | write plane.out
     , &diag);
     defer prog.deinit();
 
@@ -5119,7 +5283,7 @@ test "beat 2b: a `match` refusal after mount does NOT bring the program down" {
     // declaration rather than a runtime mode.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.c | match {id: string} | set plane.out
+        \\plane.c | match {id: string} | write plane.out
     , .{.{ "plane.c", .{ .id = "ok" } }});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -5142,7 +5306,7 @@ test "beat 2b: a shape survives dump and restore" {
     // (kind 6), not as text, so this is where a re-encoding layer would show.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.c | match {id: string, pos: {x: number}} exact | set plane.out
+        \\plane.c | match {id: string, pos: {x: number}} exact | write plane.out
     , .{.{ "plane.c", .{ .id = "x", .pos = .{ .x = @as(f64, 1) } } }});
     defer fx.deinit();
 
@@ -5175,7 +5339,7 @@ test "beat 2b: a shape survives dump and restore" {
 test "beat 3a: `map` runs the body once per element, in order" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[-1, 0.5, 3] | map (clamp 0 1) | set plane.out
+        \\[-1, 0.5, 3] | map (clamp 0 1) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5194,8 +5358,8 @@ test "beat 3a: `keep` filters ELEMENTS and `where` gates the STREAM — the cros
     // kind would have had to guess.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[-2, 5, 0, 7] | keep (> 0) | set plane.kept
-        \\[-2, 5, 0, 7] | where plane.gate.open | set plane.gated
+        \\[-2, 5, 0, 7] | keep (> 0) | write plane.kept
+        \\[-2, 5, 0, 7] | where plane.gate.open | write plane.gated
     , .{.{ "plane.gate.open", true }});
     defer fx.deinit();
 
@@ -5217,7 +5381,7 @@ test "beat 3a: `reduce` is a LEFT fold — and the gate runs where left and righ
     // array is chosen because the two folds disagree. A right fold cannot pass.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[10, 3, 2] | reduce (sub) | set plane.out
+        \\[10, 3, 2] | reduce (sub) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5228,8 +5392,8 @@ test "beat 3a: `reduce` is a LEFT fold — and the gate runs where left and righ
 test "beat 3a: with no `init` the first element seeds; `init` seeds instead" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[1, 2, 3] | reduce (add) | set plane.plain
-        \\[1, 2, 3] | reduce (add) init 100 | set plane.seeded
+        \\[1, 2, 3] | reduce (add) | write plane.plain
+        \\[1, 2, 3] | reduce (add) init 100 | write plane.seeded
     , .{});
     defer fx.deinit();
 
@@ -5242,7 +5406,7 @@ test "beat 3a: an empty array with no `init` is an error naming the operator" {
     // `mul`, and picking one is picking a rule.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[] | reduce (add) | set plane.out
+        \\[] | reduce (add) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5254,7 +5418,7 @@ test "beat 3a: an empty array with no `init` is an error naming the operator" {
 test "beat 3a: an empty array WITH `init` folds to the init" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[] | reduce (add) init 42 | set plane.out
+        \\[] | reduce (add) init 42 | write plane.out
     , .{});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -5265,26 +5429,26 @@ test "beat 3a: the consumer declares section arity, and a mismatch names both co
     // Chris's pin, both directions. The message must name the operator and
     // both numbers — "wrong arity" alone tells an author nothing about which
     // way to fix it.
-    try expectParseError("[1, 2] | map (add) | set plane.out", "supplies 1 argument");
-    try expectParseError("[1, 2] | map (add) | set plane.out", "leaves 2 ports open");
-    try expectParseError("[1, 2] | reduce (clamp 0 1) | set plane.out", "supplies 2 arguments");
-    try expectParseError("[1, 2] | reduce (clamp 0 1) | set plane.out", "leaves 1 port open");
+    try expectParseError("[1, 2] | map (add) | write plane.out", "supplies 1 argument");
+    try expectParseError("[1, 2] | map (add) | write plane.out", "leaves 2 ports open");
+    try expectParseError("[1, 2] | reduce (clamp 0 1) | write plane.out", "supplies 2 arguments");
+    try expectParseError("[1, 2] | reduce (clamp 0 1) | write plane.out", "leaves 1 port open");
     // …and the operator is named in both.
-    try expectParseError("[1, 2] | map (add) | set plane.out", "map");
-    try expectParseError("[1, 2] | reduce (clamp 0 1) | set plane.out", "reduce");
+    try expectParseError("[1, 2] | map (add) | write plane.out", "map");
+    try expectParseError("[1, 2] | reduce (clamp 0 1) | write plane.out", "reduce");
 }
 
 test "beat 3a: a body-driving operator with no body refuses at parse" {
     // Earlier than mount, which is strictly louder: an operator whose whole
     // job is running a body cannot be given none.
-    try expectParseError("[1, 2] | map | set plane.out", "needs a section body");
-    try expectParseError("[1, 2] | reduce | set plane.out", "2 open ports");
+    try expectParseError("[1, 2] | map | write plane.out", "needs a section body");
+    try expectParseError("[1, 2] | reduce | write plane.out", "2 open ports");
 }
 
 test "beat 3a: `(.field)` is a section — the projection body" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{id: 1, distance: 8}, {id: 2, distance: 3}] | map (.distance) | set plane.out
+        \\[{id: 1, distance: 8}, {id: 2, distance: 3}] | map (.distance) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5298,8 +5462,8 @@ test "beat 3a: any-of over a set — `map (.armed) | reduce (or)`" {
     // §2.11's loudest customer, in one line.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{armed: false}, {armed: true}] | map (.armed) | reduce (or) | set plane.any
-        \\[{armed: false}, {armed: false}] | map (.armed) | reduce (or) | set plane.none
+        \\[{armed: false}, {armed: true}] | map (.armed) | reduce (or) | write plane.any
+        \\[{armed: false}, {armed: false}] | map (.armed) | reduce (or) | write plane.none
     , .{});
     defer fx.deinit();
 
@@ -5314,7 +5478,7 @@ test "beat 3a: a body's own BOUND port is live" {
     // thing about this mechanism that has no local symptom when it is wrong.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[1, 5, 9] | keep (> plane.threshold) | set plane.out
+        \\[1, 5, 9] | keep (> plane.threshold) | write plane.out
     , .{.{ "plane.threshold", @as(f64, 0) }});
     defer fx.deinit();
 
@@ -5342,7 +5506,7 @@ test "beat 3a: a body node is not evaluated by the sweep" {
     // could reach it. See the note on `Runtime.markNode`.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[1, 2, 3] | map (clamp 0 1) | set plane.out
+        \\[1, 2, 3] | map (clamp 0 1) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5357,7 +5521,7 @@ test "beat 3a: a body node is not evaluated by the sweep" {
 test "beat 3a: a body's refusal arrives in the BODY's words" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[1, 2] | map (nth 0) | set plane.out
+        \\[1, 2] | map (nth 0) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5369,7 +5533,7 @@ test "beat 3a: a body's refusal arrives in the BODY's words" {
 test "beat 3a: `map` keeps the length — a body that emits nothing is refused" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[1, 2, 3] | map (where false) | set plane.out
+        \\[1, 2, 3] | map (where false) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5379,7 +5543,7 @@ test "beat 3a: `map` keeps the length — a body that emits nothing is refused" 
 test "beat 3a: `keep` refuses a predicate that does not answer a boolean" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[1, 2, 3] | keep (add 1) | set plane.out
+        \\[1, 2, 3] | keep (add 1) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5392,7 +5556,7 @@ test "beat 3a: a body survives dump and restore" {
     // load, so this is where those two paths would disagree.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.xs | keep (> plane.threshold) | reduce (add) | set plane.out
+        \\plane.xs | keep (> plane.threshold) | reduce (add) | write plane.out
     , .{ .{ "plane.xs", [_]f64{ 1, 5, 9 } }, .{ "plane.threshold", @as(f64, 4) } });
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 14), slotNum(&fx, "programs.p.reduce1.out.out").?);
@@ -5421,7 +5585,7 @@ test "beat 3a: an unbound OPTIONAL port is absent, not open" {
     defer reg.deinit();
     var diag = rill.Diag{};
     var prog = rill.parse(testing.allocator, &reg, "p",
-        \\[1, 2] | map (ease 100ms) | set plane.out
+        \\[1, 2] | map (ease 100ms) | write plane.out
     , &diag) catch |err| {
         if (err == error.Parse) std.debug.print("parse: {s}\n", .{diag.msg()});
         return err;
@@ -5446,7 +5610,7 @@ test "beat 3b: nearest hostile from the contact list, one line" {
     // cost a second line because `.field` read from a name or a path.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{id: 7, distance: 8}, {id: 4, distance: 3}, {id: 9, distance: 5}] | sort by (.distance) | first | .distance | set plane.ui.nearest
+        \\[{id: 7, distance: 8}, {id: 4, distance: 3}, {id: 9, distance: 5}] | sort by (.distance) | first | .distance | write plane.ui.nearest
     , .{});
     defer fx.deinit();
 
@@ -5460,9 +5624,9 @@ test "the taught spelling: `| .field` mid-chain is `project`, and chains" {
     // not two.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.rig | .pos.x | set plane.out
+        \\plane.rig | .pos.x | write plane.out
         \\plane.rig as r
-        \\r.pos.x | set plane.same
+        \\r.pos.x | write plane.same
     , .{.{ "plane.rig", .{ .pos = .{ .x = @as(f64, 4), .y = @as(f64, 9) } } }});
     defer fx.deinit();
 
@@ -5471,14 +5635,14 @@ test "the taught spelling: `| .field` mid-chain is `project`, and chains" {
 }
 
 test "the taught spelling: a bare `| .` still says what is missing" {
-    try expectParseError("plane.a | . | set plane.out", "field name after");
+    try expectParseError("plane.a | . | write plane.out", "field name after");
 }
 
 test "beat 3b: `sort` orders by the key body, and `desc` reverses it" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{id: 1, d: 8}, {id: 2, d: 3}, {id: 3, d: 5}] | sort by (.d) | map (.id) | set plane.asc
-        \\[{id: 1, d: 8}, {id: 2, d: 3}, {id: 3, d: 5}] | sort by (.d) desc | map (.id) | set plane.desc
+        \\[{id: 1, d: 8}, {id: 2, d: 3}, {id: 3, d: 5}] | sort by (.d) | map (.id) | write plane.asc
+        \\[{id: 1, d: 8}, {id: 2, d: 3}, {id: 3, d: 5}] | sort by (.d) desc | map (.id) | write plane.desc
     , .{});
     defer fx.deinit();
 
@@ -5511,7 +5675,7 @@ test "beat 3b: `sort` is STABLE — enough ties to make an unstable sort show" {
         if (i > 0) try src.appendSlice(gpa, ", ");
         try src.appendSlice(gpa, try std.fmt.bufPrint(&buf, "{{id: {d}, d: {d}}}", .{ i, i % 2 }));
     }
-    try src.appendSlice(gpa, "] | sort by (.d) | map (.id) | set plane.asc");
+    try src.appendSlice(gpa, "] | sort by (.d) | map (.id) | write plane.asc");
 
     var fx: Fixture = undefined;
     try mountFixture(gpa, &fx, src.items, .{});
@@ -5530,8 +5694,8 @@ test "beat 3b: `desc` reverses the KEYS and not the ties" {
     // Descending is a different comparison, not a post-pass.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{id: 1, d: 5}, {id: 2, d: 5}, {id: 3, d: 1}, {id: 4, d: 5}] | sort by (.d) | map (.id) | set plane.asc
-        \\[{id: 1, d: 5}, {id: 2, d: 5}, {id: 3, d: 1}, {id: 4, d: 5}] | sort by (.d) desc | map (.id) | set plane.desc
+        \\[{id: 1, d: 5}, {id: 2, d: 5}, {id: 3, d: 1}, {id: 4, d: 5}] | sort by (.d) | map (.id) | write plane.asc
+        \\[{id: 1, d: 5}, {id: 2, d: 5}, {id: 3, d: 1}, {id: 4, d: 5}] | sort by (.d) desc | map (.id) | write plane.desc
     , .{});
     defer fx.deinit();
 
@@ -5547,7 +5711,7 @@ test "beat 3b: `desc` reverses the KEYS and not the ties" {
 test "beat 3b: `sort` with no `by` uses the elements as their own keys" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[3, 1, 2] | sort | set plane.out
+        \\[3, 1, 2] | sort | write plane.out
     , .{});
     defer fx.deinit();
     const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.sort1.out.out").?);
@@ -5563,7 +5727,7 @@ test "beat 3b: sorting compares numbers by VALUE, not by encoding" {
     // `2.5` are floats: a memcmp sort puts 2 first.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[2.5, 2, 1.5] | sort | set plane.out
+        \\[2.5, 2, 1.5] | sort | write plane.out
     , .{});
     defer fx.deinit();
     const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.sort1.out.out").?);
@@ -5572,13 +5736,13 @@ test "beat 3b: sorting compares numbers by VALUE, not by encoding" {
 }
 
 test "beat 3b: `sort` needs its section after `by`" {
-    try expectParseError("[1, 2] | sort (.d) | set plane.out", "after 'by'");
+    try expectParseError("[1, 2] | sort (.d) | write plane.out", "after 'by'");
 }
 
 test "beat 3b: top three threats, one line" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{id: 1, t: 2}, {id: 2, t: 9}, {id: 3, t: 5}, {id: 4, t: 7}] | sort by (.t) desc | take 3 | map (.id) | set plane.ui.threats
+        \\[{id: 1, t: 2}, {id: 2, t: 9}, {id: 3, t: 5}, {id: 4, t: 7}] | sort by (.t) desc | take 3 | map (.id) | write plane.ui.threats
     , .{});
     defer fx.deinit();
     const out = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.map1.out.out").?);
@@ -5593,8 +5757,8 @@ test "beat 3b: `take` forgives a short array and `nth` does not — the asymmetr
     // claim, so both halves run against the same input.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[1, 2] | take 5 | set plane.taken
-        \\[1, 2] | nth 5 | set plane.picked
+        \\[1, 2] | take 5 | write plane.taken
+        \\[1, 2] | nth 5 | write plane.picked
     , .{});
     defer fx.deinit();
 
@@ -5609,8 +5773,8 @@ test "beat 3b: `take` forgives a short array and `nth` does not — the asymmetr
 test "beat 3b: `take … from` slices, and past the end is empty rather than an error" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[1, 2, 3, 4, 5] | take 2 from 1 | set plane.mid
-        \\[1, 2] | take 3 from 9 | set plane.past
+        \\[1, 2, 3, 4, 5] | take 2 from 1 | write plane.mid
+        \\[1, 2] | take 3 from 9 | write plane.past
     , .{});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -5635,8 +5799,8 @@ test "`first`/`last` on an empty array END THE WAVE — and `nth` still errors" 
     // the same empty list, one silence and one refusal, in one program.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\[] | first | set plane.a
-        \\[] | last | set plane.b
+        \\[] | first | write plane.a
+        \\[] | last | write plane.b
     , .{});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -5646,7 +5810,7 @@ test "`first`/`last` on an empty array END THE WAVE — and `nth` still errors" 
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\[] | nth 0 | set plane.c
+        \\[] | nth 0 | write plane.c
     , .{});
     defer fx2.deinit();
     // `nth 0` names a position, which is a claim that the position exists.
@@ -5659,9 +5823,9 @@ test "`last` is the most recent reading, and `len` is how many there are" {
     // `stats`.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[3, 1, 4, 1, 5] | last | set plane.recent
-        \\[3, 1, 4, 1, 5] | len | set plane.n
-        \\[] | len | set plane.none
+        \\[3, 1, 4, 1, 5] | last | write plane.recent
+        \\[3, 1, 4, 1, 5] | len | write plane.n
+        \\[] | len | write plane.none
     , .{});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 5), types.asNumber(fx.rt.readSlot("programs.p.last1.out.out").?).?);
@@ -5676,8 +5840,8 @@ test "`last` reads the END of the array, not the start" {
     // apart, and neither can a palindrome. Five elements, first ≠ last.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[3, 1, 4, 1, 5] | first | set plane.a
-        \\[3, 1, 4, 1, 5] | last | set plane.b
+        \\[3, 1, 4, 1, 5] | first | write plane.a
+        \\[3, 1, 4, 1, 5] | last | write plane.b
     , .{});
     defer fx.deinit();
     const a = types.asNumber(fx.rt.readSlot("programs.p.first1.out.out").?).?;
@@ -5690,8 +5854,8 @@ test "`last` reads the END of the array, not the start" {
 test "beat 3b: `transpose` is self-inverse, both directions" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\{a: [1, 2], b: [3, 4]} | transpose | set plane.aos
-        \\{a: [1, 2], b: [3, 4]} | transpose | transpose | set plane.round
+        \\{a: [1, 2], b: [3, 4]} | transpose | write plane.aos
+        \\{a: [1, 2], b: [3, 4]} | transpose | transpose | write plane.round
     , .{});
     defer fx.deinit();
 
@@ -5722,14 +5886,14 @@ test "beat 3b: `transpose` refuses ragged input in BOTH directions, both sides n
     // most-complained-about behaviour in the tool.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\{a: [1, 2], b: [3]} | transpose | set plane.out
+        \\{a: [1, 2], b: [3]} | transpose | write plane.out
     , .{});
     defer fx.deinit();
     try expectRefusalNames(&.{ "transpose", "'a'", "'b'", "2 elements", "1" });
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\[{a: 1, b: 2}, {a: 3}] | transpose | set plane.out
+        \\[{a: 1, b: 2}, {a: 3}] | transpose | write plane.out
     , .{});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "transpose", "record{a, b}", "record{a}" });
@@ -5738,9 +5902,9 @@ test "beat 3b: `transpose` refuses ragged input in BOTH directions, both sides n
 test "beat 3b: `shuffle` is seeded, defaults to 0, and replays identically" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle | set plane.a
-        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle seed 0 | set plane.b
-        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle seed 7 | set plane.c
+        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle | write plane.a
+        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle seed 0 | write plane.b
+        \\[1, 2, 3, 4, 5, 6, 7, 8] | shuffle seed 7 | write plane.c
     , .{});
     defer fx.deinit();
 
@@ -5768,7 +5932,7 @@ test "beat 3b: `shuffle` is seeded, defaults to 0, and replays identically" {
 test "beat 3b: `along` passes through its knots and clamps outside 0..1" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.t | along [0, 10, 20] | set plane.out
+        \\plane.t | along [0, 10, 20] | write plane.out
     , .{.{ "plane.t", @as(f64, 0) }});
     defer fx.deinit();
 
@@ -5794,7 +5958,7 @@ test "beat 3b: move a light through three points typed into a cell — the row, 
     // records, so the curve runs through each axis.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos
+        \\plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | write plane.lights.key.pos
     , .{.{ "plane.door.openness", @as(f64, 0.5) }});
     defer fx.deinit();
 
@@ -5813,7 +5977,7 @@ test "beat 3b: `along` refuses fewer than two knots, at mount" {
     // mount — one knot is not a path.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.t | along [5] | set plane.out
+        \\plane.t | along [5] | write plane.out
     , .{.{ "plane.t", @as(f64, 0.5) }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "along", "1 knot", "at least two" });
@@ -5823,7 +5987,7 @@ test "beat 3b: `along` refuses fewer than two knots, at mount" {
 test "beat 3b: `along` refuses knots of different shapes, naming the field" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.t | along [{x: 0, y: 0}, {x: 1, z: 1}] | set plane.out
+        \\plane.t | along [{x: 0, y: 0}, {x: 1, z: 1}] | write plane.out
     , .{.{ "plane.t", @as(f64, 0.5) }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "along", "same shape" });
@@ -5855,7 +6019,7 @@ test "beat 4a: `pulse` is a VALUE source and `every` is the occurrence source" {
 test "beat 4a: `pulse` is 1 for its width and 0 for the rest of the period" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\pulse 1s width 100ms | set plane.out
+        \\pulse 1s width 100ms | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -5877,8 +6041,8 @@ test "beat 4a: `pulse` is 1 for its width and 0 for the rest of the period" {
 test "beat 4a: `pulse` width defaults to a tenth of the period" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\pulse 1s | set plane.a
-        \\pulse 1s width 100ms | set plane.b
+        \\pulse 1s | write plane.a
+        \\pulse 1s width 100ms | write plane.b
     , .{});
     defer fx.deinit();
 
@@ -5895,7 +6059,7 @@ test "beat 4a: `pulse` width defaults to a tenth of the period" {
 test "beat 4a: `pulse` refuses a width on the other lane" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\pulse 1s width 3f | set plane.out
+        \\pulse 1s width 3f | write plane.out
     , .{});
     defer fx.deinit();
     try expectRefusalNames(&.{ "pulse", "different lanes" });
@@ -5908,7 +6072,7 @@ test "beat 4a: unpiped, `once` fires at tick 0 by §3.8 and never again" {
     // rather than "emitted the same thing twice".
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\once 1 | tally | set plane.fires
+        \\once 1 | tally | write plane.fires
     , .{});
     defer fx.deinit();
 
@@ -5934,7 +6098,7 @@ test "beat 4a: fade the exposure in over 2s on mount — one line, and it ticks"
     // it. That gap is a fork (`ramp from`), not a thing to fake here.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\clock | div 2 | range 0 1 | set plane.render.grade.exposure
+        \\clock | div 2 | range 0 1 | write plane.render.grade.exposure
     , .{});
     defer fx.deinit();
 
@@ -5955,7 +6119,7 @@ test "beat 4a: the finding — `ramp` cannot start a mount fade, and says so by 
     // `from` port, this gate is where the change announces itself.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\once 1 | ramp 2s | set plane.render.grade.exposure
+        \\once 1 | ramp 2s | write plane.render.grade.exposure
     , .{});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.ramp1.out.out").?);
@@ -5964,7 +6128,7 @@ test "beat 4a: the finding — `ramp` cannot start a mount fade, and says so by 
 test "beat 4a: piped, `once` passes the FIRST arrival and then goes deaf" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.trigger | once | set plane.out
+        \\plane.trigger | once | write plane.out
     , .{.{ "plane.trigger", @as(f64, 11) }});
     defer fx.deinit();
 
@@ -5982,7 +6146,7 @@ test "beat 4a: toggle a light on a keypress — the row, one line" {
     // mount is not silently eaten as the first press.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key_l | toggle | set plane.lights.key.on
+        \\plane.input.key_l | toggle | write plane.lights.key.on
     , .{.{ "plane.input.key_l", true }});
     defer fx.deinit();
 
@@ -5998,7 +6162,7 @@ test "beat 4a: toggle a light on a keypress — the row, one line" {
 test "beat 4a: count kills — the row, one line, and it starts at 0" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.kill | tally | set plane.ui.kills
+        \\plane.events.kill | tally | write plane.ui.kills
     , .{.{ "plane.events.kill", true }});
     defer fx.deinit();
 
@@ -6017,7 +6181,7 @@ test "beat 4a: `tally` survives RESTORE and not REMOUNT" {
     // both answers fall out rather than being enforced anywhere.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.kill | tally | set plane.ui.kills
+        \\plane.events.kill | tally | write plane.ui.kills
     , .{.{ "plane.events.kill", true }});
     defer fx.deinit();
     for (0..3) |_| {
@@ -6042,7 +6206,7 @@ test "beat 4a: `tally` survives RESTORE and not REMOUNT" {
     // Remount: restarted, so it is 0 again.
     var fx3: Fixture = undefined;
     try mountFixture(testing.allocator, &fx3,
-        \\plane.events.kill | tally | set plane.ui.kills
+        \\plane.events.kill | tally | write plane.ui.kills
     , .{.{ "plane.events.kill", true }});
     defer fx3.deinit();
     try testing.expectEqual(@as(f64, 0), slotNum(&fx3, "programs.p.tally1.out.out").?);
@@ -6373,7 +6537,7 @@ test "beat 4a: night falls → LIGHTS ON, and it does not chatter at dusk" {
     // so a sense error in either would show as a disagreement rather than as
     // two mirrors both flipped.
     const recipe = manualRecipe("**The threshold that does not chatter**");
-    const src = try std.fmt.allocPrint(testing.allocator, "{s}plane.world.light | < 0.3 | set plane.strict\n", .{recipe});
+    const src = try std.fmt.allocPrint(testing.allocator, "{s}plane.world.light | < 0.3 | write plane.strict\n", .{recipe});
     defer testing.allocator.free(src);
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx, src, .{.{ "plane.world.light", @as(f64, 0.5) }});
@@ -6438,20 +6602,20 @@ test "a positional argument written as a keyword names itself, and gives the spe
     // `cast`) and `decay 4s` wrongly (a positional port of `kick`). Same word,
     // two spellings, one program. The inconsistency is the language's; the
     // silence was the parser's.
-    try expectParseError("plane.a | kick attack 100ms decay 4s | set plane.b", "'attack' is an argument of 'kick'");
-    try expectParseError("plane.a | kick attack 100ms decay 4s | set plane.b", "kick <attack> <decay>");
-    try expectParseError("plane.a | hold for 30s | set plane.b", "'hold' takes no argument by name");
+    try expectParseError("plane.a | kick attack 100ms decay 4s | write plane.b", "'attack' is an argument of 'kick'");
+    try expectParseError("plane.a | kick attack 100ms decay 4s | write plane.b", "kick <attack> <decay>");
+    try expectParseError("plane.a | hold for 30s | write plane.b", "'hold' takes no argument by name");
 
     // …and where the operator DOES take some by name, it says which — because
     // the reader's question is binary and per-operator, not a rule with
     // exceptions.
-    try expectParseError("plane.a | ease tau 2s | set plane.b", "ease <tau> [up <up>] [down <down>]");
-    try expectParseError("plane.a | ease tau 2s | set plane.b", "does take by name: up, down");
-    try expectParseError("plane.a | take n 3 | set plane.b", "does take by name: from");
+    try expectParseError("plane.a | ease tau 2s | write plane.b", "ease <tau> [up <up>] [down <down>]");
+    try expectParseError("plane.a | ease tau 2s | write plane.b", "does take by name: up, down");
+    try expectParseError("plane.a | take n 3 | write plane.b", "does take by name: from");
 
     // The spelling is rendered from the REGISTRY in §12's notation, so a
     // refusal and the operator index cannot disagree about the same operator.
-    try expectParseError("noise period 40ms | set plane.b", "noise <period> [octaves <octaves>] [seed <seed>]");
+    try expectParseError("noise period 40ms | write plane.b", "noise <period> [octaves <octaves>] [seed <seed>]");
 
     // A REQUIRED argument that DOES carry a word must show the word in the
     // spelling. Without a case here, dropping the word from that branch
@@ -6459,7 +6623,7 @@ test "a positional argument written as a keyword names itself, and gives the spe
     // branch, so every example above agreed with a spelling that had stopped
     // saying which arguments are keyword. `integrate`'s clamp is the only
     // required-and-worded argument outside `cast`.
-    try expectParseError("integrate in 5 | set plane.b", "max <max>");
+    try expectParseError("integrate in 5 | write plane.b", "max <max>");
 
     // …and it does not over-fire, in either direction. A word that is not one
     // of this operator's arguments is still an unknown name, which is what it
@@ -6467,13 +6631,13 @@ test "a positional argument written as a keyword names itself, and gives the spe
     // told to drop it. Both had to be gated: "does this word name a
     // positional argument" is the whole claim, and a check that answered yes
     // for keyword arguments too passed every case above.
-    try expectParseError("plane.a | mul nonsense | set plane.b", "unknown name 'nonsense'");
-    try expectParseError("plane.a | mul tau | set plane.b", "unknown name 'tau'"); // `tau` is `ease`'s, not `mul`'s
+    try expectParseError("plane.a | mul nonsense | write plane.b", "unknown name 'nonsense'");
+    try expectParseError("plane.a | mul tau | write plane.b", "unknown name 'tau'"); // `tau` is `ease`'s, not `mul`'s
     // …and a word naming an argument this operator DOES take by name is not
     // told to drop it: here `octaves` has been written as `seed`'s value, and
     // "drop the word" would be wrong advice. Gated because a check that
     // answered yes for keyword arguments too passed every other case above.
-    try expectParseError("noise 40ms seed octaves | set plane.b", "unknown name 'octaves'");
+    try expectParseError("noise 40ms seed octaves | write plane.b", "unknown name 'octaves'");
 
 }
 
@@ -6486,25 +6650,25 @@ test "a `use` alias used as a stream says it is an alias, and points at `as`" {
     // beside it looking interchangeable.
     try expectParseError(
         \\use plane.environment.ambient_light as dusk
-        \\dusk | < 0.15 | set plane.b
+        \\dusk | < 0.15 | write plane.b
     , "'dusk' is a `use` alias");
     try expectParseError(
         \\use plane.environment.ambient_light as dusk
-        \\dusk | < 0.15 | set plane.b
+        \\dusk | < 0.15 | write plane.b
     , "plane.environment.ambient_light as dusk"); // the fix, spelled out
 
     // The prefix itself still works, and so does the `as` the message names.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\use plane.environment as env
-        \\env.ambient_light | < 0.15 | set plane.dark
+        \\env.ambient_light | < 0.15 | write plane.dark
     , .{.{ "plane.environment.ambient_light", @as(f64, 0.1) }});
     defer fx.deinit();
     try testing.expect(types.asBool(fx.rt.readSlot("programs.p.lt1.out.out").?).?);
 
     // …and `plane` itself keeps the plain message: it is not an alias, and
     // telling someone to bind `plane` with `as` would be nonsense.
-    try expectParseError("plane | set plane.b", "expected '.' after 'plane'");
+    try expectParseError("plane | write plane.b", "expected '.' after 'plane'");
 }
 
 test "the wire gate: a container only reaches a port that says it broadcasts" {
@@ -6513,17 +6677,17 @@ test "the wire gate: a container only reaches a port that says it broadcasts" {
     // A manual example shipped piping an array into `choose`'s index; it
     // parsed, and refused three seconds into the animation instead. Opt-in per
     // port puts the error back where the wire gate can see it.
-    try expectParseError("[1, 2] | choose plane.i | set plane.out", "expected number, got array");
-    try expectParseError("plane.v | above [1] 0.2 | set plane.out", "expected number, got array");
-    try expectParseError("plane.xs | take [3] | set plane.out", "expected number, got array");
+    try expectParseError("[1, 2] | choose plane.i | write plane.out", "expected number, got array");
+    try expectParseError("plane.v | above [1] 0.2 | write plane.out", "expected number, got array");
+    try expectParseError("plane.xs | take [3] | write plane.out", "expected number, got array");
 
     // …and the elementwise operators are unchanged: that is the whole reason
     // the widening existed, so both halves run here.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[1, 2, 3] | mul 2 | set plane.a
-        \\plane.pos | add {x: 0, y: 2, z: 0} | set plane.b
-        \\[true, false] | not | set plane.c
+        \\[1, 2, 3] | mul 2 | write plane.a
+        \\plane.pos | add {x: 0, y: 2, z: 0} | write plane.b
+        \\[true, false] | not | write plane.c
     , .{.{ "plane.pos", .{ .x = @as(f64, 1), .y = @as(f64, 1), .z = @as(f64, 1) } }});
     defer fx.deinit();
     const c = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.not1.out.out").?);
@@ -6633,7 +6797,7 @@ const broadcasting_ports = [_]struct { op: []const u8, ports: []const []const u8
 /// Every core port that is optional and carries NO word. Each is here because
 /// its operator has exactly one, so nothing can be mistaken for anything.
 const wordless_optionals = [_]struct { op: []const u8, port: []const u8, why: []const u8 }{
-    .{ .op = "set", .port = "value", .why = "the sink payload — one slot, and the path is a path" },
+    .{ .op = "write", .port = "value", .why = "the sink payload — one slot, and the path is a path; the mode words are flags, which the rule exempts" },
     .{ .op = "notify", .port = "value", .why = "same shape as `set`" },
     .{ .op = "cast", .port = "value", .why = "same shape; `cast`'s numbers all carry words" },
     .{ .op = "arm", .port = "in", .why = "the piped stream; the two controls now carry words" },
@@ -6696,7 +6860,7 @@ test "the ambiguity rule: every wordless optional port is named, and only those 
     };
     _ = try reg.register(separated); // `register` allows it: they are not adjacent
     try testing.expectError(error.TestUnexpectedResult, atMostOneWordlessOptional(&separated));
-    try testing.expectEqual(@as(usize, 1), try atMostOneWordlessOptional(reg.get(reg.find("set").?)));
+    try testing.expectEqual(@as(usize, 1), try atMostOneWordlessOptional(reg.get(reg.find("write").?)));
     // Both ways: the audit counted seven wordless optionals excluding the
     // piped port 0, three of which were sink payloads. The prediction was that
     // the other four were exactly `arm`/`disarm`'s controls. This is the walk
@@ -6937,8 +7101,8 @@ test "the typing gate: every core port is typed from the built-in table" {
 test "beat 4a: `above` emits its LEVEL at mount, both ways" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.hi | above 0.3 0.2 | set plane.a
-        \\plane.lo | above 0.3 0.2 | set plane.b
+        \\plane.hi | above 0.3 0.2 | write plane.a
+        \\plane.lo | above 0.3 0.2 | write plane.b
     , .{ .{ "plane.hi", @as(f64, 0.9) }, .{ "plane.lo", @as(f64, 0.1) } });
     defer fx.deinit();
 
@@ -6962,7 +7126,7 @@ test "`kick`: an occurrence in, a one-shot out — up over attack, down over dec
     // was giving `ease` something to fall from.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.hit | kick 100ms 400ms | set plane.ui.flash
+        \\plane.events.hit | kick 100ms 400ms | write plane.ui.flash
     , .{.{ "plane.events.hit", true }});
     defer fx.deinit();
     const out = "programs.p.kick1.out.out";
@@ -7004,7 +7168,7 @@ test "`kick`: a retrigger restarts from the CURRENT level, never from zero" {
     // next tick; so does restart-from-the-peak, in the other direction.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.hit | kick 100ms 400ms | set plane.ui.flash
+        \\plane.events.hit | kick 100ms 400ms | write plane.ui.flash
     , .{.{ "plane.events.hit", true }});
     defer fx.deinit();
     const out = "programs.p.kick1.out.out";
@@ -7032,7 +7196,7 @@ test "`kick`: a slow frame does not stretch the envelope" {
     // reason segment starts are carried in state rather than taken from `now`.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.hit | kick 10ms 100ms | set plane.ui.flash
+        \\plane.events.hit | kick 10ms 100ms | write plane.ui.flash
     , .{.{ "plane.events.hit", true }});
     defer fx.deinit();
     const out = "programs.p.kick1.out.out";
@@ -7055,7 +7219,7 @@ test "`kick`: one tick may cross the WHOLE envelope, and it is then finished" {
     // asks the eval counter instead.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.hit | kick 10ms 100ms | set plane.ui.flash
+        \\plane.events.hit | kick 10ms 100ms | write plane.ui.flash
     , .{.{ "plane.events.hit", true }});
     defer fx.deinit();
     const out = "programs.p.kick1.out.out";
@@ -7074,7 +7238,7 @@ test "`kick` refuses two time lanes, naming both ports" {
     // this problem; a kick does.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.events.hit | kick 20ms 3f | set plane.ui.flash
+        \\plane.events.hit | kick 20ms 3f | write plane.ui.flash
     , .{.{ "plane.events.hit", true }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "kick", "attack", "decay", "time lanes" });
@@ -7083,7 +7247,7 @@ test "`kick` refuses two time lanes, naming both ports" {
 test "`adsr`: rise, decay to sustain, hold, release" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key | adsr 100ms 200ms 0.5 400ms | set plane.audio.gain
+        \\plane.input.key | adsr 100ms 200ms 0.5 400ms | write plane.audio.gain
     , .{.{ "plane.input.key", false }});
     defer fx.deinit();
     const out = "programs.p.adsr1.out.out";
@@ -7116,7 +7280,7 @@ test "`adsr`: a HELD SUSTAIN costs nothing — the eval counter goes flat" {
     // could cost; the counter says what did.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key | adsr 10ms 20ms 0.5 400ms | set plane.audio.gain
+        \\plane.input.key | adsr 10ms 20ms 0.5 400ms | write plane.audio.gain
     , .{.{ "plane.input.key", true }});
     defer fx.deinit();
     const out = "programs.p.adsr1.out.out";
@@ -7146,7 +7310,7 @@ test "`adsr`: a release mid-attack starts from where it is, never from the peak"
     // fall from halfway, not from 1 and not from the sustain.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key | adsr 100ms 200ms 0.5 100ms | set plane.audio.gain
+        \\plane.input.key | adsr 100ms 200ms 0.5 100ms | write plane.audio.gain
     , .{.{ "plane.input.key", true }});
     defer fx.deinit();
     const out = "programs.p.adsr1.out.out";
@@ -7171,7 +7335,7 @@ test "`adsr`: a live parameter applies to the NEXT segment, never to the one in 
     // long finished by 240ms; carried, it is exactly half way.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key | adsr 10ms 10ms 0.5 plane.cfg.release | set plane.audio.gain
+        \\plane.input.key | adsr 10ms 10ms 0.5 plane.cfg.release | write plane.audio.gain
     , .{ .{ "plane.input.key", true }, .{ "plane.cfg.release", [2]i64{ 0, 400_000_000 } } });
     defer fx.deinit();
     const out = "programs.p.adsr1.out.out";
@@ -7202,7 +7366,7 @@ test "`adsr`: the sustain LEVEL is live, and the decay in flight keeps its targe
     // not a segment).
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key | adsr 100ms 400ms plane.cfg.sustain 100ms | set plane.audio.gain
+        \\plane.input.key | adsr 100ms 400ms plane.cfg.sustain 100ms | write plane.audio.gain
     , .{ .{ "plane.input.key", true }, .{ "plane.cfg.sustain", @as(f64, 0.5) } });
     defer fx.deinit();
     const out = "programs.p.adsr1.out.out";
@@ -7239,14 +7403,14 @@ test "`adsr`: the sustain LEVEL is live, and the decay in flight keeps its targe
 test "`adsr` refuses two time lanes, and a gate that is not a boolean" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.input.key | adsr 10ms 20ms 0.5 3f | set plane.audio.gain
+        \\plane.input.key | adsr 10ms 20ms 0.5 3f | write plane.audio.gain
     , .{.{ "plane.input.key", true }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "adsr", "attack", "release", "time lanes" });
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\plane.input.key | adsr 10ms 20ms 0.5 400ms | set plane.audio.gain
+        \\plane.input.key | adsr 10ms 20ms 0.5 400ms | write plane.audio.gain
     , .{.{ "plane.input.key", @as(f64, 1) }});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "adsr", "'in'", "not a boolean" });
@@ -7277,7 +7441,7 @@ test "`step`: each rousing emits the next element, and by default it ENDS" {
     // element sitting at its index.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.input.key | step plane.seq | set plane.out
+        \\plane.input.key | step plane.seq | write plane.out
     , .{ .{ "plane.input.key", true }, .{ "plane.seq", [3]i64{ 10, 20, 30 } } });
     defer fx.deinit();
     const out = "programs.p.step1.out.out";
@@ -7299,9 +7463,9 @@ test "`step`: each rousing emits the next element, and by default it ENDS" {
 test "`step`: `loop` wraps, `bounce` turns round, `reverse` starts at the end" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.k | step [10, 20, 30] loop | set plane.a
-        \\plane.k | step [10, 20, 30] bounce | set plane.b
-        \\plane.k | step [10, 20, 30] reverse | set plane.c
+        \\plane.k | step [10, 20, 30] loop | write plane.a
+        \\plane.k | step [10, 20, 30] bounce | write plane.b
+        \\plane.k | step [10, 20, 30] reverse | write plane.c
     , .{.{ "plane.k", true }});
     defer fx.deinit();
     const lp = "programs.p.step1.out.out";
@@ -7337,7 +7501,7 @@ test "`step`: the array is LIVE — the cursor carries and clamps, it does not r
     // the top because a list got shorter.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.k | step plane.seq loop | set plane.out
+        \\plane.k | step plane.seq loop | write plane.out
     , .{ .{ "plane.k", true }, .{ "plane.seq", [5]i64{ 10, 20, 30, 40, 50 } } });
     defer fx.deinit();
     const out = "programs.p.step1.out.out";
@@ -7363,7 +7527,7 @@ test "`step`: the array is LIVE — the cursor carries and clamps, it does not r
 test "`step shuffle`: a fresh permutation per pass, no repeats within one" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.k | step [1, 2, 3, 4, 5, 6] shuffle loop seed 7 | set plane.out
+        \\plane.k | step [1, 2, 3, 4, 5, 6] shuffle loop seed 7 | write plane.out
     , .{.{ "plane.k", true }});
     defer fx.deinit();
     const out = "programs.p.step1.out.out";
@@ -7393,9 +7557,9 @@ test "`step shuffle`: a fresh permutation per pass, no repeats within one" {
 test "`step random`: draws with replacement, seeded, and the seed decorrelates" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 1 | set plane.a
-        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 2 | set plane.b
-        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 1 | set plane.c
+        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 1 | write plane.a
+        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 2 | write plane.b
+        \\plane.k | step [1, 2, 3, 4, 5, 6, 7, 8] random seed 1 | write plane.c
     , .{.{ "plane.k", true }});
     defer fx.deinit();
 
@@ -7418,7 +7582,7 @@ test "`step random`: draws with replacement, seeded, and the seed decorrelates" 
 test "`step`: `max` caps the emissions, whatever the mode says" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.k | step [10, 20, 30] loop max 4 | set plane.out
+        \\plane.k | step [10, 20, 30] loop max 4 | write plane.out
     , .{.{ "plane.k", true }});
     defer fx.deinit();
     const out = "programs.p.step1.out.out";
@@ -7440,7 +7604,7 @@ test "`step`: an empty array is silence, not a refusal and not the end" {
     // the array is live and may yet have something in it.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.k | step plane.seq loop | set plane.out
+        \\plane.k | step plane.seq loop | write plane.out
     , .{ .{ "plane.k", true }, .{ "plane.seq", [0]i64{} } });
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), Refusal.hits);
@@ -7454,11 +7618,11 @@ test "`step`: an empty array is silence, not a refusal and not the end" {
 
 test "`step`: the combinations that cannot mean anything refuse, naming both words" {
     const cases = [_]struct { src: []const u8, names: []const []const u8 }{
-        .{ .src = "plane.k | step [1, 2] random shuffle | set plane.out", .names = &.{ "random", "shuffle", "pick one" } },
-        .{ .src = "plane.k | step [1, 2] loop bounce | set plane.out", .names = &.{ "loop", "bounce", "pick one" } },
-        .{ .src = "plane.k | step [1, 2] reverse random seed 1 | set plane.out", .names = &.{ "reverse", "random", "no direction" } },
-        .{ .src = "plane.k | step [1, 2] bounce shuffle seed 1 | set plane.out", .names = &.{ "bounce", "shuffle", "fixed order" } },
-        .{ .src = "plane.k | step [1, 2] seed 7 | set plane.out", .names = &.{ "seed", "nothing to seed" } },
+        .{ .src = "plane.k | step [1, 2] random shuffle | write plane.out", .names = &.{ "random", "shuffle", "pick one" } },
+        .{ .src = "plane.k | step [1, 2] loop bounce | write plane.out", .names = &.{ "loop", "bounce", "pick one" } },
+        .{ .src = "plane.k | step [1, 2] reverse random seed 1 | write plane.out", .names = &.{ "reverse", "random", "no direction" } },
+        .{ .src = "plane.k | step [1, 2] bounce shuffle seed 1 | write plane.out", .names = &.{ "bounce", "shuffle", "fixed order" } },
+        .{ .src = "plane.k | step [1, 2] seed 7 | write plane.out", .names = &.{ "seed", "nothing to seed" } },
     };
     for (cases) |c| {
         var fx: Fixture = undefined;
@@ -7488,8 +7652,8 @@ test "`below`: the FIRST number trips, for both words — the pair's whole claim
     // to hide in.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.a | above 0.3 0.2 | set plane.x
-        \\plane.b | below 0.2 0.3 | set plane.y
+        \\plane.a | above 0.3 0.2 | write plane.x
+        \\plane.b | below 0.2 0.3 | write plane.y
     , .{ .{ "plane.a", @as(f64, 0.25) }, .{ "plane.b", @as(f64, 0.25) } });
     defer fx.deinit();
     try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.above1.out.out").?).?);
@@ -7506,8 +7670,8 @@ test "`below`: the FIRST number trips, for both words — the pair's whole claim
 test "`below`: emits its LEVEL at mount, both ways" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.dark | below 0.2 0.3 | set plane.a
-        \\plane.bright | below 0.2 0.3 | set plane.b
+        \\plane.dark | below 0.2 0.3 | write plane.a
+        \\plane.bright | below 0.2 0.3 | write plane.b
     , .{ .{ "plane.dark", @as(f64, 0.1) }, .{ "plane.bright", @as(f64, 0.9) } });
     defer fx.deinit();
     try testing.expect(types.asBool(fx.rt.readSlot("programs.p.below1.out.out").?).?);
@@ -7517,7 +7681,7 @@ test "`below`: emits its LEVEL at mount, both ways" {
 test "`below`: the band holds falling, and releases only past the second number" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.v | below 0.2 0.3 | set plane.out
+        \\plane.v | below 0.2 0.3 | write plane.out
     , .{.{ "plane.v", @as(f64, 0.5) }});
     defer fx.deinit();
     const out = "programs.p.below1.out.out";
@@ -7541,7 +7705,7 @@ test "`below` refuses a release BELOW the trip, and names both numbers" {
     // behaves like something.
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.v | below 0.3 0.2 | set plane.out
+        \\plane.v | below 0.3 0.2 | write plane.out
     , .{.{ "plane.v", @as(f64, 0.5) }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "below", "hysteresis", "above the trip", "0.2", "0.3" });
@@ -7550,7 +7714,7 @@ test "`below` refuses a release BELOW the trip, and names both numbers" {
 test "beat 4a: `above` refuses a release above the trip" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\plane.v | above 0.2 0.3 | set plane.out
+        \\plane.v | above 0.2 0.3 | write plane.out
     , .{.{ "plane.v", @as(f64, 0.5) }});
     defer fx.deinit();
     try expectRefusalNames(&.{ "above", "hysteresis", "below the trip" });
@@ -7571,9 +7735,9 @@ test "beat 4b: `noise` is pinned to its BIT PATTERNS, not to values" {
     // "bit-identical across machines" a checkable claim rather than a hope.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\noise 1s | set plane.n
-        \\noise 1s seed 7 | set plane.n7
-        \\noise 1s octaves 3 | set plane.n3
+        \\noise 1s | write plane.n
+        \\noise 1s seed 7 | write plane.n7
+        \\noise 1s octaves 3 | write plane.n3
     , .{});
     defer fx.deinit();
 
@@ -7595,9 +7759,9 @@ test "beat 4b: `noise` is pinned to its BIT PATTERNS, not to values" {
 test "beat 4b: `noise` stays inside 0..1, and the seed decorrelates" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\noise 300ms | set plane.a
-        \\noise 300ms seed 1 | set plane.b
-        \\noise 300ms seed 2 | set plane.c
+        \\noise 300ms | write plane.a
+        \\noise 300ms seed 1 | write plane.b
+        \\noise 300ms seed 2 | write plane.c
     , .{});
     defer fx.deinit();
 
@@ -7633,10 +7797,10 @@ test "beat 4b: seeds offset the LATTICE, not only the gradients" {
     // So this samples exactly ON the boundaries, which is where the bug lived.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\noise 300ms | set plane.a
-        \\noise 300ms seed 1 | set plane.b
-        \\noise 300ms seed 2 | set plane.c
-        \\noise 300ms octaves 3 seed 3 | set plane.d
+        \\noise 300ms | write plane.a
+        \\noise 300ms seed 1 | write plane.b
+        \\noise 300ms seed 2 | write plane.c
+        \\noise 300ms octaves 3 seed 3 | write plane.d
     , .{});
     defer fx.deinit();
 
@@ -7665,7 +7829,7 @@ test "beat 4b: `noise` is SMOOTH — that is what separates it from `rand`" {
     // fail this.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\noise 1s | set plane.out
+        \\noise 1s | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -7682,8 +7846,8 @@ test "beat 4b: `noise` is SMOOTH — that is what separates it from `rand`" {
 test "beat 4b: `noise` is stateless — the same fed time gives the same value" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\noise 1s | set plane.a
-        \\noise 1s | set plane.b
+        \\noise 1s | write plane.a
+        \\noise 1s | write plane.b
     , .{});
     defer fx.deinit();
 
@@ -7701,7 +7865,7 @@ test "beat 4b: `noise` is stateless — the same fed time gives the same value" 
 test "beat 4b: `noise` refuses an octave count it cannot mean" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\noise 1s octaves 0 | set plane.out
+        \\noise 1s octaves 0 | write plane.out
     , .{});
     defer fx.deinit();
     try expectRefusalNames(&.{ "noise", "octaves", "1 to 8" });
@@ -7710,7 +7874,7 @@ test "beat 4b: `noise` refuses an octave count it cannot mean" {
 test "beat 4b: pick a random idle animation per trigger — the row, one line" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.events.idle | rand | mul 4 | floor | choose ["a", "b", "c", "d"] | set plane.anim.idle
+        \\plane.events.idle | rand | mul 4 | floor | choose ["a", "b", "c", "d"] | write plane.anim.idle
     , .{.{ "plane.events.idle", true }});
     defer fx.deinit();
 
@@ -7731,7 +7895,7 @@ test "beat 4b: `rand` draws a fresh value per rousing and replays identically" {
         fn go(out: *[6]f64) !void {
             var fx: Fixture = undefined;
             try mountFixture(testing.allocator, &fx,
-                \\plane.trigger | rand | set plane.out
+                \\plane.trigger | rand | write plane.out
             , .{.{ "plane.trigger", true }});
             defer fx.deinit();
             for (out) |*slot| {
@@ -7757,9 +7921,9 @@ test "beat 4b: `rand` draws a fresh value per rousing and replays identically" {
 test "beat 4b: `rand` seeds decorrelate, and 0 is the default" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.trigger | rand | set plane.a
-        \\plane.trigger | rand seed 0 | set plane.b
-        \\plane.trigger | rand seed 9 | set plane.c
+        \\plane.trigger | rand | write plane.a
+        \\plane.trigger | rand seed 0 | write plane.b
+        \\plane.trigger | rand seed 9 | write plane.c
     , .{.{ "plane.trigger", true }});
     defer fx.deinit();
 
@@ -7783,7 +7947,7 @@ test "beat 4b: alarm when a raider is within 10m of the gate — the row, one li
     // actually ask, and it keeps the comparison from being written backwards.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.entities.raider.pos | within plane.gate.pos 10 | set plane.signals.alarm
+        \\plane.entities.raider.pos | within plane.gate.pos 10 | write plane.signals.alarm
     , .{
         .{ "plane.entities.raider.pos", .{ .x = @as(f64, 0), .y = @as(f64, 0), .z = @as(f64, 30) } },
         .{ "plane.gate.pos", .{ .x = @as(f64, 0), .y = @as(f64, 0), .z = @as(f64, 0) } },
@@ -7811,10 +7975,10 @@ test "beat 4b: alarm when a raider is within 10m of the gate — the row, one li
 test "`dot`: the scalar product, and what it is for" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\{x: 3, y: 0, z: 4} | dot {x: 3, y: 0, z: 4} | set plane.self
-        \\{x: 1, y: 0, z: 0} | dot {x: 0, y: 1, z: 0} | set plane.side
-        \\{x: 1, y: 0, z: 0} | dot {x: -1, y: 0, z: 0} | set plane.behind
-        \\{x: 2, y: 3, z: 4} | dot {x: 5, y: 6, z: 7} | set plane.mixed
+        \\{x: 3, y: 0, z: 4} | dot {x: 3, y: 0, z: 4} | write plane.self
+        \\{x: 1, y: 0, z: 0} | dot {x: 0, y: 1, z: 0} | write plane.side
+        \\{x: 1, y: 0, z: 0} | dot {x: -1, y: 0, z: 0} | write plane.behind
+        \\{x: 2, y: 3, z: 4} | dot {x: 5, y: 6, z: 7} | write plane.mixed
     , .{});
     defer fx.deinit();
 
@@ -7834,7 +7998,7 @@ test "`dot` refuses a non-position, naming the axis it wanted" {
     // family does not guess at 2D (ruled 2026-08-25).
     var fx: Fixture = undefined;
     const bad = mountFixture(testing.allocator, &fx,
-        \\{x: 1, y: 2} | dot {x: 1, y: 2, z: 3} | set plane.out
+        \\{x: 1, y: 2} | dot {x: 1, y: 2, z: 3} | write plane.out
     , .{});
     if (bad) |_| {
         defer fx.deinit();
@@ -7855,7 +8019,7 @@ test "`nearest` is the inverse of `along` — including when you are ON the curv
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\[0, 0.25, 0.5, 0.75, 1] | map (along [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 5, z: 0}, {x: 30, y: 0, z: 0}]) as pts
-        \\pts | map (nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 5, z: 0}, {x: 30, y: 0, z: 0}]) | set plane.ts
+        \\pts | map (nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 5, z: 0}, {x: 30, y: 0, z: 0}]) | write plane.ts
     , .{});
     defer fx.deinit();
 
@@ -7875,10 +8039,10 @@ test "`nearest`: a point off the curve lands on the nearest part of it" {
     try mountFixture(testing.allocator, &fx,
         // A straight run along x. A point hovering above the middle of it must
         // come back at the middle, not at an end.
-        \\{x: 15, y: 40, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | set plane.mid
+        \\{x: 15, y: 40, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | write plane.mid
         // ...and one past the far end clamps to 1 rather than running off.
-        \\{x: 900, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | set plane.past
-        \\{x: -900, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | set plane.before
+        \\{x: 900, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | write plane.past
+        \\{x: -900, y: 0, z: 0} | nearest [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 20, y: 0, z: 0}, {x: 30, y: 0, z: 0}] | write plane.before
     , .{});
     defer fx.deinit();
 
@@ -7890,7 +8054,7 @@ test "`nearest`: a point off the curve lands on the nearest part of it" {
 test "`nearest` refuses what `along` refuses, in the same words" {
     var fx: Fixture = undefined;
     const one_knot = mountFixture(testing.allocator, &fx,
-        \\{x: 0, y: 0, z: 0} | nearest [{x: 1, y: 1, z: 1}] | set plane.out
+        \\{x: 0, y: 0, z: 0} | nearest [{x: 1, y: 1, z: 1}] | write plane.out
     , .{});
     if (one_knot) |_| {
         defer fx.deinit();
@@ -7902,9 +8066,9 @@ test "`nearest` refuses what `along` refuses, in the same words" {
 test "beat 4b: `distance` is euclidean over record{x, y, z}" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\{x: 3, y: 0, z: 4} | distance {x: 0, y: 0, z: 0} | set plane.d
-        \\{x: 1, y: 2, z: 2} | within {x: 0, y: 0, z: 0} 3 | set plane.near
-        \\{x: 1, y: 2, z: 2} | within {x: 0, y: 0, z: 0} 2 | set plane.far
+        \\{x: 3, y: 0, z: 4} | distance {x: 0, y: 0, z: 0} | write plane.d
+        \\{x: 1, y: 2, z: 2} | within {x: 0, y: 0, z: 0} 3 | write plane.near
+        \\{x: 1, y: 2, z: 2} | within {x: 0, y: 0, z: 0} 2 | write plane.far
     , .{});
     defer fx.deinit();
 
@@ -7916,21 +8080,21 @@ test "beat 4b: `distance` is euclidean over record{x, y, z}" {
 test "beat 4b: the spatial pair names the missing axis, on either side" {
     var fx: Fixture = undefined;
     try mountWatched(testing.allocator, &fx,
-        \\{x: 1, y: 2} | distance {x: 0, y: 0, z: 0} | set plane.out
+        \\{x: 1, y: 2} | distance {x: 0, y: 0, z: 0} | write plane.out
     , .{});
     defer fx.deinit();
     try expectRefusalNames(&.{ "distance", "'a'", "no 'z'", "record{x, y, z}" });
 
     var fx2: Fixture = undefined;
     try mountWatched(testing.allocator, &fx2,
-        \\{x: 1, y: 2, z: 3} | distance {x: 0, z: 0} | set plane.out
+        \\{x: 1, y: 2, z: 3} | distance {x: 0, z: 0} | write plane.out
     , .{});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "distance", "'b'", "no 'y'" });
 
     var fx3: Fixture = undefined;
     try mountWatched(testing.allocator, &fx3,
-        \\plane.n | distance {x: 0, y: 0, z: 0} | set plane.out
+        \\plane.n | distance {x: 0, y: 0, z: 0} | write plane.out
     , .{.{ "plane.n", @as(f64, 4) }});
     defer fx3.deinit();
     try expectRefusalNames(&.{ "distance", "number", "not record{x, y, z}" });
@@ -7947,7 +8111,7 @@ test "beat 4b: one PRNG family — `rand` and `shuffle` draw from the same gener
     // `shuffle` steps.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\plane.trigger | rand seed 5 | set plane.out
+        \\plane.trigger | rand seed 5 | write plane.out
     , .{.{ "plane.trigger", true }});
     defer fx.deinit();
 
@@ -7971,8 +8135,8 @@ test "beat 4 close: re-probe — dim the lamp as the fire dies, against noise" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\noise 120ms as heat
-        \\heat | range 0.1 1 | set plane.raw
-        \\heat | ease 400ms | range 0.1 1 | set plane.lights.hearth.level
+        \\heat | range 0.1 1 | write plane.raw
+        \\heat | ease 400ms | range 0.1 1 | write plane.lights.hearth.level
     , .{});
     defer fx.deinit();
 
@@ -8005,7 +8169,7 @@ test "beat 4 close: re-probe — rate-limit a noisy sensor into a knob, against 
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\noise 80ms as reading
-        \\reading | sample 200ms | set plane.ui.knob
+        \\reading | sample 200ms | write plane.ui.knob
     , .{});
     defer fx.deinit();
 
@@ -8031,11 +8195,11 @@ test "beat 4: the rest of §4's noise rows, each one line" {
     // path. Each was "can't" before this beat.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\noise 80ms | range 0.6 1 | set plane.lights.torch.level
-        \\noise 20s | range 0.9 1.1 | set plane.render.grade.exposure
-        \\{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake
-        \\pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level
-        \\clock | div 8 | range 0 1 | along [{x: 0, y: 2, z: 0}, {x: 5, y: 2, z: 1}, {x: 9, y: 3, z: 0}] | set plane.camera.pos
+        \\noise 80ms | range 0.6 1 | write plane.lights.torch.level
+        \\noise 20s | range 0.9 1.1 | write plane.render.grade.exposure
+        \\{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | write plane.camera.shake
+        \\pulse 2s width 60ms | ease 10ms down 300ms | write plane.lights.strobe.level
+        \\clock | div 8 | range 0 1 | along [{x: 0, y: 2, z: 0}, {x: 5, y: 2, z: 1}, {x: 9, y: 3, z: 0}] | write plane.camera.pos
     , .{});
     defer fx.deinit();
 
@@ -8076,8 +8240,8 @@ test "the paren form: a record field may hold a complete operator call" {
     // Array elements take it too, for the same reason.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\{x: (add 1 2), y: (mul 3 4)} | set plane.rec
-        \\[(add 1 2), (mul 3 4)] | set plane.arr
+        \\{x: (add 1 2), y: (mul 3 4)} | write plane.rec
+        \\[(add 1 2), (mul 3 4)] | write plane.arr
     , .{});
     defer fx.deinit();
 
@@ -8094,7 +8258,7 @@ test "the paren form: a record field may hold a complete operator call" {
 test "the paren form: a field is live when its call is" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\{v: (mul plane.a 10)} | .v | set plane.out
+        \\{v: (mul plane.a 10)} | .v | write plane.out
     , .{.{ "plane.a", @as(f64, 2) }});
     defer fx.deinit();
 
@@ -8110,7 +8274,7 @@ test "the paren form: sections still mean sections where a consumer takes one" {
     // always do. Both in one program.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\[{v: (add 1 1)}, {v: (add 1 2)}] | map (.v) | keep (> 2) | set plane.out
+        \\[{v: (add 1 1)}, {v: (add 1 2)}] | map (.v) | keep (> 2) | write plane.out
     , .{});
     defer fx.deinit();
 
@@ -8125,7 +8289,7 @@ test "beat 4: `ramp … from` — the mount fade in one line THAT STOPS" {
     // goes quiet, which is the register family's whole argument.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\once 1 | ramp 2s from 0 | set plane.render.grade.exposure
+        \\once 1 | ramp 2s from 0 | write plane.render.grade.exposure
     , .{});
     defer fx.deinit();
 
@@ -8152,7 +8316,7 @@ test "beat 4: without `from`, `ramp` still baselines at its first target" {
     // nowhere to start from must not animate out of nothing.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\once 1 | ramp 2s | set plane.a
+        \\once 1 | ramp 2s | write plane.a
     , .{});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 1), slotNum(&fx, "programs.p.ramp1.out.out").?);
@@ -8439,35 +8603,35 @@ test "manual parity: every core operator is named in the agent manual, or is sub
 /// `idioms.rillbook`. Adding a row here is not busywork: it is the moment
 /// somebody decides these two files are saying the same thing on purpose.
 const shared_rows = [_][]const u8{
-    "clock | set plane.ui.elapsed",
-    "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure",
-    "lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle",
-    "noise 80ms | range 0.6 1 | set plane.lights.torch.level",
-    "once 1 | ramp 2s from 0 | set plane.render.grade.exposure",
-    "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos",
-    "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos",
-    "plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash",
-    "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount",
-    "plane.events.kill | tally | set plane.ui.kills",
-    "plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu",
-    "plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load",
-    "plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample",
-    "plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak",
-    "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain",
-    "plane.input.key_l | toggle | set plane.lights.key.on",
+    "clock | write plane.ui.elapsed",
+    "lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure",
+    "lfo tri 8s | shape smooth | range 0 90 | write plane.lights.sweep.angle",
+    "noise 80ms | range 0.6 1 | write plane.lights.torch.level",
+    "once 1 | ramp 2s from 0 | write plane.render.grade.exposure",
+    "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | write plane.lights.key.pos",
+    "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | write plane.lights.follow.pos",
+    "plane.events.hit | kick 20ms 400ms | write plane.ui.hit_flash",
+    "plane.events.impact | kick 10ms 300ms | mul 0.4 | write plane.camera.shake_amount",
+    "plane.events.kill | tally | write plane.ui.kills",
+    "plane.field.rumble | abs | ease 20ms down 400ms | write plane.ui.vu",
+    "plane.gpu.traversal_ms | window 10s | mul 2 | stats | write plane.ui.load",
+    "plane.gpu.traversal_ms | window 10s | nth 0 | write plane.ui.oldest_sample",
+    "plane.gpu.traversal_ms | window 5s | reduce (max) | write plane.ui.peak",
+    "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | write plane.audio.voice.gain",
+    "plane.input.key_l | toggle | write plane.lights.key.on",
     "plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note",
-    "plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade",
-    "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure",
-    "plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact",
-    "plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats",
-    "plane.sensors.gate.contacts | len | set plane.ui.contacts",
-    "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest",
-    "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats",
-    "plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat",
+    "plane.render.grade | expect {exposure: number, contrast: number} | write plane.ui.grade",
+    "plane.render.grade.exposure_target | ramp 2s | write plane.render.grade.exposure",
+    "plane.sensors.gate.contacts | > 0 | write plane.ui.any_contact",
+    "plane.sensors.gate.contacts | keep (.armed) | write plane.ui.threats",
+    "plane.sensors.gate.contacts | len | write plane.ui.contacts",
+    "plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest",
+    "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | write plane.ui.threats",
+    "plane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat",
     "plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge",
-    "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure",
-    "plane.world.light | below 0.2 0.3 | set plane.lights.street.on",
-    "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake",
+    "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | write plane.render.grade.exposure",
+    "plane.world.light | below 0.2 0.3 | write plane.lights.street.on",
+    "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | write plane.camera.shake",
 };
 
 /// Split rill source into STATEMENTS — a line plus any continuation lines
@@ -9143,7 +9307,7 @@ test "elementwise: an occurrence through `mul` is still an occurrence" {
     try rill.registerCore(&reg);
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
-        \\plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.out
+        \\plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms | write plane.out
     , &diag);
     defer prog.deinit();
 
@@ -9162,7 +9326,7 @@ test "elementwise: a value through `mul` stays a value" {
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
         \\plane.hp | clamp 0 100 as hp
-        \\hp | mul 2 | set plane.out
+        \\hp | mul 2 | write plane.out
     , &diag);
     defer prog.deinit();
     // Carrying the kind must not INVENT one: a value chain is still a value
@@ -9177,7 +9341,7 @@ test "elementwise: the kind carries down a CHAIN, not just one hop" {
     try rill.registerCore(&reg);
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
-        \\plane.in | rose_above 0.5 | mul 2 | add 1 | abs | set plane.out
+        \\plane.in | rose_above 0.5 | mul 2 | add 1 | abs | write plane.out
     , &diag);
     defer prog.deinit();
     // Node ids are topological, so one forward pass reaches the end. If it did
@@ -9193,7 +9357,7 @@ test "elementwise: a LITERAL-fed operator stays a value" {
     try rill.registerCore(&reg);
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
-        \\const 3 | mul 2 | set plane.out
+        \\const 3 | mul 2 | write plane.out
     , &diag);
     defer prog.deinit();
     try testing.expectEqual(registry.PortKind.value, outKind(&prog, "mul1"));
@@ -9256,7 +9420,7 @@ test "elementwise: a dumped program carries the same kinds when it is loaded" {
     defer reg.deinit();
     try rill.registerCore(&reg);
     var diag = rill.Diag{};
-    const src = "plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms | set plane.out";
+    const src = "plane.in | rose_above 0.5 | mul 2 | kick 15ms 150ms | write plane.out";
     var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
     defer prog.deinit();
     try testing.expectEqual(registry.PortKind.occurrence, outKind(&prog, "mul1"));
@@ -9305,7 +9469,7 @@ test "a refusal reaches the error hook with the PORT that minded, in words" {
     try mock.putValue("plane.n", @as(i64, 1));
     var diag = rill.Diag{};
     var prog = try rill.parse(testing.allocator, &reg, "p",
-        \\plane.n | select 5 9 | set plane.out
+        \\plane.n | select 5 9 | write plane.out
     , &diag);
     defer prog.deinit();
     var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{ .error_fn = Seen.hook });

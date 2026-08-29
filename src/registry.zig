@@ -207,7 +207,7 @@ pub const EvalCtx = struct {
     state: *std.ArrayListUnmanaged(u8),
     state_gpa: std.mem.Allocator,
     /// Effect channel: queue a plane write, flushed in order at end of tick.
-    write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: plane.DeltaKind) EvalError!void,
+    write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: plane.DeltaKind, mode: plane.WriteMode, stmt: u32) EvalError!void,
     write_ctx: *anyopaque,
     /// Field-cast channel (`cast`): a deposit into the caster's owned space,
     /// dispatched AT EVAL — not queued to the flush — so a host refusal
@@ -250,6 +250,11 @@ pub const EvalCtx = struct {
     /// consume these and the wheel; everything else ignores them.
     now_ns: u64 = 0,
     now_frame: u64 = 0,
+    /// The evaluating node's id — parse-order stable, which makes it the
+    /// STATEMENT identity per-statement write levels fold by (write-verbs,
+    /// 2026-08-29). An edited remount retracts and rebuilds everything, so
+    /// parse order is all the stability replay needs.
+    node_id: u32 = 0,
     /// The wheel's previous tick, both lanes — see `prevOn`.
     prev_ns: u64 = 0,
     prev_frame: u64 = 0,
@@ -264,8 +269,9 @@ pub const EvalCtx = struct {
     call_fn: ?*const fn (ctx: *anyopaque, args: []const []const u8, out: *struple.Packer) EvalError!bool = null,
     call_ctx: ?*anyopaque = null,
 
-    pub fn write(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
-        return self.write_fn(self.write_ctx, path, val, .value);
+    pub fn write(self: *EvalCtx, path: []const u8, val: []const u8, mode: plane.WriteMode) EvalError!void {
+        const f = self.write_fn;
+        return f(self.write_ctx, path, val, .value, mode, self.node_id);
     }
 
     /// Add `val` to whatever is at `path` — a blind delta: no read, so no
@@ -273,7 +279,8 @@ pub const EvalCtx = struct {
     /// commutative it is also MORE deterministic than read-modify-write,
     /// because arrival order stops mattering.
     pub fn writeDelta(self: *EvalCtx, path: []const u8, val: []const u8) EvalError!void {
-        return self.write_fn(self.write_ctx, path, val, .accumulate);
+        const f = self.write_fn;
+        return f(self.write_ctx, path, val, .accumulate, .base, self.node_id);
     }
 
     pub fn log(self: *EvalCtx, label: []const u8, val: []const u8) void {

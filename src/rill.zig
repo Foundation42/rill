@@ -21,7 +21,7 @@
 //!
 //!     var diag = rill.Diag{};
 //!     var prog = try rill.parse(gpa, &reg, "hud",
-//!         \\plane.player.health | dropped_below 20 | set plane.audio.heartbeat
+//!         \\plane.player.health | dropped_below 20 | write plane.audio.heartbeat
 //!     , &diag);
 //!     defer prog.deinit();
 //!
@@ -60,6 +60,7 @@ pub const Plane = plane.Plane;
 pub const MockPlane = plane.MockPlane;
 pub const Delta = plane.Delta;
 pub const DeltaKind = plane.DeltaKind;
+pub const WriteMode = plane.WriteMode;
 pub const Runtime = eval.Runtime;
 pub const MountOpts = eval.MountOpts;
 pub const Now = eval.Now;

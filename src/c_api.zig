@@ -605,8 +605,14 @@ const PlaneImpl = struct {
         const self: *PlaneImpl = @ptrCast(@alignCast(ctx));
         if (self.c.read(self.c.ctx, path.ptr, path.len, out, emitThunk) != 0) return error.NotFound;
     }
-    fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: rill.DeltaKind) rill.plane.PlaneError!void {
+    fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: rill.DeltaKind, mode: rill.WriteMode, stmt: u32) rill.plane.PlaneError!void {
         const self: *PlaneImpl = @ptrCast(@alignCast(ctx));
+        // The C ABI has no mode slot yet. REFUSED rather than dropped: a
+        // host that silently received a `hold` as a durable replace would be
+        // the write-verbs overload rebuilt at the one seam nothing gates.
+        // When a C host wants modes, the ABI grows a v2 write callback.
+        if (mode != .base) return error.Denied;
+        _ = stmt;
         if (self.c.write(self.c.ctx, path.ptr, path.len, val.ptr, val.len, @intFromEnum(kind)) != 0) return error.Denied;
     }
 

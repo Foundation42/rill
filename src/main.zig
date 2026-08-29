@@ -15,13 +15,13 @@ const program_src =
     \\plane.player.{health, stamina} as vitals
     \\
     \\// healthbar: clamp, normalise, write back
-    \\vitals.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+    \\vitals.health | clamp 0 100 | div 100 | write plane.ui.healthbar
     \\
     \\// heartbeat: an occurrence when health crosses below 20
-    \\plane.player.health | dropped_below 20 | tap heartbeat | set plane.audio.heartbeat
+    \\plane.player.health | dropped_below 20 | tap heartbeat | write plane.audio.heartbeat
     \\
     \\// grade: hard select on the underwater flag
-    \\select plane.player.underwater 1 0 | set plane.grade.underwater
+    \\select plane.player.underwater 1 0 | write plane.grade.underwater
 ;
 
 fn logThunk(_: ?*anyopaque, label: []const u8, val: []const u8) void {

@@ -27,7 +27,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.anim.breath.tick | div 240 as phase\nphase | floor as whole\nphase | sub whole as frac\nfrac | mul 2 | sub 1 | abs as fold\nfold | mul -1 | add 1 as tri\ntri | lerp 0.5 1.5 | set plane.render.grade.exposure"
+   "source": "plane.anim.breath.tick | div 240 as phase\nphase | floor as whole\nphase | sub whole as frac\nfrac | mul 2 | sub 1 | abs as fold\nfold | mul -1 | add 1 as tri\ntri | lerp 0.5 1.5 | write plane.render.grade.exposure"
   },
   {
    "name": "breathe-after",
@@ -41,7 +41,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "lfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure"
+   "source": "lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure"
   },
   {
    "name": "elapsed-ask",
@@ -55,7 +55,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "clock | set plane.ui.elapsed"
+   "source": "clock | write plane.ui.elapsed"
   },
   {
    "name": "flash-ask",
@@ -69,14 +69,14 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.signals.horn | set plane.lights.alarm.level 1\nplane.signals.horn | delay 200ms | set plane.lights.alarm.level 0"
+   "source": "plane.signals.horn | write plane.lights.alarm.level 1\nplane.signals.horn | delay 200ms | write plane.lights.alarm.level 0"
   },
   {
    "name": "flash-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "pulse 2s width 60ms | ease 10ms down 300ms | set plane.lights.strobe.level"
+   "source": "pulse 2s width 60ms | ease 10ms down 300ms | write plane.lights.strobe.level"
   },
   {
    "name": "toggle-ask",
@@ -97,14 +97,14 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.ui.lamp.presses | div 2 as halved\nhalved | floor | mul 2 as even\nplane.ui.lamp.presses | sub even | = 1 | set plane.lights.lamp.on"
+   "source": "plane.ui.lamp.presses | div 2 as halved\nhalved | floor | mul 2 as even\nplane.ui.lamp.presses | sub even | = 1 | write plane.lights.lamp.on"
   },
   {
    "name": "toggle-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.input.key_l | toggle | set plane.lights.key.on"
+   "source": "plane.input.key_l | toggle | write plane.lights.key.on"
   },
   {
    "name": "count-kills-ask",
@@ -125,7 +125,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.events.kill | tally | set plane.ui.kills"
+   "source": "plane.events.kill | tally | write plane.ui.kills"
   },
   {
    "name": "night-falls-ask",
@@ -139,7 +139,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.sky.light | dropped_below 0.3 | set plane.lights.court.on true"
+   "source": "plane.sensors.sky.light | dropped_below 0.3 | write plane.lights.court.on true"
   },
   {
    "name": "night-falls-after-note",
@@ -153,7 +153,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.world.light | below 0.2 0.3 | set plane.lights.street.on"
+   "source": "plane.world.light | below 0.2 0.3 | write plane.lights.street.on"
   },
   {
    "name": "fade-in-ask",
@@ -167,21 +167,21 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.render.grade.exposure_target | ramp 2s | set plane.render.grade.exposure"
+   "source": "plane.render.grade.exposure_target | ramp 2s | write plane.render.grade.exposure"
   },
   {
    "name": "fade-in-note",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## After — one line that STOPS\n\n```rill\nonce 1 | ramp 2s from 0 | set plane.render.grade.exposure\n```\n\n`from` gives the first tween a start, which is the whole of the mount\nfade. Without it a ramp has nowhere to start and simply *is* its first\ntarget — right everywhere except at mount, which is why `from` was added\nbeside that behaviour rather than instead of it.\n\nThere is also a version with no `from` at all —\n`clock | div 2 | range 0 1`, since `range` clamps — and it is one line\nand correct and **re-evaluates every frame forever**. The register stops.\nThat difference is the register family's whole argument, and it is gated\non the eval counter going flat rather than on the value, because a value\nthat stays put looks exactly like one being recomputed."
+   "source": "## After — one line that STOPS\n\n```rill\nonce 1 | ramp 2s from 0 | write plane.render.grade.exposure\n```\n\n`from` gives the first tween a start, which is the whole of the mount\nfade. Without it a ramp has nowhere to start and simply *is* its first\ntarget — right everywhere except at mount, which is why `from` was added\nbeside that behaviour rather than instead of it.\n\nThere is also a version with no `from` at all —\n`clock | div 2 | range 0 1`, since `range` clamps — and it is one line\nand correct and **re-evaluates every frame forever**. The register stops.\nThat difference is the register family's whole argument, and it is gated\non the eval counter going flat rather than on the value, because a value\nthat stays put looks exactly like one being recomputed."
   },
   {
    "name": "fade-in-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "once 1 | ramp 2s from 0 | set plane.render.grade.exposure"
+   "source": "once 1 | ramp 2s from 0 | write plane.render.grade.exposure"
   },
   {
    "name": "ease-toward-ask",
@@ -202,7 +202,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.render.grade.exposure_target | ease 400ms | set plane.render.grade.exposure"
+   "source": "plane.render.grade.exposure_target | ease 400ms | write plane.render.grade.exposure"
   },
   {
    "name": "vu-meter-ask",
@@ -223,7 +223,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.field.rumble | abs | ease 20ms down 400ms | set plane.ui.vu"
+   "source": "plane.field.rumble | abs | ease 20ms down 400ms | write plane.ui.vu"
   },
   {
    "name": "closing-fast-ask",
@@ -258,7 +258,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.keep.lever.held | integrate max 100 | set plane.keep.portcullis.charge"
+   "source": "plane.keep.lever.held | integrate max 100 | write plane.keep.portcullis.charge"
   },
   {
    "name": "swing-ask",
@@ -279,7 +279,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "lfo tri 8s | shape smooth | range 0 90 | set plane.lights.sweep.angle"
+   "source": "lfo tri 8s | shape smooth | range 0 90 | write plane.lights.sweep.angle"
   },
   {
    "name": "cooldown-ask",
@@ -307,7 +307,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.hearth.heat | sample 250ms | set plane.render.grade.exposure"
+   "source": "plane.sensors.hearth.heat | sample 250ms | write plane.render.grade.exposure"
   },
   {
    "name": "dim-lamp-ask",
@@ -335,7 +335,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "noise 80ms | range 0.6 1 | set plane.lights.torch.level"
+   "source": "noise 80ms | range 0.6 1 | write plane.lights.torch.level"
   },
   {
    "name": "drift-ask",
@@ -349,7 +349,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "noise 20s | range 0.9 1.1 | set plane.render.grade.exposure"
+   "source": "noise 20s | range 0.9 1.1 | write plane.render.grade.exposure"
   },
   {
    "name": "shake-ask",
@@ -363,7 +363,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | set plane.camera.shake"
+   "source": "{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | write plane.camera.shake"
   },
   {
    "name": "random-idle-ask",
@@ -377,7 +377,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.events.idle | rand | mul 4 | floor | choose [\"a\", \"b\", \"c\", \"d\"] | set plane.anim.idle"
+   "source": "plane.events.idle | rand | mul 4 | floor | choose [\"a\", \"b\", \"c\", \"d\"] | write plane.anim.idle"
   },
   {
    "name": "nearest-hostile-ask",
@@ -391,21 +391,21 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## After — one line\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\n```\n\nThis first landed at *two* lines: the sort and the pick were one, and the\nfield read cost another, because `.field` read from a name or a path and a\nchain had neither. That was raised as a fork and ruled the same day —\n`| .field` is the taught spelling, sugar for `project`, and `project` stays\nregistered as substrate: reachable, never taught."
+   "source": "## After — one line\n\n```rill\nplane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest\n```\n\nThis first landed at *two* lines: the sort and the pick were one, and the\nfield read cost another, because `.field` read from a name or a path and a\nchain had neither. That was raised as a fork and ruled the same day —\n`| .field` is the taught spelling, sugar for `project`, and `project` stays\nregistered as substrate: reachable, never taught."
   },
   {
    "name": "nearest-hostile-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest"
+   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest"
   },
   {
    "name": "top-three-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats"
+   "source": "plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | write plane.ui.threats"
   },
   {
    "name": "top-three-ask",
@@ -433,7 +433,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
+   "source": "plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | write plane.lights.key.pos"
   },
   {
    "name": "three-points-note",
@@ -447,7 +447,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | set plane.lights.key.pos"
+   "source": "plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | write plane.lights.key.pos"
   },
   {
    "name": "on-the-curve-ask",
@@ -468,7 +468,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.car.pos | nearest [{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] | set plane.ui.lap_progress"
+   "source": "plane.car.pos | nearest [{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] | write plane.ui.lap_progress"
   },
   {
    "name": "wrong-way-note",
@@ -482,7 +482,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.car.pos | nearest [{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] | diff | below -0.02 0 | set plane.hud.wrong_way"
+   "source": "plane.car.pos | nearest [{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] | diff | below -0.02 0 | write plane.hud.wrong_way"
   },
   {
    "name": "in-front-ask",
@@ -503,7 +503,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | set plane.guard.alerted"
+   "source": "plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | write plane.guard.alerted"
   },
   {
    "name": "time-of-day-ask",
@@ -517,21 +517,21 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.world.hour | < 6 as night\nplane.world.hour | < 18 as day\nnight | select 0.2 1.0 as lit\nday | select lit 0.4 | set plane.render.grade.exposure"
+   "source": "plane.world.hour | < 6 as night\nplane.world.hour | < 18 as day\nnight | select 0.2 1.0 as lit\nday | select lit 0.4 | write plane.render.grade.exposure"
   },
   {
    "name": "time-of-day-after-note",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## After — one line, and the bands are the value\n\n```rill\nplane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure\n```\n\nThe four-line `select` chain above encoded the bands **in the control flow**:\ntwo thresholds, two named streams, and a nested `select` you have to read\ninside-out to learn that dusk is 0.4. The array puts the bands where they\nbelong — in a value you can read left to right, edit in place, and hand to\nsomething else.\n\n`choose` is `nth` with the index piped. Which port is hot is the whole\ndifference: the list rouses `nth`, the index rouses `choose`."
+   "source": "## After — one line, and the bands are the value\n\n```rill\nplane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | write plane.render.grade.exposure\n```\n\nThe four-line `select` chain above encoded the bands **in the control flow**:\ntwo thresholds, two named streams, and a nested `select` you have to read\ninside-out to learn that dusk is 0.4. The array puts the bands where they\nbelong — in a value you can read left to right, edit in place, and hand to\nsomething else.\n\n`choose` is `nth` with the index piped. Which port is hot is the whole\ndifference: the list rouses `nth`, the index rouses `choose`."
   },
   {
    "name": "time-of-day-after",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | set plane.render.grade.exposure"
+   "source": "plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | write plane.render.grade.exposure"
   },
   {
    "name": "follow-ask",
@@ -545,7 +545,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.entities.player.pos.y | add 2 as lifted\n{x: plane.entities.player.pos.x, y: lifted, z: plane.entities.player.pos.z}\n  | set plane.lights.follow.pos"
+   "source": "plane.entities.player.pos.y | add 2 as lifted\n{x: plane.entities.player.pos.x, y: lifted, z: plane.entities.player.pos.z}\n  | write plane.lights.follow.pos"
   },
   {
    "name": "follow-after-note",
@@ -559,7 +559,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | set plane.lights.follow.pos"
+   "source": "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | write plane.lights.follow.pos"
   },
   {
    "name": "contracts-ask",
@@ -573,21 +573,21 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## After — the same shape literal, two different promises\n\n```rill\nplane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat\nplane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade\n```\n\n`match` checks **every value** and a mismatch kills that wave, naming the\nfield and both sides:\n\n> `match: '.distance' is string, not number`\n\n`expect` checks **once, at mount**, and a mismatch refuses the mount — the\nprogram does not come up. After that it costs nothing, and it never quietly\nbecomes a runtime check: a violating value that arrives later passes straight\nthrough. That is the contract, and it is the whole reason there are two words\ninstead of one with a flag.\n\nIf there is nothing at the path when the program mounts, `expect` refuses and\ntells you to use `match`. It never degrades on its own."
+   "source": "## After — the same shape literal, two different promises\n\n```rill\nplane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat\nplane.render.grade | expect {exposure: number, contrast: number} | write plane.ui.grade\n```\n\n`match` checks **every value** and a mismatch kills that wave, naming the\nfield and both sides:\n\n> `match: '.distance' is string, not number`\n\n`expect` checks **once, at mount**, and a mismatch refuses the mount — the\nprogram does not come up. After that it costs nothing, and it never quietly\nbecomes a runtime check: a violating value that arrives later passes straight\nthrough. That is the contract, and it is the whole reason there are two words\ninstead of one with a flag.\n\nIf there is nothing at the path when the program mounts, `expect` refuses and\ntells you to use `match`. It never degrades on its own."
   },
   {
    "name": "contracts-match",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.nearest | match {id: string, distance: number} | set plane.ui.threat"
+   "source": "plane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat"
   },
   {
    "name": "contracts-expect",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.render.grade | expect {exposure: number, contrast: number} | set plane.ui.grade"
+   "source": "plane.render.grade | expect {exposure: number, contrast: number} | write plane.ui.grade"
   },
   {
    "name": "ticking-ask",
@@ -601,7 +601,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.target | ease 100ms | set plane.smoothed"
+   "source": "plane.target | ease 100ms | write plane.smoothed"
   },
   {
    "name": "broadcast-refusals",
@@ -615,14 +615,14 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.gpu.traversal_ms | window 10s | mul 2 | stats | set plane.ui.load"
+   "source": "plane.gpu.traversal_ms | window 10s | mul 2 | stats | write plane.ui.load"
   },
   {
    "name": "broadcast-predicate",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | > 0 | set plane.ui.any_contact"
+   "source": "plane.sensors.gate.contacts | > 0 | write plane.ui.any_contact"
   },
   {
    "name": "range-not-lerp",
@@ -636,7 +636,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "lfo sine 4s | shape smooth | range 0.5 1.5 | set plane.render.grade.exposure"
+   "source": "lfo sine 4s | shape smooth | range 0.5 1.5 | write plane.render.grade.exposure"
   },
   {
    "name": "arrays-page",
@@ -650,7 +650,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.gpu.traversal_ms | window 10s | nth 0 | set plane.ui.oldest_sample"
+   "source": "plane.gpu.traversal_ms | window 10s | nth 0 | write plane.ui.oldest_sample"
   },
   {
    "name": "shapes-page",
@@ -671,35 +671,35 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | map (.armed) | reduce (or) | set plane.ui.any_armed"
+   "source": "plane.sensors.gate.contacts | map (.armed) | reduce (or) | write plane.ui.any_armed"
   },
   {
    "name": "loudest-recent",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak"
+   "source": "plane.gpu.traversal_ms | window 5s | reduce (max) | write plane.ui.peak"
   },
   {
    "name": "keep-armed",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats"
+   "source": "plane.sensors.gate.contacts | keep (.armed) | write plane.ui.threats"
   },
   {
    "name": "bodies-page",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## Bodies — a section is an operator with ports left open\n\n```rill\nplane.sensors.gate.contacts | keep (.armed) | set plane.ui.threats\nplane.gpu.traversal_ms | window 5s | reduce (max) | set plane.ui.peak\n```\n\n`(clamp 0 1)` is `clamp` with its input open. `(add)` leaves two open.\n`(.distance)` is the field read with its input open. There is **no new\nsyntax** and no closure: a body closes over nothing, `{ }` is still a\nfan-out, and `( )` was always a partial application.\n\n**The consumer says how many arguments it supplies** — `map` one, `reduce`\ntwo — so a section with the wrong number of open ports is refused when\nyou write it, naming the operator and both counts. Only the thing about\nto fill the ports knows how many it will fill.\n\n**`reduce` folds left**: accumulator into the first open port, element\ninto the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2 = 5`. No\n`init` means the first element seeds it. Empty with no `init` is an\nerror — zero is right for `add` and wrong for `mul`, and picking one is\npicking a rule.\n\n**Most map is free.** `window 10s | mul 2` *is* map, because math already\nbroadcasts. Reach for `map` when the body needs an argument or is a field\nread.\n\n**`keep` filters elements, `where` gates the stream.** Both apply to an\narray-valued stream and mean different things — which is exactly why one\nword dispatched by input kind would have had to guess."
+   "source": "## Bodies — a section is an operator with ports left open\n\n```rill\nplane.sensors.gate.contacts | keep (.armed) | write plane.ui.threats\nplane.gpu.traversal_ms | window 5s | reduce (max) | write plane.ui.peak\n```\n\n`(clamp 0 1)` is `clamp` with its input open. `(add)` leaves two open.\n`(.distance)` is the field read with its input open. There is **no new\nsyntax** and no closure: a body closes over nothing, `{ }` is still a\nfan-out, and `( )` was always a partial application.\n\n**The consumer says how many arguments it supplies** — `map` one, `reduce`\ntwo — so a section with the wrong number of open ports is refused when\nyou write it, naming the operator and both counts. Only the thing about\nto fill the ports knows how many it will fill.\n\n**`reduce` folds left**: accumulator into the first open port, element\ninto the second, so `[10, 3, 2] | reduce (sub)` is `(10−3)−2 = 5`. No\n`init` means the first element seeds it. Empty with no `init` is an\nerror — zero is right for `add` and wrong for `mul`, and picking one is\npicking a rule.\n\n**Most map is free.** `window 10s | mul 2` *is* map, because math already\nbroadcasts. Reach for `map` when the body needs an argument or is a field\nread.\n\n**`keep` filters elements, `where` gates the stream.** Both apply to an\narray-valued stream and mean different things — which is exactly why one\nword dispatched by input kind would have had to guess."
   },
   {
    "name": "order-page",
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | set plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | set plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
+   "source": "## Order and shape\n\n```rill\nplane.sensors.gate.contacts | sort by (.threat) desc | take 3 | write plane.ui.threats\nplane.player.{health, mana} | window 10s | transpose | write plane.ui.vitals\n```\n\n**`sort` is stable.** Ties keep their input order, and that is this\noperator's own doing — the comparator carries each element's original\nindex as its tie-break, so it holds whichever sort algorithm runs\nunderneath. (The first gate for this used four elements and did not\ncatch a mutation removing the tie-break, because the standard library\nfalls back to insertion sort on small inputs and insertion sort is\nstable by accident. Forty elements now.)\n\n**It orders numbers by value.** struple's bytes are `memcmp`-orderable —\nthat is how the store keys are sorted — but in raw byte order the type\ntag dominates, so every integer would file before every float. rill has\none `number` type and no way to see the difference, so sorting compares\nby value and `[2.5, 2, 1.5]` comes back `[1.5, 2, 2.5]`.\n\n**`take` forgives, `nth` does not.** `take 5` promises *at most five*, and\ntwo is a satisfiable answer. `nth 5` promises *the sixth element*, and if\nthere isn't one the program asked for something that does not exist.\n\n**Ragged input refuses.** `transpose` names both sides and both lengths\nrather than picking longest, shortest, or cross-reference. Never pick a\nrule."
   },
   {
    "name": "empty-list-ask",
@@ -720,7 +720,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | set plane.ui.nearest\nplane.sensors.gate.contacts | len | set plane.ui.contacts"
+   "source": "plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest\nplane.sensors.gate.contacts | len | write plane.ui.contacts"
   },
   {
    "name": "most-recent-ask",
@@ -734,7 +734,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.gpu.traversal_ms | window 5s | last | set plane.ui.latest_ms"
+   "source": "plane.gpu.traversal_ms | window 5s | last | write plane.ui.latest_ms"
   },
   {
    "name": "flash-on-hit-ask",
@@ -748,14 +748,14 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.events.hit | set plane.ui.hit_gate 1"
+   "source": "plane.events.hit | write plane.ui.hit_gate 1"
   },
   {
    "name": "flash-on-hit-before-2",
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.ui.hit_gate | ease 60ms down 400ms | set plane.ui.hit_flash"
+   "source": "plane.ui.hit_gate | ease 60ms down 400ms | write plane.ui.hit_flash"
   },
   {
    "name": "flash-on-hit-after-note",
@@ -769,7 +769,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.events.hit | kick 20ms 400ms | set plane.ui.hit_flash"
+   "source": "plane.events.hit | kick 20ms 400ms | write plane.ui.hit_flash"
   },
   {
    "name": "shake-on-impact-ask",
@@ -783,7 +783,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.events.impact | kick 10ms 300ms | mul 0.4 | set plane.camera.shake_amount"
+   "source": "plane.events.impact | kick 10ms 300ms | mul 0.4 | write plane.camera.shake_amount"
   },
   {
    "name": "held-note-ask",
@@ -797,7 +797,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.input.key_c | select 1 0 | ease 10ms down 400ms | set plane.audio.voice.gain"
+   "source": "plane.input.key_c | select 1 0 | ease 10ms down 400ms | write plane.audio.voice.gain"
   },
   {
    "name": "held-note-after-note",
@@ -811,7 +811,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | set plane.audio.voice.gain"
+   "source": "plane.input.key_c | adsr 10ms 80ms 0.7 400ms | write plane.audio.voice.gain"
   },
   {
    "name": "arpeggio-ask",
@@ -832,7 +832,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.music.arp_i | mod 4 | choose [60, 64, 67, 72] | set plane.audio.note"
+   "source": "plane.music.arp_i | mod 4 | choose [60, 64, 67, 72] | write plane.audio.note"
   },
   {
    "name": "arpeggio-after-note",
@@ -860,7 +860,7 @@
    "mode": "mounted",
    "markdown": false,
    "collapsed": false,
-   "source": "plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] loop | set plane.lights.key.pos"
+   "source": "plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] loop | write plane.lights.key.pos"
   },
   {
    "name": "levels-page",
@@ -874,7 +874,7 @@
    "mode": "query",
    "markdown": true,
    "collapsed": false,
-   "source": "## Tier 2, closed\n\nThirty-five asks on the simple-things list. **Thirty-one are one line**,\none is the two its target allowed, and three are not cleared — each\nblocked on something written down with the trigger that would start it:\ntempo on the plane (`beat`), a bezier curve (`shape bezier`), and a\nwindow that carries times (`smooth`).\n\nThe founding example was two programs, a seeded counter and seven lines\nof arithmetic. It is:\n\n```rill\nlfo sine 4s | range 0.5 1.5 | set plane.render.grade.exposure\n```\n\n**Twenty-four words were admitted**, which is exactly what the recon\npredicted before any of them were built. Five more are substrate,\nadmitted by ruling rather than by a row and named as such. Five were\nargued in prose, and the rows were written down **before** the words\nlanded — which is the difference between admission rule 1 having teeth\nand having a loophole. Nine were cut and stayed cut.\n\nEvery ✓ above is a mounted gate, not a paragraph. Every beat's mutations\nwere counted. Three of them were findings about the *gates* rather than\nthe code, and each became a line in the ledger:\n\n- a gate asserting \"A rather than B\" must run where A ≠ B;\n- gate past the library's fallbacks, or the library is the thing under\n  test;\n- gate the property the doc claims, not the implementation's incidental\n  ones — and when a property has a period, sample **on** the period."
+   "source": "## Tier 2, closed\n\nThirty-five asks on the simple-things list. **Thirty-one are one line**,\none is the two its target allowed, and three are not cleared — each\nblocked on something written down with the trigger that would start it:\ntempo on the plane (`beat`), a bezier curve (`shape bezier`), and a\nwindow that carries times (`smooth`).\n\nThe founding example was two programs, a seeded counter and seven lines\nof arithmetic. It is:\n\n```rill\nlfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure\n```\n\n**Twenty-four words were admitted**, which is exactly what the recon\npredicted before any of them were built. Five more are substrate,\nadmitted by ruling rather than by a row and named as such. Five were\nargued in prose, and the rows were written down **before** the words\nlanded — which is the difference between admission rule 1 having teeth\nand having a loophole. Nine were cut and stayed cut.\n\nEvery ✓ above is a mounted gate, not a paragraph. Every beat's mutations\nwere counted. Three of them were findings about the *gates* rather than\nthe code, and each became a line in the ledger:\n\n- a gate asserting \"A rather than B\" must run where A ≠ B;\n- gate past the library's fallbacks, or the library is the thing under\n  test;\n- gate the property the doc claims, not the implementation's incidental\n  ones — and when a property has a period, sample **on** the period."
   }
  ]
 }

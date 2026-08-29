@@ -10,7 +10,7 @@ downstream.
 
 ```rill
 // a healthbar, live: clamp, normalise, write back
-plane.player.health | clamp 0 100 | div 100 | set plane.ui.healthbar
+plane.player.health | clamp 0 100 | div 100 | write plane.ui.healthbar
 
 // a heartbeat when health crosses below 20 — an occurrence, not a state
 plane.player.health | dropped_below 20 | notify plane.audio.heartbeat
@@ -32,9 +32,9 @@ a key *means* stopped being a fact about the engine:
 
 ```rill
 plane.input.kbd.shift | mul 2 | add 1 as boost
-plane.input.kbd.w | sub plane.input.kbd.s | mul boost | set plane.camera.thrust.fwd
+plane.input.kbd.w | sub plane.input.kbd.s | mul boost | write plane.camera.thrust.fwd
 plane.input.mouse.rmb | mul plane.camera.sens as look
-plane.input.mouse.dx | mul look | set plane.camera.torque.yaw
+plane.input.mouse.dx | mul look | write plane.camera.torque.yaw
 ```
 
 A muzzle flash is one statement. It rides the exposure knob's **modulation
@@ -42,7 +42,7 @@ lane**, so the colourist's slider is untouched and comes back — two writers on
 one lane sum rather than race:
 
 ```rill
-plane.input.mouse.lmb | rose_above 0.5 | kick 15ms 150ms | mul 2 | set plane.mod.render.grade.exposure
+plane.input.mouse.lmb | rose_above 0.5 | kick 15ms 150ms | mul 2 | write plane.mod.render.grade.exposure
 ```
 
 And a camera that tows itself back onto a spline is seven lines. `along` walks
@@ -55,7 +55,7 @@ world-space error into the camera's own axes:
 plane.camera.pos | nearest track as t
 t | along track as target
 target | sub plane.camera.pos as err
-err | dot plane.camera.fwd | mul 0.06 | clamp -1 1 | set plane.camera.thrust.fwd
+err | dot plane.camera.fwd | mul 0.06 | clamp -1 1 | write plane.camera.thrust.fwd
 ```
 
 Every block above is parsed by the test suite. So is every ```rill block in

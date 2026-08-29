@@ -22,6 +22,7 @@ const std = @import("std");
 const struple = @import("struple");
 const types = @import("types.zig");
 const registry = @import("registry.zig");
+const plane = @import("plane.zig");
 
 const EvalCtx = registry.EvalCtx;
 const EvalError = registry.EvalError;
@@ -2270,7 +2271,7 @@ fn evalSort(ctx: *EvalCtx) EvalError!Emit {
 /// an end, and an empty list simply has none. Same shape as `take`'s
 /// forgiveness: a count is satisfiable, a claim is not.
 ///
-/// Absence is then said by the COUNT — `contacts | len | set plane.ui.contacts`
+/// Absence is then said by the COUNT — `contacts | len | write plane.ui.contacts`
 /// — never by a sentinel. That is what `len` was admitted for.
 fn endEval(comptime tail: bool) fn (*EvalCtx) EvalError!Emit {
     return struct {
@@ -3137,7 +3138,7 @@ fn evalMerge(ctx: *EvalCtx) EvalError!Emit {
 /// when `value` is bound it decides *what*, which is the only spelling for
 /// "on a rousing, write a constant":
 ///
-///     signals/horn | set gate/drawbridge.target 1
+///     signals/horn | write gate/drawbridge.target 1
 ///     visible_enemies | rose_above 0 | notify signals/horn { kind: "approach" }
 ///
 /// Without it that sentence takes three nodes to say one word — hold the
@@ -3146,12 +3147,38 @@ fn evalMerge(ctx: *EvalCtx) EvalError!Emit {
 ///
 /// Unpiped, the value binds port 0 and is both rousing and payload, so
 /// `set p 3` is unchanged. Unbound, the in-flowing value is written, so
-/// `x | set p` is unchanged. A change in `value` alone is not a write: the
+/// `x | write p` is unchanged. A change in `value` alone is not a write: the
 /// payload says what, the rousing says when — the same rule `inc` applies to
 /// `by`, for the same reason.
 fn evalSink(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none;
-    try ctx.write(ctx.statics[0].path, ctx.in[1] orelse try raw(ctx, 0));
+    // Statics 1..5 are the mode flags — a CLOSED set of bare words, at most
+    // one written. The mode is the writer's stated intent (write-verbs,
+    // ruled 2026-08-29): bare `write` is the durable replace `set` always
+    // was; the lane modes retract with their writer; `clear` withdraws.
+    var mode: plane.WriteMode = .base;
+    var n_modes: u32 = 0;
+    // `notify` shares this eval with only the path static — its statics stop
+    // at 1 and its mode is always .base. Found by an index panic, kept as a
+    // guard rather than a second eval: one sink, two rows.
+    if (ctx.statics.len > 1) {
+        const MODES = [_]plane.WriteMode{ .hold, .add, .mul, .stops, .clear };
+        for (MODES, 1..) |m, i| {
+            if (ctx.statics[i].word.len != 0) {
+                mode = m;
+                n_modes += 1;
+            }
+        }
+    }
+    if (n_modes > 1) return ctx.refuse("write: one mode only — hold, add, mul, stops or clear", .{});
+    if (mode == .clear) {
+        // Withdrawal has no payload: a value here is a category error, and
+        // binding one silently would let "clear 0.5" read as writing a half.
+        if (ctx.in[1] != null) return ctx.refuse("write … clear takes no value — it withdraws this writer's contributions, it does not write", .{});
+        try ctx.write(ctx.statics[0].path, &.{}, .clear);
+        return Emit.none;
+    }
+    try ctx.write(ctx.statics[0].path, ctx.in[1] orelse try raw(ctx, 0), mode);
     return Emit.none;
 }
 
@@ -3422,7 +3449,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "sort", .inputs = &.{p.in("in", Tag.array)}, .statics = &.{.{ .name = "desc", .kind = .word, .flag = true, .optional = true }}, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .class = .reads, .body = 1, .body_kw = "by", .help = "Stable sort — `sort by (.distance) [desc]`. Without `by`, the elements are their own keys. Ties keep their input order.", .eval = evalSort },
     .{ .name = "first", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The leading element — `sort by (.distance) | first`. An empty array ends the wave silently; say absence with `len`.", .eval = endEval(false) },
     .{ .name = "last", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "The trailing element — `window 5s | last` is the most recent reading. An empty array ends the wave silently.", .eval = endEval(true) },
-    .{ .name = "len", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "How many elements — `contacts | len | set plane.ui.contacts`. This is how absence is said once `first` goes quiet.", .eval = evalLen },
+    .{ .name = "len", .inputs = &.{p.in("in", Tag.array)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "How many elements — `contacts | len | write plane.ui.contacts`. This is how absence is said once `first` goes quiet.", .eval = evalLen },
     .{ .name = "take", .inputs = &.{ p.in("in", Tag.array), p.in("n", Tag.number), p.kwOpt("from", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "At most `n` elements, from `from` — `take 3`. A short array is forgiven; `nth` past the end is not.", .eval = evalTake },
     .{ .name = "transpose", .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "AoS ↔ SoA, self-inverse — `{a: [1,2], b: [3,4]}` ↔ `[{a:1,b:3},{a:2,b:4}]`. Ragged input refuses, both sides named.", .eval = evalTranspose },
     .{ .name = "shuffle", .inputs = &.{ p.in("in", Tag.array), p.kwOpt("seed", Tag.number) }, .outputs = &.{p.val("out", Tag.array)}, .routes = .anywhere, .help = "Seeded Fisher–Yates — `shuffle [seed 7] | take 3` is three at random, no repeats. Seed defaults to 0; bit-identical across machines.", .eval = evalShuffle },
@@ -3437,7 +3464,18 @@ const CORE = [_]registry.OpDef{
     .{ .name = "project", .inputs = &.{p.in("in", Tag.record)}, .statics = &.{.{ .name = "field", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Field access on a record stream (`stats.mana`).", .eval = evalProject },
     .{ .name = "merge", .inputs = &.{ p.in("a", Tag.record), p.in("b", Tag.record) }, .outputs = &.{p.val("out", Tag.record)}, .routes = .anywhere, .help = "Merge two records; b's fields win.", .eval = evalMerge },
     // plane / util
-    .{ .name = "set", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Write to a plane path — `set <path> [value]`; piped, the input is the rousing and `value` is what gets written.", .class = .effect, .eval = evalSink },
+    .{ .name = "write", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{
+        .{ .name = "path", .kind = .path },
+        // The mode flags — a closed set of bare words, one at most. In
+        // ARGUMENT position they cannot collide with the operators of the
+        // same names, which is why the modes get the registry's own
+        // vocabulary instead of a bikeshed (write-verbs rev 3).
+        .{ .name = "hold", .kind = .word, .flag = true, .optional = true },
+        .{ .name = "add", .kind = .word, .flag = true, .optional = true },
+        .{ .name = "mul", .kind = .word, .flag = true, .optional = true },
+        .{ .name = "stops", .kind = .word, .flag = true, .optional = true },
+        .{ .name = "clear", .kind = .word, .flag = true, .optional = true },
+    }, .routes = .anywhere, .help = "Write to a plane path — `write <path> [value] [mode]`. Bare is the durable replace (the old `set`); `hold` is the seat (retracts on unmount), `add`/`mul`/`stops` are lane levels (likewise), `clear` withdraws this writer's contributions and takes no value. Piped, the input is the rousing and `value` is what gets written.", .class = .effect, .eval = evalSink },
     // `notify` IS `set` — same ports, same write, same eval — and it is worth
     // saying that they diverged for exactly one day and came back. `notify`
     // grew the optional payload port first, because the pipe took its only
@@ -3451,7 +3489,7 @@ const CORE = [_]registry.OpDef{
     // count, deliver every one), so `notify defense/alerts` says "this is a
     // sighting" where `set` would read as "this is the state".
     .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Write an occurrence to a plane path — `notify <path> [value]`; same write as `set`, states the intent.", .class = .effect, .eval = evalSink },
-    // The third write kind. `plane.x | add 1 | set plane.x` reads a path it
+    // The third write kind. `plane.x | add 1 | write plane.x` reads a path it
     // writes, so the cycle check rightly refuses it — which leaves counters
     // inexpressible. A blind delta reads nothing and passes legitimately.
     .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },

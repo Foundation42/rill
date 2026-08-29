@@ -30,7 +30,13 @@ pub const Plane = struct {
     /// `.accumulate` write adds. rill tags; the plane applies. Note rill does
     /// not sum accumulate writes itself — the queue's promise is one batch in
     /// evaluation order, and two `+1`s applied in order are the same `+2`.
-    writeFn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void,
+    /// Widened for write modes (2026-08-29). The mode could not ride
+    /// DeltaKind — enum(u2), all four slots taken — so it rides the call,
+    /// with `stmt` beside it: the sink node's parse-order id, the statement
+    /// identity per-statement levels fold by. Every caller states its mode;
+    /// a write site that does not say what it means is the overload the
+    /// campaign evicted.
+    writeFn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind, mode: WriteMode, stmt: u32) PlaneError!void,
     /// Field casts (rill-casts.md). Not a `writeFn` kind on purpose: a cast is
     /// not addressed at a path — it is a deposit into the CASTER's owned
     /// space, keyed by who is casting, and the receiver-side sum is the only
@@ -56,8 +62,8 @@ pub const Plane = struct {
     pub fn read(self: Plane, path: []const u8, out: *struple.Packer) PlaneError!void {
         return self.readFn(self.ctx, path, out);
     }
-    pub fn write(self: Plane, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void {
-        return self.writeFn(self.ctx, path, val, kind);
+    pub fn write(self: Plane, path: []const u8, val: []const u8, kind: DeltaKind, mode: WriteMode, stmt: u32) PlaneError!void {
+        return self.writeFn(self.ctx, path, val, kind, mode, stmt);
     }
     pub fn cast(self: Plane, c: Cast) PlaneError!void {
         const f = self.castFn orelse return error.Denied;
@@ -118,7 +124,7 @@ pub const Cast = struct {
 /// pulls, and identical bytes are the normal case for a trigger — an enemy at
 /// the gate, then an enemy at the gate again.
 /// Third kind, ACCUMULATE (`inc`): sums its deltas within a tick and applies
-/// the sum once, silencing a net-zero tick. Not sugar for `x | add 1 | set x`
+/// the sum once, silencing a net-zero tick. Not sugar for `x | add 1 | write x`
 /// — that reads a path it writes and the cycle check rightly refuses it. A
 /// blind delta reads nothing, so it passes legitimately, and being commutative
 /// it is MORE deterministic than read-modify-write: arrival order stops
@@ -140,6 +146,15 @@ pub const Cast = struct {
 /// a write MEANS rather than by which function the caller happened to reach
 /// for. `enum(u2)` holds all four, so the fourth cost nothing but the arms.
 pub const DeltaKind = enum(u2) { value, occurrence, accumulate, membership };
+
+/// The WRITE MODE — the campaign's whole point (write-verbs, ruled
+/// 2026-08-29): the blend intent rides the call, chosen by the writer at the
+/// call site, never inferred from the target's class. `base` is the durable
+/// replace every writer used to mean implicitly; the rest are the lane modes
+/// (they retract when their writer unmounts) and `clear` withdraws a
+/// writer's standing contributions. Orthogonal to DeltaKind on purpose:
+/// kind says how a payload coalesces, mode says how it COMBINES.
+pub const WriteMode = enum(u8) { base, hold, add, mul, stops, clear };
 
 pub const Delta = struct {
     path: []const u8,
@@ -163,7 +178,7 @@ pub const MockPlane = struct {
     /// names; idempotence, mailboxes and counts are the host's physics.
     tag_writes: std.ArrayListUnmanaged(TagRec) = .empty,
 
-    pub const Write = struct { path: []u8, value: []u8, kind: DeltaKind = .value };
+    pub const Write = struct { path: []u8, value: []u8, kind: DeltaKind = .value, mode: WriteMode = .base, stmt: u32 = 0 };
     pub const CastRec = struct { channel: []u8, amplitude: f64, pos: []u8, radius: f64, decay: ?types.Duration, to: []u8 = &.{} };
     pub const TagRec = struct { subject: []u8, tag: []u8, adding: bool };
 
@@ -352,13 +367,20 @@ pub const MockPlane = struct {
         try self.tag_writes.append(self.gpa, .{ .subject = subject, .tag = tag_name, .adding = t.adding });
     }
 
-    fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind) PlaneError!void {
+    fn writeThunk(ctx: *anyopaque, path: []const u8, val: []const u8, kind: DeltaKind, mode: WriteMode, stmt: u32) PlaneError!void {
         const self: *MockPlane = @ptrCast(@alignCast(ctx));
         try self.writes.append(self.gpa, .{
             .path = try self.gpa.dupe(u8, path),
             .value = try self.gpa.dupe(u8, val),
             .kind = kind,
+            .mode = mode,
+            .stmt = stmt,
         });
+        // The mock keeps mode-writes OUT of the store: a lane is not the
+        // value, and a mock that applied `hold` as a put would let a seat
+        // test pass while proving replacement, not holding. The record above
+        // is what mode gates assert on; `clear` carries no payload at all.
+        if (mode != .base) return;
         // Writes land in the store too, like a real plane — and an accumulate
         // write is an ADD, which is the whole difference. A mock that stored
         // the delta instead of applying it would let every `inc` test pass
@@ -405,7 +427,7 @@ test "mock plane: seed, subscribe, read, write log" {
     try std.testing.expectEqual(@as(i128, 80), (try r.next()).?.int);
     try std.testing.expectError(error.NotFound, plane.read("plane.missing", &out));
 
-    try plane.write("plane.ui.value", out.bytes(), .value);
+    try plane.write("plane.ui.value", out.bytes(), .value, .base, 0);
     try std.testing.expectEqual(@as(usize, 1), mock.writes.items.len);
     try std.testing.expectEqualStrings("plane.ui.value", mock.writes.items[0].path);
 }
@@ -419,8 +441,8 @@ test "mock plane: an accumulate write adds, and starts from nothing at zero" {
     defer pk.deinit();
     try pk.appendInt(2);
 
-    try plane.write("plane.tally", pk.bytes(), .accumulate); // 0 + 2
-    try plane.write("plane.tally", pk.bytes(), .accumulate); // 2 + 2
+    try plane.write("plane.tally", pk.bytes(), .accumulate, .base, 0); // 0 + 2
+    try plane.write("plane.tally", pk.bytes(), .accumulate, .base, 0); // 2 + 2
     try std.testing.expectEqual(@as(f64, 4), types.asNumber(mock.store.get("plane.tally").?).?);
     // The log keeps the deltas, not the totals — it is a record of writes.
     try std.testing.expectEqual(@as(f64, 2), types.asNumber(mock.writes.items[1].value).?);

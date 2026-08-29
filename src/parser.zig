@@ -774,7 +774,7 @@ const Parser = struct {
             // (Chris, twice in one morning): a pipe feeds an OPERATOR, and
             // writing what's flowing to a path is `set`. Name the fix.
             if (op_tok.kind == .name and (std.mem.eql(u8, op_tok.text, "plane") or self.aliases.contains(op_tok.text))) {
-                return self.fail(op_tok, "'{s}…' is a path, and a pipe feeds an operator — did you forget `set`? (… | set {s}.…)", .{ op_tok.text, op_tok.text });
+                return self.fail(op_tok, "'{s}…' is a path, and a pipe feeds an operator — did you forget `set`? (… | write {s}.…)", .{ op_tok.text, op_tok.text });
             }
             current.* = try self.parseOpcall(target, op_tok, current.outputs[0], false);
         }
@@ -1318,8 +1318,13 @@ const Parser = struct {
             }
         }
 
-        const op_id = self.reg.find(op_name) orelse
+        const op_id = self.reg.find(op_name) orelse {
+            // The renamed front door (write-verbs, 2026-08-29): `set` must
+            // not die as a shrug when every rill ever written used it.
+            if (std.mem.eql(u8, op_name, "set"))
+                return self.fail(op_tok, "`set` became `write` — same shape, bare means the old durable replace (`x | write plane.foo`); say a mode (hold/add/mul/stops/clear) only if you mean one", .{});
             return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
+        };
         const def = self.reg.get(op_id);
         if (def.variadic) return self.fail(op_tok, "'{s}' cannot be called directly", .{op_name});
         const has_tail = def.inputs.len > 0 and def.inputs[def.inputs.len - 1].tail;
