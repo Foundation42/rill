@@ -227,7 +227,10 @@ it as an alias would be two spellings for one act.
 - Not Bitwig: modulators stay modulators. This adds the owner's mode beside
   them and makes every write say which it is.
 
-## 5. Open rulings — what needs Chris's voice
+## 5. Rulings — CLOSED (Chris, 2026-08-29: "1 write, 2-5 yes")
+
+All five ruled as proposed; kept below as the record of what was asked.
+The buildable form is `cc-brief-write-verbs.md`.
 
 1. **The base verb's name**: `write` (CC's pick — neutral about *how*,
    where `set` carries replace-flavour and `set … add` reads as a
