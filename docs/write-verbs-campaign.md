@@ -1,11 +1,20 @@
 # Write verbs: intent at the call site
 
-Campaign note, DRAFT — Chris's idea, drafted by CC, 2026-08-29. Bound for a
-second pair of eyes (Claude Chat), then back for rulings. Nothing below is
-ruled unless it says so; §5 is the list of decisions the design needs.
+Campaign note, REVISION 2 — Chris's idea 2026-08-29, drafted by CC, reviewed
+by Claude Chat the same day, review folded in by CC. §5 is now the short list
+that needs Chris's voice; §6 is what was proposed, seconded, and will proceed
+unless overruled. §7 is the ledger of rejects.
 
-This note is self-contained on purpose: the reviewer has no codebase access,
-so the standing machinery it touches is described inline.
+Changed in this revision, all from the review:
+
+- **The `hold` split** (the review's one argued-for change, seconded by CC):
+  blend mode and lifetime were bundled in `set`-as-assign; they are
+  orthogonal. `set` keeps today's meaning everywhere; the seat gets its own
+  verb. This deletes the old §5.2 compat question outright.
+- Additive contributions pinned as **per-statement LEVELS**, not deltas.
+- Rulings added for clamp placement, glide interaction, per-lane non-finite,
+  mount-time acceptance refusal, the `mod/` write spelling, console
+  retraction (`clear`), and the order-permute gate.
 
 ---
 
@@ -31,161 +40,216 @@ elsewhere.
 Chris's framing (2026-08-29): the system is not Bitwig. Bitwig-style
 modulators orbit an authored value and never own it — that's our lanes, and
 lanes are *right* for modulation. But **it is perfectly fine to set
-something, if that is what you want. It's a matter of intent.** Right now
-`set` is overloaded to carry every intent, and it shows.
+something, if that is what you want. It's a matter of intent.**
 
 **The ruling being proposed: the blend mode moves into the verb.** The
-program says what it means — assign, add, scale, stops — and the target
-declares what it accepts, instead of deciding on the writer's behalf.
+program says what it means — and separately, the *lifetime* of what it said
+is carried by the verb too.
 
 ## 2. One week's evidence
 
 Three real bites from the current campaign week, each dissolved by verbs:
 
-**The additive-path table.** `camera/thrust/*` summing across programs is
-implemented as a hardcoded list (`ADDITIVE_PATHS`) in the engine. Whether
-your write sums or replaces depends on membership in a table you cannot see
-from the rill. With an additive verb, "whoever writes additively joins a
-sum" — the table stops existing.
+**The additive-path table.** `camera/thrust/*` summing across programs is a
+hardcoded engine list (`ADDITIVE_PATHS`). Whether your write sums or
+replaces depends on membership in a table you cannot see from the rill. With
+an additive verb, "whoever writes additively joins a sum" — the table stops
+existing.
 
 **The replace-vs-sum surprise.** Intent sums are keyed by *program* id: two
 programs writing torque compose, but two *statements* in one program share
 an id, so the second silently replaces the first. rail.rill v1's mouse-look
-line (writing zero with the button up) erased its own aim line this way —
-the camera never turned, and the rule had to be learned from a trace.
-Verbs make the composition rule statable per-verb instead of emergent.
+line (writing zero with the button up) erased its own aim line this way.
+Under per-statement levels (§3.4) that line becomes *correct behavior*.
 
-**The camera seat hack.** rail.rill v2 needed to *own* the camera (hard
-rail: position assigned outright). There was no way to say that, so it got a
-bespoke seam (`camera/pose/pos|look`) — and because plain dynamic writes
-outlive their writer, a bespoke line in unmount that vacates the seat, with
-a stated edge case (any unmount vacates, even an unrelated program's). If
-program-assignment is a *verb* with ownership semantics — "assigned while I
-am mounted, retracted when I go" — that lifecycle falls out of the
-semantics, per writer, no special cases.
+**The camera seat hack.** rail.rill v2 needed to *own* the camera. There was
+no way to say that, so it got a bespoke seam (`camera/pose/pos|look`) and a
+bespoke unmount line that vacates it, with a stated edge (any unmount
+vacates, even an unrelated program's). Under `hold` (§3.2) the lifecycle is
+in the word and the special case is deleted.
 
-Also worth noticing: the verb taxonomy already quietly began. `set`, `inc`
-(accumulate: add *to* a stored number as a delta kind), and `cast` (deposit
-into a spatial field) are already three write verbs with three delta
-semantics. This campaign finishes the thought.
+The verb taxonomy already quietly began: `set`, `inc` (accumulate delta),
+and `cast` (field deposit) are three write verbs with three semantics. This
+campaign finishes the thought. The docs kinship line, per the review:
+*`inc` changes the number; `nudge` leans on it.*
 
-## 3. The proposed design
+## 3. The design
 
 ### 3.1 The verb families
 
-Four write intents (names are open — see §5.1; placeholders used here):
+Six verbs, two of them existing (final names are §5.1; additive/stops names
+are placeholders):
 
-- **`set`** — *assign*. "This value, because I say so." Last-owner-wins
-  while held; **retracts when the writer unmounts**. The owner's verb.
-- **`nudge`** — *additive*. Joins a sum with every other additive writer.
-  Rests at 0; a contribution retracts on unmount.
-- **`scale`** — *multiplicative*. Folds into a product. Rests at 1.
-- **`stops`** — *exposure algebra*. Photographic stops: the aggregate `s`
-  applies as `× 2^clamp(s, −8, +8)`. Rests at 0.
+| verb | intent | rests at | lifetime |
+|---|---|---|---|
+| `set` | durable replace — **exactly today's meaning, from every mouth** | — | outlives the writer |
+| `hold` | *the seat*: this value while I stand here | — | **retracts on unmount** — a hold that persists after you leave isn't a hold |
+| `nudge`* | join a sum | 0 | contribution retracts on unmount |
+| `scale` | fold into a product | 1 | retracts on unmount |
+| `stops`* | photographic stops: `× 2^clamp(s, −8, +8)` | 0 | retracts on unmount |
+| `clear` | withdraw *my* contribution from this target's lane, whatever its mode | — | immediate |
+
+The `hold` split (review's argument, seconded): the draft bundled blend mode
+(*replace the base*) and lifetime (*retract on unmount*) into one verb, which
+both created a compat audit for every durable `set` site and quietly made
+`set` mean different things from the console and program mouths. Split, the
+table is clean:
+
+- console `set` on a knob → authored (unchanged)
+- program `set` on a knob → **refused, and the refusal names `hold`**
+  (authored is the person's; authored-survives is non-negotiable)
+- program `hold` on a knob → the assign lane (the camera seat, generalized)
+- program `set` on a dynamic path → today's durable replace (`draw/*`
+  overlays keep working; no audit needed)
+- program `hold` on a dynamic path → replace-with-retraction, for every site
+  where outliving the writer *was* the bug
 
 ### 3.2 One machinery: everything is a lane
 
-Today a routed knob has at most one lane, in the registry's one mode, and
-the value read by the frame is `authored ∘ lane`. The generalization: a
-target may carry **one lane per mode simultaneously**, and the combine order
+A target may carry **one lane per mode simultaneously**; the combine order
 is fixed:
 
 ```
-value = ( (assigned  if an assign-lane is held, else authored)
-          + Σ nudge-contributions )
-        × Π scale-contributions
-        × 2^clamp(Σ stops, −8, +8)
+base  = held value (last holder in owner order)  |  else authored
+live  = clamp_knob_range( (base + Σ nudges) × Π scales × 2^clamp(Σ stops, −8, +8) )
 ```
 
-Assignment is then not a special case but a fourth lane mode — a "replace
-lane" whose fold is last-owner-wins. **The authored value survives
-underneath every mode, including assign**: no program verb ever writes the
-store, so unmounting everything always reveals the person's number again.
-(This is the standing "three views" contract: a bare read is authored,
-`mod/<path>` is the lane, `live/<path>` is what the frame used. Verbs extend
-the middle view; the outer two are untouched.)
+- **`hold` replaces only the base.** Modulation rides on top: a kick still
+  shakes a railed camera. Assign just swaps whose value the modulators
+  orbit — the Bitwig story survives intact.
+- **The knob's range clamp applies to the final live value**, after the
+  whole fold — the existing "clamp is the knob's range" ruling, said here
+  because the fold grew.
+- **`hold` bypasses the glide.** `live` is `glided ∘ lanes`; a held base
+  does not ease in — "position assigned outright" was the entire point of
+  the hard rail, and *easing is spellable in the language*: a program that
+  wants a soft seat handoff writes `| ease 300ms` before its `hold`. The
+  engine seam stays hard; softness is the author's sentence, not the
+  engine's habit. (CC's recommendation, sharpening the review's "might need
+  to be per-verb".)
+- **Non-finite is per-lane, loudly.** A NaN aggregate in the scale lane
+  makes that lane its identity and says so; the other lanes still apply.
+  Smaller blast radius than whole-read fallback (review's recommendation,
+  seconded).
+- Standing invariants carried over unchanged, load-bearing for replay and
+  frozen-reference bit-identity: **owner-order folds** (never allocation
+  address), **main-thread lanes, debug-asserted**, empty lanes cost
+  nothing, an unmodulated frame is bit-identical.
 
-Standing invariants that carry over unchanged, because they are load-bearing
-for replay and frozen-reference bit-identity:
+### 3.3 Acceptance is a mount-time contract
 
-- contributions fold in **owner order** (mount order, never allocation
-  address) — float addition is not associative;
-- lanes are **main-thread-only**, debug-asserted;
-- a non-finite aggregate is **ignored, loudly** (the current lane rule);
-- an empty lane costs nothing; an unmodulated frame is bit-identical.
+The registry's `modulation` column becomes a **mask of accepted modes**. A
+write in an unaccepted mode is refused **at mount**, naming the accepted
+modes — write targets are static paths in statements, so the wire gate can
+walk this the way it walks types, and nothing refuses at runtime. Default
+mask: today's column maps to "accepts exactly that mode"; `hold` accepted
+nowhere until ruled per-namespace (`camera/pose/*` migrates first).
 
-### 3.3 The registry column becomes an acceptance policy
+### 3.4 Additive contributions are per-statement LEVELS
 
-Today `KnobDef.modulation` *chooses* the one mode. Under verbs it becomes a
-*mask* of accepted modes ("exposure accepts nudge and stops; tonemap-mode
-accepts nothing; camera pose accepts assign"). A write in an unaccepted mode
-is a **refusal that names the accepted modes** — the loud-refusal house
-style.
+Keyed per **statement**, and a contribution is **a level the statement
+maintains, not a delta per firing** — latest value per statement wins,
+statements sum across each other. Both halves matter (review's pin): level
+semantics is what makes rail-v1's mouse-look line (writing 0 with the
+button up) *correct* rather than hazardous, keeps `nudge` cleanly distinct
+from `inc`, and matches the cross-tick coalesce ruling on casts. Without
+that sentence someone implements per-firing accumulation and the bug
+returns in a new costume.
 
-### 3.4 Dynamic paths and the console
+Statement identity = index within the file: stable for replay (replay
+re-derives from identical text), and an edited remount rebuilds all
+contributions anyway since they retract at unmount. Fold order becomes
+(owner order, then statement order), both deterministic.
 
-Non-knob dynamic paths take the same verbs: `set` is today's replace (plus
-retract-on-unmount ownership — see §5.2 for the compat question), `nudge`
-on any numeric path generalizes the intent-sum machinery, and
-`camera/thrust/*` becomes nothing but a path people happen to `nudge`.
+### 3.5 The `mod/` write spelling is deleted; the read view grows
 
-The console speaks the same verbs as programs — one vocabulary, two mouths.
-(Console `set` on a knob keeps writing authored: the console is the person.)
+Verb + bare path now carries the mode, so the `mod/<knob>` *write* seam is
+the evicted overload reborn — deleted in the migration pass. The `mod/`
+*read* view stays and grows: `probe` shows per-mode aggregates and
+contributor counts. Three views unchanged as a read contract: bare =
+authored, `mod/` = the lanes, `live/` = what the frame used.
+
+### 3.6 The console speaks the same verbs
+
+One vocabulary, two mouths. Console `set` on a knob writes authored (the
+console is the person — and under the `hold` split that is no longer a
+special case, it is just what `set` means). Console modulation verbs
+contribute under the console's own id; the person withdraws with `clear`,
+which exists precisely so nobody needs to know a mode's identity value to
+leave a lane. Console `hold` is legal and released by `clear` — useful for
+pinning a value while investigating.
 
 ## 4. What this is not
 
-- Not a change to reads, probe, replay format, or the three-views contract.
+- Not a change to reads, probe's reply shape, replay format, or the
+  three-views read contract.
 - Not a scheduling change: drain, slew, and publish points stay put.
-- Not Bitwig: modulators stay modulators. This *adds* the owner's verb
-  beside them and makes each one say which it is.
+- Not Bitwig: modulators stay modulators. This adds the owner's verbs
+  beside them and makes every write say which it is.
 
-## 5. Open rulings (the reviewer should poke at these)
+## 5. Open rulings — what needs Chris's voice
 
-1. **Names.** `add` and `mul` are unavailable — they are elementwise
-   *operators*, and a path in argument position is a live reference, so
-   `| add plane.x` is already arithmetic today. Candidates: `nudge` /
-   `offset` / `sum` for additive; `scale` / `gain` for multiplicative;
-   `stops` reads well as itself. `set` stays the assign verb.
-2. **Program `set` on a routed knob** — refused (today's rule) or admitted
-   as the assign-lane? Draft recommends: admitted. It is the camera-seat
-   need, generalized, and authored survives underneath. Also: does plain
-   dynamic-path `set` gain retract-on-unmount, and is that a compat break
-   anything relies on (e.g. `draw/*` overlays currently outliving their
-   writer — arguably a bug, but a visible one)?
-3. **Sum granularity.** Additive contributions keyed per *statement* (each
-   line is a contributor — kills the rail-v1 bite outright) or per
-   *program* (today's rule: within a file, composing is the author's job)?
-   Per-statement needs stable statement identity for replay's fold order —
-   statement index within the file is stable across remounts of identical
-   text; is that stable enough?
-4. **Combine order.** Is `(assign|authored + nudges) × scales × 2^stops`
-   the right fixed order, and is assign-beats-authored-plus-nudges right —
-   or should assign suppress the *other* lanes too? (Draft recommends:
-   assign replaces only the base; modulation still applies on top. A kick
-   should still shake a railed camera.)
-5. **Acceptance defaults.** Which knobs accept which modes out of the box?
-   Cheapest honest default: current `modulation` column maps to "accepts
-   exactly that mode", assign accepted nowhere until ruled per-namespace.
-6. **`inc` and `cast`.** Fold `inc` into the additive family, or leave both
-   as-is (they are delta *kinds*, not lane modes)? Draft recommends: leave,
-   note the kinship in docs.
-7. **Migration.** Shipped rills all say `set`. Rewrite them honestly
-   (camera.rill thrust → additive verb; rail.rill pose stays `set` and
-   *gains* proper seat semantics; ADDITIVE_PATHS deleted) rather than
-   compat-shim? The codebase is young; draft recommends yes.
+1. **Names.** The grammar fact stands: `add` and `mul` are operators, and
+   `| add plane.x` is already live-reference arithmetic. On the table:
+   - *additive*: `nudge` (review: reads small — WASD thrust at full
+     throttle isn't a nudge), `bias` (the codebase already calls this
+     concept bias, but verb/path adjacency with `camera/bias/*` may
+     refuse), `offset` (honest, flat), `sum`, `push`.
+   - *multiplicative*: `scale` (probably safe; `gain` collides with the
+     emitter field).
+   - *stops*: `stops` (reads badly aloud as a verb) vs `ev` (photographic,
+     reads well: `ev plane.render.grade.exposure 1`, but opaque to
+     no-priors readers).
+   - *seat*: `hold` (both reviewers like it). *withdraw*: `clear`.
+2. **Confirm the `hold` split** (§3.1) — argued by the review, seconded by
+   CC, but it is a shape change from the idea as first spoken.
+3. **Confirm `hold` bypasses the glide** (§3.2) — CC's recommendation;
+   the alternative is per-verb easing in the engine.
+4. **Confirm per-statement levels** (§3.4) — this changes the composition
+   story *within* a file from "composing is the author's job" to "every
+   statement is a contributor".
+5. **`hold` acceptance map** — which namespaces admit a seat first.
+   Proposed: `camera/pose/*` (migrating the bespoke seam), nothing else
+   until asked for.
 
-## 6. Sizing sketch (for orientation, not ruling)
+## 6. Proposed and seconded — proceeding unless overruled
 
-- **rill repo:** four terminal verbs in the grammar (same shape as `set`),
-  registry rows, refusal messages. Small.
-- **engine:** lane storage keyed (target, mode) instead of one-per-knob;
-  intent-sum machinery merges into it; unmount retraction already exists
-  (`laneDropOwner`) and extends to the assign mode. Medium — this is the
+Mount-time acceptance refusals (§3.3) · per-lane non-finite (§3.2) · the
+`mod/` write deletion (§3.5) · `clear` and console vocabulary (§3.6) ·
+range clamp after the full fold (§3.2) · honest migration, no compat shims:
+camera.rill thrust → additive verb, rail.rill pose → `hold` (its bespoke
+unmount line deleted), `ADDITIVE_PATHS` deleted, `draw/*` untouched ·
+`inc`/`cast` stay as they are, kinship documented.
+
+## 7. Ledger of rejects
+
+- `add`/`mul` as verb names — operator collision (grammar fact, not taste).
+- One verb carrying both assign-blend and retract-lifetime — orthogonal
+  axes; bundling recreated the two-mouths overload and forced a compat
+  audit of every durable `set` (review round, 2026-08-29).
+- Per-firing additive accumulation — resurrects the replace-vs-sum bug in a
+  new costume; levels or nothing.
+- Whole-read non-finite fallback — larger blast radius than per-lane, and
+  punishes three well-behaved lanes for one rogue writer.
+- Runtime acceptance refusals — mount-time is house style and statically
+  checkable here.
+
+## 8. Sizing sketch (orientation, not ruling)
+
+- **rill repo:** the new terminal verbs in the grammar (same shape as
+  `set`), registry rows, mount-time acceptance in the wire gate, refusal
+  messages. Small.
+- **engine:** lane storage keyed (target, mode); intent-sum machinery
+  merges into it; `laneDropOwner` retraction extends to `hold` and
+  per-statement keys; `camera/pose/*` migrates onto the seat. Medium — the
   campaign's center of mass.
-- **gates:** every ruling above paid in the usual coin, plus the standing
-  frozen-reference sweep (unmodulated frames bit-identical before/after).
+- **gates:** every ruling paid in the usual coin, and specifically — per
+  the review — an **order-permute gate**: construct a target where
+  `(base + Σ) × Π × 2^s` differs numerically from other orderings and
+  assert the documented one. A gate that passes because the lanes are
+  empty is watching nothing. Plus the standing frozen-reference sweep.
 
 ---
 
-*Fate of the note: like `modulation-lanes-campaign.md`, this becomes a CC
-brief once ruled, and the brief tracks what lands.*
+*Fate of the note: becomes a CC brief once §5 is ruled; the brief tracks
+what lands.*
