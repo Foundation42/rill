@@ -226,7 +226,7 @@ pub const Ctx = struct {
         const v = try self.val(i);
         return switch (v) {
             .array => |xs| xs,
-            else => self.refuse("{s}: port '{s}' wants an array literal, got {s}", .{ self.op.name, self.portName(i), v.kindName() }),
+            else => self.refuse("{s}: port '{s}' wants an array, got {s}", .{ self.op.name, self.portName(i), v.kindName() }),
         };
     }
 
@@ -753,11 +753,41 @@ fn resolveWrite(schema: Schema, n: *const graph.Node, def: *const registry.OpDef
 /// Struple → row value. Numbers floor to Q16.16; a record with exactly x, y,
 /// z — or l, a, b, the Oklab spelling a colour curve wants — is a vec3; a
 /// boolean is itself. Used by hosts for BROADCASTS each tick — the one
-/// boundary where a float may appear. Arrays are not values a broadcast may
-/// carry: the row's arrays are literals, converted once at mount, and a
-/// per-tick array from the plane would be a per-tick allocation on the row.
+/// boundary where a float may appear. An array is not converted here: a
+/// host that broadcasts one (a curve the Spray applet edits) converts it
+/// with `arrayFromStruple` once when its bytes change, owns the storage,
+/// and hands the runtime a `.array` — once per tick per spray at most,
+/// never per row, which keeps the row's arrays stateless.
 pub fn fromStruple(gpa: std.mem.Allocator, bytes: []const u8) ?Val {
     return convertScalarish(gpa, bytes);
+}
+
+/// A struple array of numbers, or of x/y/z (l/a/b) records, as the owned
+/// `[]Val` a broadcast may carry. Homogeneous, never empty, never nested,
+/// no booleans — the same rules a literal array takes at mount. Null when
+/// the bytes are not such an array; the caller frees the slice.
+pub fn arrayFromStruple(gpa: std.mem.Allocator, bytes: []const u8) !?[]Val {
+    var r = struple.reader(bytes);
+    const e = (r.next() catch return null) orelse return null;
+    if (e != .array) return null;
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const a = arena_impl.allocator();
+    const inner = (struple.view(bytes).containedItems(a) catch return null) orelse return null;
+    // `defer`, not `errdefer`: a malformed element returns null part-way,
+    // and the list must go with it (the first draft leaked exactly there).
+    // `toOwnedSlice` empties the list, so the defer frees nothing on success.
+    var items: std.ArrayListUnmanaged(Val) = .empty;
+    defer items.deinit(gpa);
+    var ir = struple.reader(inner);
+    while (ir.nextView() catch return null) |elem| {
+        const v = convertScalarish(gpa, elem) orelse return null;
+        if (v == .boolean) return null;
+        if (items.items.len > 0 and std.meta.activeTag(items.items[0]) != std.meta.activeTag(v)) return null;
+        try items.append(gpa, v);
+    }
+    if (items.items.len == 0) return null;
+    return try items.toOwnedSlice(gpa);
 }
 
 fn convertScalarish(gpa: std.mem.Allocator, bytes: []const u8) ?Val {
@@ -1400,12 +1430,43 @@ test "row: an array literal is the first stateless array on the row — converte
     rt3.evalRow(&sc3, 1, ONE, null);
     try std.testing.expectEqual(@as(u64, 1), sc3.refusals);
     try std.testing.expect(std.mem.indexOf(u8, sc3.first.text(), "never an array") != null);
-    // A broadcast never carries one: a struple array at the plane boundary is not a row value.
+    // A broadcast converts an array through its own door, once, host-owned:
+    // `fromStruple` says nothing of it, `arrayFromStruple` hands it over.
     var pk = struple.Packer.init(gpa);
     defer pk.deinit();
     var inner = struple.Packer.init(gpa);
     defer inner.deinit();
     try inner.appendInt(1);
+    try inner.appendF64(0.5);
     try pk.appendArray(inner.bytes());
     try std.testing.expectEqual(@as(?Val, null), fromStruple(gpa, pk.bytes()));
+    const arr = (try arrayFromStruple(gpa, pk.bytes())).?;
+    defer gpa.free(arr);
+    try std.testing.expectEqual(@as(usize, 2), arr.len);
+    try std.testing.expectEqual(HALF, arr[1].scalar);
+    // …and a broadcast slot carrying it reaches a kernel like a literal does.
+    var pdiag4 = parser.Diag{};
+    var p4 = try parser.parse(gpa, &reg, "k", "row.age | lastof plane.drift.@self.curve | write row.u1", &pdiag4);
+    defer p4.deinit();
+    var d4 = registry.Detail{};
+    var rt4 = try Runtime.mount(gpa, &p4, rows.asPlane(), &d4);
+    defer rt4.deinit();
+    // `row.age` is subscription 0; the curve is the broadcast — ask, don't assume.
+    for (0..p4.subs.items.len) |i| {
+        if (rt4.isBroadcast(i)) rt4.setBroadcast(i, .{ .array = arr });
+    }
+    var sc4 = try rt4.newScratch(gpa);
+    defer sc4.deinit();
+    rt4.evalRow(&sc4, 2, ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc4.refusals);
+    try std.testing.expectEqual(HALF, rows.u[2][1]);
+    // A malformed one is null, not a partial array.
+    var bad_inner = struple.Packer.init(gpa);
+    defer bad_inner.deinit();
+    try bad_inner.appendInt(1);
+    try bad_inner.appendBool(true);
+    var bad_arr = struple.Packer.init(gpa);
+    defer bad_arr.deinit();
+    try bad_arr.appendArray(bad_inner.bytes());
+    try std.testing.expectEqual(@as(?[]Val, null), try arrayFromStruple(gpa, bad_arr.bytes()));
 }
