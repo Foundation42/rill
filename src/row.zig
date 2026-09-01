@@ -54,11 +54,15 @@ pub fn mul(a: Fixed, b: Fixed) Fixed {
 }
 
 /// A value on a row. Scalars and 3-vectors are Q16.16; booleans are what
-/// comparisons emit and `select` consumes.
+/// comparisons emit and `select` consumes. An ARRAY is a literal's shape
+/// only — the first stateless array on the row (spindrift beat 3): it is
+/// converted once at mount, owned by the runtime, shared read-only by
+/// every row, and no op emits one. `over`'s curve is the customer.
 pub const Val = union(enum) {
     scalar: Fixed,
     vec3: [3]Fixed,
     boolean: bool,
+    array: []const Val,
 
     pub fn eql(a: Val, b: Val) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
@@ -66,6 +70,22 @@ pub const Val = union(enum) {
             .scalar => |x| x == b.scalar,
             .vec3 => |v| std.mem.eql(Fixed, &v, &b.vec3),
             .boolean => |x| x == b.boolean,
+            .array => |xs| blk: {
+                if (xs.len != b.array.len) break :blk false;
+                for (xs, b.array) |x, y| {
+                    if (!x.eql(y)) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
+
+    pub fn kindName(self: Val) []const u8 {
+        return switch (self) {
+            .scalar => "a number",
+            .vec3 => "a vec3",
+            .boolean => "a boolean",
+            .array => "an array",
         };
     }
 };
@@ -186,18 +206,27 @@ pub const Ctx = struct {
     }
 
     pub fn scalar(self: *Ctx, i: usize) Error!Fixed {
-        return switch (try self.val(i)) {
+        const v = try self.val(i);
+        return switch (v) {
             .scalar => |x| x,
-            .vec3 => self.refuse("{s}: port '{s}' wants a number, got a vec3", .{ self.op.name, self.portName(i) }),
-            .boolean => self.refuse("{s}: port '{s}' wants a number, got a boolean", .{ self.op.name, self.portName(i) }),
+            else => self.refuse("{s}: port '{s}' wants a number, got {s}", .{ self.op.name, self.portName(i), v.kindName() }),
         };
     }
 
     pub fn vec3(self: *Ctx, i: usize) Error![3]Fixed {
-        return switch (try self.val(i)) {
-            .vec3 => |v| v,
-            .scalar => self.refuse("{s}: port '{s}' wants a vec3, got a number", .{ self.op.name, self.portName(i) }),
-            .boolean => self.refuse("{s}: port '{s}' wants a vec3, got a boolean", .{ self.op.name, self.portName(i) }),
+        const v = try self.val(i);
+        return switch (v) {
+            .vec3 => |x| x,
+            else => self.refuse("{s}: port '{s}' wants a vec3, got {s}", .{ self.op.name, self.portName(i), v.kindName() }),
+        };
+    }
+
+    /// A literal array — homogeneous numbers or vec3s, never empty.
+    pub fn array(self: *Ctx, i: usize) Error![]const Val {
+        const v = try self.val(i);
+        return switch (v) {
+            .array => |xs| xs,
+            else => self.refuse("{s}: port '{s}' wants an array literal, got {s}", .{ self.op.name, self.portName(i), v.kindName() }),
         };
     }
 
@@ -282,6 +311,14 @@ pub const Runtime = struct {
     node_state: []NodeState,
     channels_used: u8,
     n_sinks: usize,
+    /// The literal arrays, converted once at mount and shared by every row.
+    literal_arrays: std.ArrayListUnmanaged([]Val) = .empty,
+    /// Per node: folded at mount into a literal and skipped by the sweep —
+    /// an `array` construction whose every element is a literal. The parser
+    /// builds `[1, 0.5, 0]` as a node (§2.10, a live tuple); on the row it
+    /// is the first STATELESS array: one value, converted once, shared by
+    /// every row, and a live element (`[row.age, 1]`) is refused by name.
+    folded: []bool,
 
     /// Mount, or refuse with the words in `diag`. Every refusal names the
     /// node and what it asked for; the error names the category.
@@ -295,6 +332,7 @@ pub const Runtime = struct {
             .literals = try gpa.alloc(?Val, prog.slotCount()),
             .node_write = try gpa.alloc(?WriteRef, prog.nodeCount()),
             .node_state = try gpa.alloc(NodeState, prog.nodeCount()),
+            .folded = try gpa.alloc(bool, prog.nodeCount()),
             .channels_used = 0,
             .n_sinks = 0,
         };
@@ -303,11 +341,21 @@ pub const Runtime = struct {
         @memset(rt.literals, null);
         @memset(rt.node_write, null);
         @memset(rt.node_state, .{});
+        @memset(rt.folded, false);
+
+        // Array literals fold first, so the legality walk below never sees
+        // the `array` node they were parsed as.
+        for (prog.nodes.items) |*n| {
+            const def = prog.reg.get(n.op);
+            if (!std.mem.eql(u8, def.name, "array")) continue;
+            try rt.foldArray(n, diag);
+        }
 
         // Every op must have an exact kernel. Refused by name, with the
         // column's own words, before anything else is looked at.
         var channels: u32 = 0;
         for (prog.nodes.items) |*n| {
+            if (rt.folded[n.id]) continue;
             const def = prog.reg.get(n.op);
             if (!def.row.legal()) {
                 if (def.row.eval == null) {
@@ -358,7 +406,10 @@ pub const Runtime = struct {
         for (prog.slots.items) |*s| {
             switch (s.source) {
                 .literal => |bytes| {
-                    rt.literals[s.id] = convertLiteral(gpa, bytes) orelse {
+                    // An array node's inputs were folded above; their slots
+                    // are element literals that no sweep reads.
+                    if (rt.folded[s.node] and s.dir == .in) continue;
+                    rt.literals[s.id] = convertScalarish(gpa, bytes) orelse {
                         const n = prog.node(s.node);
                         diag.set("{s}: literal on port '{s}' is not a row value — a kernel literal is a number, a {{x, y, z}} record, or a boolean", .{ n.name, s.name });
                         return error.BadLiteral;
@@ -370,7 +421,101 @@ pub const Runtime = struct {
         return rt;
     }
 
+    /// `[a, b, c]` with every element a literal becomes one shared array
+    /// value on the node's output and every input it feeds; the node itself
+    /// is skipped by the sweep. Homogeneous numbers or vec3s, never empty,
+    /// never nested, no booleans — refused at mount by name otherwise.
+    fn foldArray(self: *Runtime, n: *const graph.Node, diag: *registry.Detail) MountError!void {
+        const prog = self.prog;
+        if (n.inputs.len == 0) {
+            diag.set("{s}: an array on the row is never empty", .{n.name});
+            return error.BadLiteral;
+        }
+        var items = try self.gpa.alloc(Val, n.inputs.len);
+        errdefer self.gpa.free(items);
+        for (n.inputs, 0..) |sid, i| {
+            const sl = prog.slot(sid);
+            const v: Val = switch (sl.source) {
+                .literal => |b| convertScalarish(self.gpa, b) orelse {
+                    diag.set("{s}: element {d} is not a row value — a kernel literal is a number, a {{x, y, z}} record, or a boolean", .{ n.name, i });
+                    return error.BadLiteral;
+                },
+                // `[{l: 1, a: 0, b: 0}, …]`: the parser builds each record
+                // element as a `record` node with literal fields. Fold it
+                // too, as a vec3, and skip it in the sweep.
+                .wire => |up| try self.foldRecordVec3(prog.slot(up).node, n, i, diag),
+                else => {
+                    diag.set("{s}: an array on the row is a literal — every element is a number or a {{x, y, z}} record, and element {d} is not", .{ n.name, i });
+                    return error.BadLiteral;
+                },
+            };
+            if (v == .boolean) {
+                diag.set("{s}: an array on the row holds numbers or vec3s, not booleans", .{n.name});
+                return error.BadLiteral;
+            }
+            if (i > 0 and std.meta.activeTag(items[0]) != std.meta.activeTag(v)) {
+                diag.set("{s}: an array on the row is all numbers or all vec3s — element {d} differs", .{ n.name, i });
+                return error.BadLiteral;
+            }
+            items[i] = v;
+        }
+        try self.literal_arrays.append(self.gpa, items);
+        const arr = Val{ .array = items };
+        for (n.outputs) |sid| {
+            self.literals[sid] = arr;
+            for (prog.downstream[sid]) |down| self.literals[down] = arr;
+        }
+        self.folded[n.id] = true;
+    }
+
+    /// A `record` node with literal fields named x, y, z (or l, a, b) is a
+    /// vec3 literal; anything else in an array is a live element, refused.
+    fn foldRecordVec3(self: *Runtime, node_id: graph.NodeId, array_node: *const graph.Node, elem: usize, diag: *registry.Detail) MountError!Val {
+        const prog = self.prog;
+        const rn = prog.node(node_id);
+        const rdef = prog.reg.get(rn.op);
+        if (!std.mem.eql(u8, rdef.name, "record") or rn.inputs.len != 3) {
+            diag.set("{s}: an array on the row is a literal — every element is a number or a {{x, y, z}} record, and element {d} is not", .{ array_node.name, elem });
+            return error.BadLiteral;
+        }
+        var out: [3]Fixed = undefined;
+        var seen: u8 = 0;
+        for (rn.inputs, 0..) |sid, k| {
+            const sl = prog.slot(sid);
+            const bytes = switch (sl.source) {
+                .literal => |b| b,
+                else => {
+                    diag.set("{s}: element {d} is a record with a live field — an array on the row is a literal", .{ array_node.name, elem });
+                    return error.BadLiteral;
+                },
+            };
+            const key = rn.statics[k].word;
+            const axis: usize = if (std.mem.eql(u8, key, "x") or std.mem.eql(u8, key, "l")) 0 else if (std.mem.eql(u8, key, "y") or std.mem.eql(u8, key, "a")) 1 else if (std.mem.eql(u8, key, "z") or std.mem.eql(u8, key, "b")) 2 else {
+                diag.set("{s}: element {d} names a field '{s}' — a row vec3 is x, y, z or l, a, b", .{ array_node.name, elem, key });
+                return error.BadLiteral;
+            };
+            const f = types.asNumber(bytes) orelse {
+                diag.set("{s}: element {d}'s field '{s}' is not a number", .{ array_node.name, elem, key });
+                return error.BadLiteral;
+            };
+            out[axis] = fixedFromF64(f) orelse {
+                diag.set("{s}: element {d}'s field '{s}' does not fit Q16.16", .{ array_node.name, elem, key });
+                return error.BadLiteral;
+            };
+            seen |= @as(u8, 1) << @intCast(axis);
+        }
+        if (seen != 0b111) {
+            diag.set("{s}: element {d} names each of x, y, z (or l, a, b) once", .{ array_node.name, elem });
+            return error.BadLiteral;
+        }
+        self.folded[node_id] = true;
+        return .{ .vec3 = out };
+    }
+
     pub fn deinit(self: *Runtime) void {
+        for (self.literal_arrays.items) |arr| self.gpa.free(arr);
+        self.literal_arrays.deinit(self.gpa);
+        self.gpa.free(self.folded);
         self.gpa.free(self.sub_refs);
         self.gpa.free(self.broadcast);
         self.gpa.free(self.literals);
@@ -421,6 +566,7 @@ pub const Runtime = struct {
         var detail = registry.Detail{};
 
         for (prog.nodes.items) |*n| {
+            if (self.folded[n.id]) continue;
             const def = prog.reg.get(n.op);
             // All required inputs must have a value; otherwise this node is
             // quiet for this row (an unbound optional reads as null).
@@ -518,7 +664,7 @@ fn addVal(a: Val, b: Val) ?Val {
             .scalar => |y| .{ .vec3 = .{ v[0] +% y, v[1] +% y, v[2] +% y } },
             else => null,
         },
-        .boolean => null,
+        .boolean, .array => null,
     };
 }
 
@@ -605,13 +751,16 @@ fn resolveWrite(schema: Schema, n: *const graph.Node, def: *const registry.OpDef
 }
 
 /// Struple → row value. Numbers floor to Q16.16; a record with exactly x, y,
-/// z is a vec3; a boolean is itself. Used for literals at mount and by hosts
-/// for broadcasts each tick — the one boundary where a float may appear.
+/// z — or l, a, b, the Oklab spelling a colour curve wants — is a vec3; a
+/// boolean is itself. Used by hosts for BROADCASTS each tick — the one
+/// boundary where a float may appear. Arrays are not values a broadcast may
+/// carry: the row's arrays are literals, converted once at mount, and a
+/// per-tick array from the plane would be a per-tick allocation on the row.
 pub fn fromStruple(gpa: std.mem.Allocator, bytes: []const u8) ?Val {
-    return convertLiteral(gpa, bytes);
+    return convertScalarish(gpa, bytes);
 }
 
-fn convertLiteral(gpa: std.mem.Allocator, bytes: []const u8) ?Val {
+fn convertScalarish(gpa: std.mem.Allocator, bytes: []const u8) ?Val {
     var r = struple.reader(bytes);
     const e = (r.next() catch return null) orelse return null;
     return switch (e) {
@@ -630,7 +779,7 @@ fn convertLiteral(gpa: std.mem.Allocator, bytes: []const u8) ?Val {
             var it = m.iterator();
             while (it.next() catch return null) |entry| {
                 const key = types.asString(entry.key) orelse return null;
-                const axis: usize = if (std.mem.eql(u8, key, "x")) 0 else if (std.mem.eql(u8, key, "y")) 1 else if (std.mem.eql(u8, key, "z")) 2 else return null;
+                const axis: usize = if (std.mem.eql(u8, key, "x") or std.mem.eql(u8, key, "l")) 0 else if (std.mem.eql(u8, key, "y") or std.mem.eql(u8, key, "a")) 1 else if (std.mem.eql(u8, key, "z") or std.mem.eql(u8, key, "b")) 2 else return null;
                 const f = types.asNumber(entry.value) orelse return null;
                 out[axis] = fixedFromF64(f) orelse return null;
                 seen |= @as(u8, 1) << @intCast(axis);
@@ -670,22 +819,23 @@ pub const kernels = struct {
             .scalar => |x| switch (b) {
                 .scalar => |y| .{ .scalar = try f(ctx, x, y) },
                 .vec3 => |w| .{ .vec3 = .{ try f(ctx, x, w[0]), try f(ctx, x, w[1]), try f(ctx, x, w[2]) } },
-                .boolean => return ctx.refuse("{s}: port '{s}' wants a number, got a boolean", .{ ctx.op.name, ctx.portName(1) }),
+                else => return ctx.refuse("{s}: port '{s}' wants a number, got {s}", .{ ctx.op.name, ctx.portName(1), b.kindName() }),
             },
             .vec3 => |v| switch (b) {
                 .scalar => |y| .{ .vec3 = .{ try f(ctx, v[0], y), try f(ctx, v[1], y), try f(ctx, v[2], y) } },
                 .vec3 => |w| .{ .vec3 = .{ try f(ctx, v[0], w[0]), try f(ctx, v[1], w[1]), try f(ctx, v[2], w[2]) } },
-                .boolean => return ctx.refuse("{s}: port '{s}' wants a number, got a boolean", .{ ctx.op.name, ctx.portName(1) }),
+                else => return ctx.refuse("{s}: port '{s}' wants a number, got {s}", .{ ctx.op.name, ctx.portName(1), b.kindName() }),
             },
-            .boolean => return ctx.refuse("{s}: port '{s}' wants a number, got a boolean", .{ ctx.op.name, ctx.portName(0) }),
+            else => return ctx.refuse("{s}: port '{s}' wants a number, got {s}", .{ ctx.op.name, ctx.portName(0), a.kindName() }),
         };
     }
 
     fn unary(ctx: *Ctx, f: UnFn) Error!void {
-        ctx.out[0] = switch (try ctx.val(0)) {
+        const a = try ctx.val(0);
+        ctx.out[0] = switch (a) {
             .scalar => |x| .{ .scalar = try f(ctx, x) },
             .vec3 => |v| .{ .vec3 = .{ try f(ctx, v[0]), try f(ctx, v[1]), try f(ctx, v[2]) } },
-            .boolean => return ctx.refuse("{s}: port '{s}' wants a number, got a boolean", .{ ctx.op.name, ctx.portName(0) }),
+            else => return ctx.refuse("{s}: port '{s}' wants a number, got {s}", .{ ctx.op.name, ctx.portName(0), a.kindName() }),
         };
     }
 
@@ -800,7 +950,8 @@ pub const kernels = struct {
         ctx.out[0] = try lerpVal(ctx, t, a, b);
     }
 
-    fn lerpVal(ctx: *Ctx, t: Fixed, a: Val, b: Val) Error!Val {
+    /// Exposed for hosts whose words interpolate (spindrift's `over`).
+    pub fn lerpVal(ctx: *Ctx, t: Fixed, a: Val, b: Val) Error!Val {
         return switch (a) {
             .scalar => |x| switch (b) {
                 .scalar => |y| .{ .scalar = try checked(ctx, @as(i64, x) + mul(y -% x, t)) },
@@ -814,7 +965,7 @@ pub const kernels = struct {
                 } },
                 else => ctx.refuse("{s}: a and b must both be numbers or both be vec3", .{ctx.op.name}),
             },
-            .boolean => ctx.refuse("{s}: port '{s}' wants a number", .{ ctx.op.name, ctx.portName(1) }),
+            else => ctx.refuse("{s}: port '{s}' wants a number or a vec3, got {s}", .{ ctx.op.name, ctx.portName(1), a.kindName() }),
         };
     }
 
@@ -909,6 +1060,7 @@ pub const kernels = struct {
     pub fn write(ctx: *Ctx) Error!void {
         const ref = ctx.write_ref orelse return ctx.refuse("{s}: no row target resolved", .{ctx.op.name});
         const v = ctx.in[1] orelse try ctx.val(0);
+        if (v == .array) return ctx.refuse("{s}: a row field is never an array", .{ctx.op.name});
         if (ref.ref.axis != null and v != .scalar) {
             return ctx.refuse("{s}: an axis takes a number", .{ctx.op.name});
         }
@@ -981,7 +1133,11 @@ fn mountText(gpa: std.mem.Allocator, reg: *registry.Registry, rows: *TestRows, s
         std.debug.print("parse: {s}\n", .{pdiag.msg()});
         return err;
     };
-    return Runtime.mount(gpa, prog_out, rows.asPlane(), diag);
+    return Runtime.mount(gpa, prog_out, rows.asPlane(), diag) catch |err| {
+        std.debug.print("mount: {s}\n", .{diag.text()});
+        prog_out.deinit();
+        return err;
+    };
 }
 
 test "row: a kernel reads the row, computes in Q16.16, and writes the row after the sweep" {
@@ -1175,4 +1331,81 @@ test "row: a literal record is a vec3, and select/compare/record/project compose
     try std.testing.expectEqual([3]Fixed{ 0, 0, 0 }, rows.pos[1]);
     // size ← (old pos.z + 1) — the snapshot's pos.z, which was 0.
     try std.testing.expectEqual(ONE, rows.size[0]);
+}
+
+test "row: an array literal is the first stateless array on the row — converted once, shared, never written" {
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    // A stub consumer with an array port, the shape `over` takes.
+    const stub = struct {
+        fn f(_: *registry.EvalCtx) registry.EvalError!registry.Emit {
+            return registry.Emit.none;
+        }
+        fn k(ctx: *Ctx) Error!void {
+            const xs = try ctx.array(1);
+            ctx.out[0] = xs[xs.len - 1];
+        }
+    };
+    _ = try reg.register(.{
+        .name = "lastof",
+        .inputs = &.{ .{ .name = "in", .ty = types.Tag.number }, .{ .name = "curve", .ty = types.Tag.array } },
+        .outputs = &.{.{ .name = "out", .ty = types.Tag.any }},
+        .help = "stub",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .eval = stub.k },
+        .eval = stub.f,
+    });
+    var rows = TestRows{};
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.age | lastof [1, 0.5, 0.25] | write row.u0
+        \\row.age | lastof [{l: 1, a: 0, b: 0}, {x: 0.5, y: 0, z: 0}] | write row.pos
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    try std.testing.expectEqual(@as(usize, 2), rt.literal_arrays.items.len);
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+    try std.testing.expectEqual(ONE / 4, rows.u[0][0]);
+    try std.testing.expectEqual([3]Fixed{ HALF, 0, 0 }, rows.pos[0]);
+
+    // A mixed array, an empty one, a nested one, a boolean inside: refused at mount by name.
+    const bad = [_][]const u8{
+        "row.age | lastof [1, {x: 0, y: 0, z: 0}] | write row.u0",
+        "row.age | lastof [] | write row.u0",
+        "row.age | lastof [[1]] | write row.u0",
+        "row.age | lastof [true] | write row.u0",
+    };
+    for (bad) |src| {
+        var pdiag = parser.Diag{};
+        var p2 = try parser.parse(gpa, &reg, "k", src, &pdiag);
+        defer p2.deinit();
+        var d2 = registry.Detail{};
+        try std.testing.expectError(error.BadLiteral, Runtime.mount(gpa, &p2, rows.asPlane(), &d2));
+    }
+    // An array is never a row field.
+    var pdiag = parser.Diag{};
+    var p3 = try parser.parse(gpa, &reg, "k", "[1, 2] | write row.pos", &pdiag);
+    defer p3.deinit();
+    var d3 = registry.Detail{};
+    var rt3 = try Runtime.mount(gpa, &p3, rows.asPlane(), &d3);
+    defer rt3.deinit();
+    var sc3 = try rt3.newScratch(gpa);
+    defer sc3.deinit();
+    rt3.evalRow(&sc3, 1, ONE, null);
+    try std.testing.expectEqual(@as(u64, 1), sc3.refusals);
+    try std.testing.expect(std.mem.indexOf(u8, sc3.first.text(), "never an array") != null);
+    // A broadcast never carries one: a struple array at the plane boundary is not a row value.
+    var pk = struple.Packer.init(gpa);
+    defer pk.deinit();
+    var inner = struple.Packer.init(gpa);
+    defer inner.deinit();
+    try inner.appendInt(1);
+    try pk.appendArray(inner.bytes());
+    try std.testing.expectEqual(@as(?Val, null), fromStruple(gpa, pk.bytes()));
 }
