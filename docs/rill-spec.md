@@ -513,6 +513,64 @@ Only `Node.body` is serialized; `body_of` and `body_open` are derived by
 `Program.linkBodies` at the end of a parse **and** at the end of a load, so a dump carries
 one number rather than several that could disagree.
 
+### 3.16 The row plane (v0.4, spindrift beat 1, ruled 2026-09-01)
+
+A kernel is a rill program whose plane is the row. You mount a rill; a
+kernel is a rill mounted on a *spray* — a particle population — rather than
+on the world. The file is a fan-out of independent flows over the row: no
+def body, no section, no new grammar.
+
+```rill
+// embers.rill — a rill mounted on a spray
+spawn
+gravity plane.drift.@self.gravity
+row.age | div row.life | range 1 0 | write row.size
+perish
+```
+
+- **`row` is the second path head.** `row.pos`, `row.vel`, `row.age`,
+  `row.vel.y` … are subscriptions the way `plane.…` paths are, and `write
+  row.<field>` is the sink. The sigil is mandatory: a bare `vel` is a parse
+  error, the same unknown-word error as anywhere else. `row` is a reserved
+  word for `plane`'s reason.
+- **`plane.…` reads inside a kernel are broadcasts** — one value per tick,
+  the same for every row. `plane.drift.@self.<knob>` is the mounted spray's
+  own knob; `@self` is resolved by the host at mount.
+- **A field read inside a kernel names where it samples**: `$wind at
+  row.pos` (P2; the standpoint ruling in `rill-casts.md` §9 holds).
+- **Writes use the write verb with its mode word.** Bare is replace; `add`
+  is the blind delta. The lane modes are refused at mount — a row has no
+  lanes.
+- **Reading and writing one row field is the integration step, not a
+  cycle.** §4.4 refuses a plane feedback loop because the write comes back
+  as a delta and re-dirties the reader. The row plane has no dirty
+  propagation: every field is read once as the sweep's snapshot and written
+  once after it, in node order, so `row.vel | add g | write row.vel` is
+  `x ← f(x)` once per tick and nothing can re-fire. `Program.findCycle`
+  exempts `row.` writes; `plane.` loops are refused exactly as before.
+- **Row-legality is a column on `OpDef`, not a `Routing` value.** Routing
+  says which thread; the column says whether the op can be evaluated per
+  row, with what per-row state (user channels), and whether its result is
+  defined by integer arithmetic only (*exact*). The bit is earned, not
+  declared: the four arithmetic ops have it outright, a transcendental
+  earns it by getting an integer kernel, and that kernel is then the
+  definition for rows — the float path retires for rows. **v1's row-legal
+  set is the exact set**, audited both ways in `tests.zig`. The C seam's
+  boolean routing is untouched.
+- **The number is Q16.16.** Row values are integer fixed point; literals
+  convert once at mount (a number floors, a `{x, y, z}` record is a vec3, a
+  boolean is itself). Division by zero refuses — integers have no ±inf.
+- **The evaluator is `row.Runtime`**, over the ordinary parsed `Program`:
+  mount resolves fields, targets, literals and channels or refuses by name;
+  `evalRow` sweeps the nodes once for one row, pure per row, thread-safe
+  with a `Scratch` per thread. The host chunks rows, feeds broadcasts, and
+  reaps retirements in its own serial phase.
+
+The words that only mean something on a row — `spawn`, `gravity`,
+`perish` — are the host's (spindrift's), registered through the same
+`Registry.register` as everything else, with `row.only` set and
+`fails_mount` so a plane program that pipes one fails its mount by name.
+
 ### 3.13 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:
@@ -1078,6 +1136,9 @@ when one arrived. The first observation still baselines silently, on either side
 Everything domain-flavoured (`bevel`, `scatter`, `play`, `trigger`, `camera`, …) is host-injected.
 
 ---
+
+`OpDef.row` (v0.4) is the row column — see §3.16. It is declared beside
+`routes` and audited like `class`, `ticks` and `fails_mount`.
 
 ## 7. Plane interface (borrowed)
 

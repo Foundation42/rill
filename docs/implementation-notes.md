@@ -2414,3 +2414,70 @@ one axis, so a dropped axis has a row that notices it alone), the inverted
 box auto-corrected (the empty-box row), the cross hand swapped (x×y = z
 asserted exactly), and the field order scrambled (the shape row reads the
 names back).
+
+## The row plane — a rill mounted on a spray (2026-09-01, spec §3.16, spindrift beat 1)
+
+**Ruled (Chris), six at once, against spindrift's recon R-a:** row-legality
+is a COLUMN, not a `Routing` value (routing says which thread, the column
+says whether an op can be evaluated per row — orthogonal, and the C seam
+stays a boolean); the column carries channels used plus an exactness bit,
+and the bit is EARNED — an op is exact when its result is defined by
+integer arithmetic only, v1's row-legal set is the exact set; a kernel is a
+rill program whose plane is the row — `row.pos`, sigil mandatory, no def
+body, no section, no new grammar, the campaign's `def ember { … }`
+withdrawn.
+
+- **`row.zig` is the whole seam**: `Val` (Q16.16 scalar / vec3 / boolean),
+  the `Row` column, the `Plane` vtable a host implements, `Runtime` (mount
+  + `evalRow`), and the kernels for the exact core set — 29 ops. `add sub
+  mul div` outright; `min max clamp abs floor ceil round sign fract mod`
+  integer-defined; `lerp range` a product and a sum; `select and or not`
+  and the six comparators; `project record` for the vec3 shape; `write`.
+  Nothing transcendental: `sqrt`/`sin`/`pow`/`noise` earn the bit when
+  they get an integer kernel and not before.
+- **The evaluator is a sweep, not a tick.** Every node evaluates every row
+  every tick; there is no dirty set, no wheel, no `in_fresh`. That is why
+  arrival-shaped ops (`where`, `changed`, `tally`) are not row-legal by
+  construction — per row, every tick is an arrival — and why the
+  exemption below is safe.
+- **`findCycle` exempts `row.` writes.** §4.4 refuses `plane.x | … | write
+  plane.x` because the write returns as a delta and re-dirties the reader.
+  On the row plane the read is the sweep's snapshot and the write lands
+  after it, so `row.vel | add g | write row.vel` is the integration step
+  `x ← f(x)` once per tick. Gated: the row spelling parses, the plane
+  spelling still refuses. Mutation: drop the `continue`; the row gate
+  refuses with the cycle message.
+- **Writes land after the sweep, in node order** — rill's own rule, kept:
+  every node reads the tick's snapshot. `add` mode composes on the field;
+  an axis write (`row.vel.y`) composes with the rest of the vector. The
+  lane modes refuse at mount: a row has no lanes.
+- **Literals convert once, at mount.** A number floors to Q16.16, a
+  `{x, y, z}` record is a vec3, a boolean is itself; anything else is
+  refused by name. This is the one float boundary in the row path, and it
+  is a mount-time one — nothing floats per row.
+- **Refusals are per row, counted in the scratch, and the sweep continues
+  for that row.** A division by zero on one row is that row's wave dying at
+  that node; the host merges scratches after its join, so the count is
+  exact with no atomics.
+- **`row` is a reserved word**, the parser's second path head through one
+  helper (`isPathHead`), and every `plane`-head site takes both. A
+  `row.…` path in a program mounted on the world plane is a path nobody
+  serves — loud at the same place a mistyped knob path is.
+- **The audit is exhaustive both ways** and adds a third assertion: no
+  kernel means no exactness claim and no channels either — a column that
+  says "exact, no kernel" is a claim with no evidence.
+- **Not built, with triggers:** a stateful row op (`channels > 0`) — the
+  allocation and the overflow refusal exist and nothing exercises them
+  beyond mount; first customer is a per-row envelope. `sqrt` as an earned
+  integer kernel — first kernel that wants a distance.
+
+**Gates and mutants (7/7 bitten, one after a rewrite):** the `row.` cycle
+exemption dropped (five row gates refuse); `floor` truncating instead of
+flooring (the exact-kernels gate, on −1.5); `add`'s column removed (the
+audit, and three kernels that use it); a lane mode accepted by a kernel
+write; the read-only check dropped; a refusal not counted; and **an absent
+broadcast read as scalar zero — which SURVIVED the first draft.** The gate
+used `add` on a field that was already zero, so a written zero and silence
+were the same bytes: A equalled B. Rewritten as a replace onto a non-zero
+field, and it bites. The ledger's first line, again: a gate must run where
+A ≠ B.

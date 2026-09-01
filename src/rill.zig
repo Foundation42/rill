@@ -41,6 +41,7 @@ pub const ops = @import("ops.zig");
 pub const plane = @import("plane.zig");
 pub const eval = @import("eval.zig");
 pub const serialize = @import("serialize.zig");
+pub const row = @import("row.zig");
 
 // The working surface, re-exported flat.
 pub const TypeId = types.TypeId;
@@ -78,5 +79,6 @@ test {
     _ = @import("plane.zig"); // borrowed plane + mock
     _ = @import("eval.zig"); // mount / feed / tick
     _ = @import("serialize.zig"); // one-struple dump
+    _ = @import("row.zig"); // a rill mounted on a spray: the row plane
     _ = @import("tests.zig"); // acceptance gates G1–G9
 }

@@ -484,8 +484,8 @@ const Parser = struct {
 
     fn symWord(op_name: []const u8) []const u8 {
         const map = [_]struct { []const u8, []const u8 }{
-            .{ "=", "eq" },   .{ "!=", "ne" }, .{ "<", "lt" },
-            .{ "<=", "le" },  .{ ">", "gt" },  .{ ">=", "ge" },
+            .{ "=", "eq" },  .{ "!=", "ne" }, .{ "<", "lt" },
+            .{ "<=", "le" }, .{ ">", "gt" },  .{ ">=", "ge" },
         };
         for (map) |m| {
             if (std.mem.eql(u8, op_name, m[0])) return m[1];
@@ -605,13 +605,13 @@ const Parser = struct {
     fn parseUse(self: *Parser) ParseError!void {
         _ = self.next(); // "use"
         const head = self.next();
-        const is_plane = head.kind == .name and std.mem.eql(u8, head.text, "plane");
+        const is_plane = head.kind == .name and isPathHead(head.text);
         const alias_base: ?[]const u8 = if (head.kind == .name) self.aliases.get(head.text) else null;
         if (!is_plane and alias_base == null) {
             return self.fail(head, "use paths are plane-side — expected 'plane.…' or an existing alias", .{});
         }
         var path = std.ArrayListUnmanaged(u8).empty;
-        try path.appendSlice(self.a(), if (is_plane) "plane" else alias_base.?);
+        try path.appendSlice(self.a(), if (is_plane) head.text else alias_base.?);
         var segs: usize = 0;
         while (self.peek().kind == .dot) {
             _ = self.next();
@@ -773,7 +773,7 @@ const Parser = struct {
             // A path after a pipe is the most-forgotten spelling in live use
             // (Chris, twice in one morning): a pipe feeds an OPERATOR, and
             // writing what's flowing to a path is `set`. Name the fix.
-            if (op_tok.kind == .name and (std.mem.eql(u8, op_tok.text, "plane") or self.aliases.contains(op_tok.text))) {
+            if (op_tok.kind == .name and (isPathHead(op_tok.text) or self.aliases.contains(op_tok.text))) {
                 return self.fail(op_tok, "'{s}…' is a path, and a pipe feeds an operator — did you forget `set`? (… | write {s}.…)", .{ op_tok.text, op_tok.text });
             }
             current.* = try self.parseOpcall(target, op_tok, current.outputs[0], false);
@@ -825,7 +825,7 @@ const Parser = struct {
         // build a branch nothing wires `src` into. It would parse, sit in the
         // graph, and never once run.
         const is_expr_head = switch (head.kind) {
-            .name => std.mem.eql(u8, head.text, "plane") or
+            .name => isPathHead(head.text) or
                 std.mem.eql(u8, head.text, "true") or
                 std.mem.eql(u8, head.text, "false") or
                 self.aliases.contains(head.text) or
@@ -886,7 +886,7 @@ const Parser = struct {
                     const lit = try self.parseLiteral(target);
                     return .{ .outputs = try self.oneSource(lit.source) };
                 }
-                if (std.mem.eql(u8, t.text, "plane")) {
+                if (isPathHead(t.text)) {
                     const arg = try self.parsePlaneRef(target);
                     return .{ .outputs = try self.oneSource(arg.source) };
                 }
@@ -1041,6 +1041,16 @@ const Parser = struct {
         return out.items;
     }
 
+    /// The two path heads. `plane` is the world; `row` is the row a kernel is
+    /// mounted on (spindrift beat 1, ruled 2026-09-01: a kernel is a rill whose
+    /// plane is the row). Both are subscriptions in the graph and write
+    /// targets for the sink; which store answers is the mount's business — a
+    /// `row.…` path in a program mounted on the world plane is a path nobody
+    /// serves, loud at the same place a mistyped knob path is.
+    fn isPathHead(text: []const u8) bool {
+        return std.mem.eql(u8, text, "plane") or std.mem.eql(u8, text, "row");
+    }
+
     /// `plane` `.` segment… — returns either a plain path ref or, for the
     /// record sugar `plane.a.{x, y}`, a record node's wire. The head may also
     /// be a `use` alias (§3.10), which expands to its plane prefix here —
@@ -1050,8 +1060,8 @@ const Parser = struct {
         if (target.template != null) {
             return self.fail(head, "defs close over nothing — pass plane streams in through a port", .{});
         }
-        const base: []const u8 = if (std.mem.eql(u8, head.text, "plane"))
-            "plane"
+        const base: []const u8 = if (isPathHead(head.text))
+            head.text
         else
             self.aliases.get(head.text) orelse unreachable;
         var path = std.ArrayListUnmanaged(u8).empty;
@@ -1102,7 +1112,7 @@ const Parser = struct {
             // namespace, so the constraint is invisible, and `<path> as <name>`
             // sits beside it looking interchangeable. Found by a no-priors
             // reader, 2026-08-26; "expected '.'" sent them nowhere.
-            if (!std.mem.eql(u8, head.text, "plane")) {
+            if (!isPathHead(head.text)) {
                 return self.fail(head, "'{s}' is a `use` alias — a path PREFIX, so a field must follow it ('{s}.something'). To name a STREAM instead, bind it with `as`: '{s} as {s}'", .{ head.text, head.text, base, head.text });
             }
             return self.fail(head, "expected '.' after '{s}'", .{head.text});
@@ -2071,7 +2081,7 @@ const Parser = struct {
                     const lit = try self.parseLiteral(target);
                     return .{ .kind = .literal, .source = lit.source, .ty = lit.ty, .tok = t };
                 }
-                if (std.mem.eql(u8, t.text, "plane")) {
+                if (isPathHead(t.text)) {
                     return self.parsePlaneRef(target);
                 }
                 if (target.names.get(t.text)) |src| {

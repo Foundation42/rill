@@ -15,6 +15,7 @@ const std = @import("std");
 const struple = @import("struple");
 const types = @import("types.zig");
 const plane = @import("plane.zig");
+const row = @import("row.zig");
 
 pub const TypeId = types.TypeId;
 
@@ -424,7 +425,6 @@ pub const Routing = enum { anywhere, main };
 /// rest. The host derives it with the same one-line loop it uses for
 /// routing (Matryoshka's `routesToMain`), which is why there is a field
 /// here and no predicate.
-
 pub const OpDef = struct {
     name: []const u8,
     inputs: []const Port = &.{},
@@ -474,6 +474,14 @@ pub const OpDef = struct {
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,
+    /// **The row column** (spindrift beat 1, ruled 2026-09-01). Whether this
+    /// op can be evaluated once per row of a population, with what per-row
+    /// state, and whether its result is defined by integer arithmetic only.
+    /// Orthogonal to `routes` — routing says which thread, this says which
+    /// evaluator — so the C seam's boolean routing is untouched. Default is
+    /// "no row evaluation"; the audit in tests.zig is exhaustive both ways.
+    /// See `row.zig`.
+    row: row.Row = .{},
     eval: *const fn (ctx: *EvalCtx) EvalError!Emit,
 };
 
@@ -489,7 +497,10 @@ pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStati
 /// register cleanly and then be permanently unreachable. Registration is the
 /// last moment that can be said out loud.
 pub fn isReservedWord(s: []const u8) bool {
-    const words = [_][]const u8{ "plane", "use", "def", "as", "also", "true", "false" };
+    // `row` is the second path head (spindrift beat 1, ruled 2026-09-01): a
+    // kernel is a rill whose plane is the row, and `row.pos` is a path the
+    // way `plane.pos` is. Reserved for the same reason `plane` is.
+    const words = [_][]const u8{ "plane", "row", "use", "def", "as", "also", "true", "false" };
     for (words) |w| {
         if (std.mem.eql(u8, s, w)) return true;
     }

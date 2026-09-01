@@ -318,6 +318,17 @@ pub const Program = struct {
     /// cyclic. Returns the offending pair for the error message.
     pub fn findCycle(self: *const Program) ?struct { write: WriteTarget, sub_path: []const u8 } {
         for (self.writes.items) |w| {
+            // A `row.` write against a `row.` read is NOT a cycle (spindrift
+            // beat 1, ruled 2026-09-01: a kernel is a rill whose plane is
+            // the row). §4.4 refuses a plane feedback loop because the write
+            // comes back as a delta and re-dirties the reader — a storm. The
+            // row plane has no dirty propagation: every field is read once
+            // as the sweep's snapshot and written once after it, so `row.vel
+            // | add g | write row.vel` is the integration step `x ← f(x)`,
+            // once per tick, and nothing can re-fire. A `row.` write can
+            // never overlap a `plane.` read (different heads), so the only
+            // pair this exempts is the one the row evaluator was built for.
+            if (std.mem.startsWith(u8, w.path, "row.")) continue;
             for (self.subs.items) |s| {
                 if (pathsOverlap(w.path, s.path)) return .{ .write = w, .sub_path = s.path };
             }

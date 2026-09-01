@@ -9857,3 +9857,96 @@ test "a refusal reaches the error hook with the PORT that minded, in words" {
     try testing.expect(std.mem.indexOf(u8, d, "cond") != null);
     try testing.expect(std.mem.indexOf(u8, d, "boolean") != null);
 }
+
+// ---------------------------------------------------------------------------
+// The row-column audit (spindrift beat 1, ruled 2026-09-01). `OpDef.row` says
+// whether an op can be evaluated once per row of a population, and its
+// exactness bit is EARNED — the result is defined by integer arithmetic only.
+// Exhaustive both ways, like the class, ticks and fails_mount audits: every
+// row-legal core op is on this list, every listed op is row-legal, and every
+// legal one is exact — because v1's row-legal set IS the exact set, and a
+// kernel that was legal without being exact would make G7 a tolerance gate.
+// ---------------------------------------------------------------------------
+
+const row_legal_core = [_][]const u8{
+    // the four, outright
+    "add", "sub", "mul", "div",
+    // integer-defined arithmetic
+    "min", "max", "clamp", "abs", "floor", "ceil", "round", "sign", "fract", "mod",
+    // fixed-point interpolation — a product and a sum
+    "lerp", "range",
+    // logic and comparison
+    "select", "and", "or", "not", "=", "!=", "<", "<=", ">", ">=",
+    // the vec3 shape, and the sink
+    "project", "record", "write",
+};
+
+test "the row column: every row-legal core op is listed, every listed op is row-legal, and legal means exact" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    for (row_legal_core) |name| {
+        const id = reg.find(name) orelse {
+            std.debug.print("'{s}' is on the row-legal roster and is not registered\n", .{name});
+            return error.TestUnexpectedResult;
+        };
+        const def = reg.get(id);
+        if (!def.row.legal()) {
+            std.debug.print("'{s}' is on the row-legal roster and its column says no\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+    }
+    var legal: usize = 0;
+    for (reg.ops.items) |def| {
+        if (def.row.eval == null) {
+            // No kernel, no legality — and no half-answer: an op with no
+            // kernel must not claim exactness or channels either.
+            if (def.row.exact or def.row.channels != 0) {
+                std.debug.print("'{s}' has no row kernel and still declares exact/channels\n", .{def.name});
+                return error.TestUnexpectedResult;
+            }
+            continue;
+        }
+        legal += 1;
+        if (!def.row.exact) {
+            std.debug.print("'{s}' has a row kernel that is not exact — v1's row-legal set is the exact set\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+        if (def.row.only) {
+            std.debug.print("'{s}' is core and declares row-only — core words mean something on the plane\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+        const listed = for (row_legal_core) |name| {
+            if (std.mem.eql(u8, name, def.name)) break true;
+        } else false;
+        if (!listed) {
+            std.debug.print("'{s}' is row-legal and not on the roster — add it, with its reason\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+    try testing.expectEqual(row_legal_core.len, legal);
+}
+
+test "the row head: `row.x` is a subscription like `plane.x`, `row` is reserved, and a bare field is a loud unknown" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "k", "row.vel | mul 2 | write row.pos", &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.subs.items.len);
+    try testing.expectEqualStrings("row.vel", prog.subs.items[0].path);
+    try testing.expectEqual(@as(usize, 1), prog.writes.items.len);
+    try testing.expectEqualStrings("row.pos", prog.writes.items[0].path);
+    // Bare names are a parse error — the sigil is mandatory.
+    try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "k", "vel | mul 2 | write row.pos", &diag));
+    // …and `row` cannot name an operator, for `plane`'s reason.
+    const noop = struct {
+        fn f(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+            return rill.Emit.none;
+        }
+    }.f;
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "row", .help = "", .routes = .anywhere, .eval = noop }));
+    try testing.expectError(error.ReservedName, reg.register(.{ .name = "row count", .help = "", .routes = .anywhere, .eval = noop }));
+}
