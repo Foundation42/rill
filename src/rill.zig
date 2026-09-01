@@ -55,6 +55,7 @@ pub const EvalCtx = registry.EvalCtx;
 pub const registerCore = ops.registerCore;
 pub const Program = graph.Program;
 pub const parse = parser.parse;
+pub const parseKernel = parser.parseKernel;
 pub const Diag = parser.Diag;
 pub const ParseError = parser.ParseError;
 pub const Plane = plane.Plane;

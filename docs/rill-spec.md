@@ -568,8 +568,12 @@ perish
 
 The words that only mean something on a row — `spawn`, `gravity`,
 `perish` — are the host's (spindrift's), registered through the same
-`Registry.register` as everything else, with `row.only` set and
-`fails_mount` so a plane program that pipes one fails its mount by name.
+`Registry.register` as everything else, with `row.only` set. A plane
+program that names one is refused **at parse**, by name: `parse` reads
+the world's programs and `parseKernel` reads a spray's, and that is the
+whole difference between them. (`fails_mount` was the first draft and it
+leaked: it only fires if the node evaluates at tick 0, and `plane.x |
+gravity` with an unfed `plane.x` never did.)
 
 ### 3.13 Optional sugar (later, not v0)
 

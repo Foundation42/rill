@@ -529,10 +529,10 @@ pub const Runtime = struct {
         for (out) |*o| o.* = struple.Packer.init(arena);
 
         // Every eval starts with no excuse on record: an op that refuses without
-    // saying why must not inherit the last one's words.
-    self.detail.clear();
+        // saying why must not inherit the last one's words.
+        self.detail.clear();
 
-    var wake_thunk = WakeThunk{ .rt = self, .node = node_id };
+        var wake_thunk = WakeThunk{ .rt = self, .node = node_id };
         var call_thunk = CallThunk{ .rt = self, .node = node_id, .arena = arena };
         var ctx = registry.EvalCtx{
             .arena = arena,

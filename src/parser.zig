@@ -370,6 +370,30 @@ pub fn parse(
     source: []const u8,
     diag: *Diag,
 ) ParseError!Program {
+    return parseWith(gpa, reg, program_name, source, diag, false);
+}
+
+/// Parse a KERNEL — a rill mounted on a spray (spec §3.16). Same grammar,
+/// one difference: row words bind. A host mounts the result with
+/// `row.Runtime.mount`, which is where non-row-legal ops are refused.
+pub fn parseKernel(
+    gpa: std.mem.Allocator,
+    reg: *registry.Registry,
+    program_name: []const u8,
+    source: []const u8,
+    diag: *Diag,
+) ParseError!Program {
+    return parseWith(gpa, reg, program_name, source, diag, true);
+}
+
+fn parseWith(
+    gpa: std.mem.Allocator,
+    reg: *registry.Registry,
+    program_name: []const u8,
+    source: []const u8,
+    diag: *Diag,
+    rows: bool,
+) ParseError!Program {
     var prog = try Program.init(gpa, reg, program_name);
     errdefer prog.deinit();
 
@@ -379,6 +403,7 @@ pub fn parse(
         .diag = diag,
         .src = source,
         .toks = try tokenize(prog.a(), source, diag),
+        .rows = rows,
     };
     p.program_target = .{ .nodes = &prog.nodes, .slots = &prog.slots };
     try p.parseProgram();
@@ -418,6 +443,14 @@ const Parser = struct {
     /// `}` closes an argument list only inside a block, and a tail port's
     /// end-of-line capture would otherwise swallow the block's own brace.
     block_depth: u32 = 0,
+    /// True when parsing a KERNEL — a rill mounted on a spray (spec §3.16).
+    /// The one thing it changes: a row word (`OpDef.row.only`) binds only
+    /// here, and refuses by name anywhere else. Structural rather than
+    /// runtime, because `fails_mount` only fires if the node evaluates at
+    /// tick 0, and `plane.x | gravity` with an unfed `plane.x` never does —
+    /// it mounted cleanly (spindrift beat 1, ledger). The parser is the
+    /// place that knows what kind of program it is reading.
+    rows: bool = false,
 
     fn a(self: *Parser) std.mem.Allocator {
         return self.prog.a();
@@ -1336,6 +1369,9 @@ const Parser = struct {
             return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
         };
         const def = self.reg.get(op_id);
+        if (def.row.only and !self.rows) {
+            return self.fail(op_tok, "'{s}' is a row word — it means something on a spray, not on the plane; mount it in a kernel", .{def.name});
+        }
         if (def.variadic) return self.fail(op_tok, "'{s}' cannot be called directly", .{op_name});
         const has_tail = def.inputs.len > 0 and def.inputs[def.inputs.len - 1].tail;
 

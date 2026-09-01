@@ -336,7 +336,7 @@ test "G4: value 20→20 is silence" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\plane.hp | add 0 as h
-    , .{ .{ "plane.hp", @as(i64, 20) } });
+    , .{.{ "plane.hp", @as(i64, 20) }});
     defer fx.deinit();
     const add_id = nodeIdOf(&fx.prog, "add1").?;
     const before = fx.rt.eval_count[add_id];
@@ -349,7 +349,7 @@ test "G4: occurrences with identical payloads both propagate" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\plane.b | edge | tap fired
-    , .{ .{ "plane.b", false } });
+    , .{.{ "plane.b", false }});
     defer fx.deinit();
     const tap_id = nodeIdOf(&fx.prog, "tap1").?;
     const before = fx.rt.eval_count[tap_id];
@@ -371,7 +371,7 @@ test "G5: where false ⇒ downstream never evaluates" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
         \\plane.n | where (< 0) | tap neg
-    , .{ .{ "plane.n", @as(i64, 5) } });
+    , .{.{ "plane.n", @as(i64, 5) }});
     defer fx.deinit();
     const tap_id = nodeIdOf(&fx.prog, "tap1").?;
     try feedValue(&fx.rt, testing.allocator, "plane.n", @as(i64, 7));
@@ -392,7 +392,7 @@ test "G5: partition routes every input to exactly one side" {
         \\partition (< 20) hp as low, ok
         \\low | tap l
         \\ok | tap o
-    , .{ .{ "plane.hp", @as(i64, 50) } });
+    , .{.{ "plane.hp", @as(i64, 50) }});
     defer fx.deinit();
     const tap_low = nodeIdOf(&fx.prog, "tap1").?;
     const tap_ok = nodeIdOf(&fx.prog, "tap2").?;
@@ -457,7 +457,7 @@ test "G7: def internals are addressable, overridable, and the override survives 
     var rt2 = try rill.Runtime.restore(testing.allocator, &prog2, mock2.asPlane(), .{});
     defer rt2.deinit();
     try rill.restoreState(&rt2, bytes);
-    try testing.expectEqual(@as(f64, 3.0), types.asNumber(rt2.readSlot(knob).?).? );
+    try testing.expectEqual(@as(f64, 3.0), types.asNumber(rt2.readSlot(knob).?).?);
 
     // and the restored graph keeps computing with the override
     try feedValue(&rt2, testing.allocator, "plane.v", @as(i64, 20));
@@ -1991,8 +1991,7 @@ test "notify: piped, the input is the rousing and the record is the payload" {
     try rill.registerCore(&reg);
     // Ironwood's canonical sentinel (docs/ironwood.md §2), which needs the
     // record to survive being piped into.
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.sensors.tower.visible_enemies | rose_above 0 | notify plane.signals.horn { kind: \"approach\", from: \"tower\" }");
+    var prog = try parseOk(testing.allocator, &reg, "plane.sensors.tower.visible_enemies | rose_above 0 | notify plane.signals.horn { kind: \"approach\", from: \"tower\" }");
     defer prog.deinit();
 
     var mock = rill.MockPlane.init(testing.allocator);
@@ -2588,8 +2587,7 @@ test "write and notify share the sink PORT shape; the mode statics are write's a
 test "cast: the stamped grammar parses, and every piece lands where declared" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.gate.enemies | rose_above 0 | cast $alarm 1.0 radius 30 at plane.gate.pos decay 2s");
+    var prog = try parseOk(testing.allocator, &reg, "plane.gate.enemies | rose_above 0 | cast $alarm 1.0 radius 30 at plane.gate.pos decay 2s");
     defer prog.deinit();
     const n = prog.node(nodeIdOf(&prog, "cast1").?);
     try testing.expectEqualStrings("$alarm", n.statics[0].channel);
@@ -2610,8 +2608,7 @@ test "cast: the stamped grammar parses, and every piece lands where declared" {
 test "cast: the colon-kwarg spelling binds the same ports" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.lvl | cast $blight radius: 12 at: plane.origin");
+    var prog = try parseOk(testing.allocator, &reg, "plane.lvl | cast $blight radius: 12 at: plane.origin");
     defer prog.deinit();
     const n = prog.node(nodeIdOf(&prog, "cast1").?);
     try testing.expectEqual(@as(f64, 12), types.asNumber(n.statics[1].literal).?);
@@ -2643,16 +2640,14 @@ test "cast: what refuses to parse, refuses loudly" {
 test "cast: a channel name is a legal plane-path segment" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.sensors.gate.$alarm | rose_above 0.5 | write plane.ui.alert");
+    var prog = try parseOk(testing.allocator, &reg, "plane.sensors.gate.$alarm | rose_above 0.5 | write plane.ui.alert");
     defer prog.deinit();
     try testing.expectEqualStrings("plane.sensors.gate.$alarm", prog.subs.items[0].path);
 }
 
 test "cast: piped, it deposits what flows — and only when the rousing flows" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.lvl | cast $blight radius 12 at plane.origin", .{
+    try mountFixture(testing.allocator, &fx, "plane.lvl | cast $blight radius 12 at plane.origin", .{
         .{ "plane.lvl", @as(f64, 0.8) },
         .{ "plane.origin", @as(i64, 7) },
     });
@@ -2692,8 +2687,7 @@ test "cast: unpiped, the intensity is both rousing and payload — one deposit, 
     // The documented surprise (note §1): a bare cast deposits once and leaks
     // away. A standing caster needs `every` in front of it.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "cast $torchlight 0.8 radius 12 at plane.brazier decay 4s", .{
+    try mountFixture(testing.allocator, &fx, "cast $torchlight 0.8 radius 12 at plane.brazier decay 4s", .{
         .{ "plane.brazier", @as(i64, 3) },
     });
     defer fx.deinit();
@@ -2708,8 +2702,7 @@ test "cast: unpiped, the intensity is both rousing and payload — one deposit, 
 
 test "cast: two rousings in one tick are two deposits — occurrences never coalesce" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.horn | cast $alarm 1.0 radius 30 at plane.gate", .{
+    try mountFixture(testing.allocator, &fx, "plane.horn | cast $alarm 1.0 radius 30 at plane.gate", .{
         .{ "plane.gate", @as(i64, 1) },
     });
     defer fx.deinit();
@@ -2801,8 +2794,7 @@ test "block rule: `every 1f { … }` is the pipe form — same wiring, same beha
 
 test "block rule: the brazier — every driving a standing cast, three lines of no Zig" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "every 1f { cast $torchlight 0.8 radius 12 at plane.brazier decay 4s }", .{
+    try mountFixture(testing.allocator, &fx, "every 1f { cast $torchlight 0.8 radius 12 at plane.brazier decay 4s }", .{
         .{ "plane.brazier", @as(i64, 3) },
     });
     defer fx.deinit();
@@ -2846,8 +2838,7 @@ test "block rule: a serialized caster survives the round trip, cadence intact" {
     var mock = rill.MockPlane.init(testing.allocator);
     defer mock.deinit();
     try mock.putValue("plane.brazier", @as(i64, 3));
-    var prog = try parseOk(testing.allocator, &reg,
-        "every 2f { cast $torchlight 0.8 radius 12 at plane.brazier }");
+    var prog = try parseOk(testing.allocator, &reg, "every 2f { cast $torchlight 0.8 radius 12 at plane.brazier }");
     defer prog.deinit();
     var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
     defer rt.deinit();
@@ -2879,8 +2870,7 @@ test "block rule: a serialized caster survives the round trip, cadence intact" {
 test "cast: in an also branch it is an effect — no discard warning" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.hp | also { cast $dread 0.5 radius 8 at plane.here } | tap seen");
+    var prog = try parseOk(testing.allocator, &reg, "plane.hp | also { cast $dread 0.5 radius 8 at plane.here } | tap seen");
     defer prog.deinit();
     try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
 }
@@ -2908,8 +2898,7 @@ test "comments: slash-form path literals never trip the comment rule" {
     defer reg.deinit();
     // `render/grade/exposure` is one word (single slashes join name chars);
     // the `//` after it is a comment.
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.v | tap render/grade/exposure // knob path survives");
+    var prog = try parseOk(testing.allocator, &reg, "plane.v | tap render/grade/exposure // knob path survives");
     defer prog.deinit();
     const n = prog.node(nodeIdOf(&prog, "tap1").?);
     try testing.expectEqualStrings("render/grade/exposure", n.statics[0].word);
@@ -3017,7 +3006,6 @@ test "the manuals parse: every printed example compiles" {
     try testing.expectEqual(@as(usize, 4), agent);
 }
 
-
 // ---------------------------------------------------------------------------
 // The refusals gate (ruled 2026-08-25, after beat 1a segfaulted Matryoshka).
 //
@@ -3043,22 +3031,21 @@ test "the manuals parse: every printed example compiles" {
 /// poison.
 const accepts_anything = [_][]const u8{
     // sources — no input port to feed
-    "clock", "frame",  "pi",    "tau",    "const", // sinks and passthroughs — any value is a legal payload
-    "write", "notify", "tap",   "record",
+    "clock",    "frame",    "pi",        "tau",    "const", // sinks and passthroughs — any value is a legal payload
+    "write",    "notify",   "tap",       "record",
     // value-agnostic flow: these move bytes without reading them
-    "latch", "changed", "where", "partition", "sample",
-    "debounce", "throttle", "cooldown", "delay", "window", "arm", "disarm",
-    "=", "!=",
-    "tag",
-    "untag",
+    "latch",
+    "changed",  "where",    "partition", "sample", "debounce",
+    "throttle", "cooldown", "delay",     "window", "arm",
+    "disarm",   "=",        "!=",        "tag",    "untag",
     // `once` and `toggle` and `tally` move or count arrivals without reading
     // them: any value is a legal thing to pass, flip on, or count.
-    "once", "toggle", "tally",
+    "once",     "toggle",   "tally",
     // `rand` reads only WHETHER it was roused, never what with.
-    "rand",
+        "rand",
     // `kick` is roused, not read: an envelope fires on the ARRIVAL, and what
     // the occurrence happens to be carrying is none of its business.
-    "kick",
+      "kick",
     // `array` packs its ports without reading them, exactly as `record` does:
     // every value is a legal element, and there is nothing left to refuse.
     "array",
@@ -3435,9 +3422,7 @@ test "beat 1b: a scalar broadcasts over a record — the follow row, one line" {
     // §4's "keep a light 2m above the player", which was ~3 lines and a
     // rebuilt record. Now it is the sentence.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | write plane.lights.follow.pos",
-        .{.{ "plane.entities.player.pos", .{ .x = @as(f64, 1), .y = @as(f64, 5), .z = @as(f64, -3) } }});
+    try mountFixture(testing.allocator, &fx, "plane.entities.player.pos | add {x: 0, y: 2, z: 0} | write plane.lights.follow.pos", .{.{ "plane.entities.player.pos", .{ .x = @as(f64, 1), .y = @as(f64, 5), .z = @as(f64, -3) } }});
     defer fx.deinit();
 
     const r = try recordFields(testing.allocator, fx.rt.readSlot("programs.p.add1.out.out").?);
@@ -3475,8 +3460,7 @@ test "beat 1b: scalar over record, record over scalar, and both orders agree" {
 
 test "beat 1b: record ⊗ record is elementwise on the same field set" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.a | add plane.b | write plane.o", .{
+    try mountFixture(testing.allocator, &fx, "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
         .{ "plane.b", .{ .x = @as(f64, 10), .y = @as(f64, 20) } },
     });
@@ -3492,8 +3476,7 @@ test "beat 1b: record ⊗ record with a different field set REFUSES, naming the 
     // fields that happen to agree, which is a wrong answer wearing a right
     // one's clothes — and it is exactly what ICE users learned to dread.
     var fx: Fixture = undefined;
-    try mountWatched(testing.allocator, &fx,
-        "plane.a | add plane.b | write plane.o", .{
+    try mountWatched(testing.allocator, &fx, "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2), .z = @as(f64, 3) } },
         .{ "plane.b", .{ .x = @as(f64, 10), .y = @as(f64, 20) } },
     });
@@ -3506,8 +3489,7 @@ test "beat 1b: record ⊗ record with a different field set REFUSES, naming the 
 
 test "beat 1b: the missing field is named on whichever side lacks it" {
     var fx: Fixture = undefined;
-    try mountWatched(testing.allocator, &fx,
-        "plane.a | add plane.b | write plane.o", .{
+    try mountWatched(testing.allocator, &fx, "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1) } },
         .{ "plane.b", .{ .x = @as(f64, 1), .w = @as(f64, 2) } },
     });
@@ -3517,8 +3499,7 @@ test "beat 1b: the missing field is named on whichever side lacks it" {
 
 test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with both" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | window 10s | mul 2 | write plane.o", .{.{ "plane.v", @as(f64, 3) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | window 10s | mul 2 | write plane.o", .{.{ "plane.v", @as(f64, 3) }});
     defer fx.deinit();
     // `window 10s | mul 2` IS map — the draft's own claim, executed.
     const arr = try arrayNums(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?);
@@ -3527,8 +3508,7 @@ test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with b
     try testing.expectEqual(@as(f64, 6), arr[0]);
 
     var fx2: Fixture = undefined;
-    try mountWatched(testing.allocator, &fx2,
-        "plane.a | add plane.b | write plane.o", .{
+    try mountWatched(testing.allocator, &fx2, "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", [_]f64{ 1, 2, 3 } },
         .{ "plane.b", [_]f64{ 10, 20 } },
     });
@@ -3540,8 +3520,7 @@ test "beat 1b: array ⊗ array is elementwise, and unequal lengths refuse with b
 
 test "beat 1b: a record and an array have no elementwise meaning" {
     var fx: Fixture = undefined;
-    try mountWatched(testing.allocator, &fx,
-        "plane.a | add plane.b | write plane.o", .{
+    try mountWatched(testing.allocator, &fx, "plane.a | add plane.b | write plane.o", .{
         .{ "plane.a", .{ .x = @as(f64, 1), .y = @as(f64, 2) } },
         .{ "plane.b", [_]f64{ 1, 2 } },
     });
@@ -3551,9 +3530,7 @@ test "beat 1b: a record and an array have no elementwise meaning" {
 
 test "beat 1b: nesting recurses, and a non-numeric leaf is named where it lives" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.a | mul 2 | write plane.o",
-        .{.{ "plane.a", .{ .inner = .{ .x = @as(f64, 3) } } }});
+    try mountFixture(testing.allocator, &fx, "plane.a | mul 2 | write plane.o", .{.{ "plane.a", .{ .inner = .{ .x = @as(f64, 3) } } }});
     defer fx.deinit();
     const nested = try fieldValue(testing.allocator, fx.rt.readSlot("programs.p.mul1.out.out").?, "inner");
     defer testing.allocator.free(nested);
@@ -3564,17 +3541,14 @@ test "beat 1b: nesting recurses, and a non-numeric leaf is named where it lives"
 
     // A string two levels down is named by its PATH, not merely reported.
     var fx2: Fixture = undefined;
-    try mountWatched(testing.allocator, &fx2,
-        "plane.a | mul 2 | write plane.o",
-        .{.{ "plane.a", .{ .inner = .{ .name = "tom" } } }});
+    try mountWatched(testing.allocator, &fx2, "plane.a | mul 2 | write plane.o", .{.{ "plane.a", .{ .inner = .{ .name = "tom" } } }});
     defer fx2.deinit();
     try expectRefusalNames(&.{ "mul", "string", "not a number", ".inner.name" });
 }
 
 test "beat 1b: comparators broadcast — beat 3's keep depends on it" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.a | > 0 | write plane.o", .{.{ "plane.a", [_]f64{ 1, -2, 3 } }});
+    try mountFixture(testing.allocator, &fx, "plane.a | > 0 | write plane.o", .{.{ "plane.a", [_]f64{ 1, -2, 3 } }});
     defer fx.deinit();
     const bits = try arrayBools(testing.allocator, fx.rt.readSlot("programs.p.gt1.out.out").?);
     defer testing.allocator.free(bits);
@@ -3646,8 +3620,7 @@ test "beat 1b: the tier-1 math words are re-scored against containers" {
     inline for (cases) |c| {
         // as a record…
         var fx: Fixture = undefined;
-        try mountFixture(testing.allocator, &fx, c.src,
-            .{.{ "plane.v", .{ .a = @as(f64, 3), .b = @as(f64, -2) } }});
+        try mountFixture(testing.allocator, &fx, c.src, .{.{ "plane.v", .{ .a = @as(f64, 3), .b = @as(f64, -2) } }});
         defer fx.deinit();
         const path = "programs.p." ++ c.node ++ ".out.out";
         const r = try recordFields(testing.allocator, fx.rt.readSlot(path).?);
@@ -3678,8 +3651,7 @@ test "beat 1b: a scalar program is bit-identical to what it was before broadcast
     // The regression that matters most: broadcast must be invisible to every
     // program that never uses it. Same arithmetic, same encoding, same bytes.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | add 1 | mul 2 | > 5 | write plane.o", .{.{ "plane.v", @as(f64, 3) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | add 1 | mul 2 | > 5 | write plane.o", .{.{ "plane.v", @as(f64, 3) }});
     defer fx.deinit();
     try testing.expectEqual(@as(f64, 4), slotNum(&fx, "programs.p.add1.out.out").?);
     try testing.expectEqual(@as(f64, 8), slotNum(&fx, "programs.p.mul1.out.out").?);
@@ -3748,8 +3720,7 @@ test "beat 1a: the breathing exposure is one line" {
     // because tick 0 evaluates everything; and a triangle, because with no
     // `sin` and no `wave` there was no sine to be had.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure", .{});
+    try mountFixture(testing.allocator, &fx, "lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure", .{});
     defer fx.deinit();
 
     // One line, three nodes, one program, no seed: nothing is read from the
@@ -3788,9 +3759,7 @@ test "beat 1a: a register STOPS — the eval counter goes flat inside epsilon" {
     // and a corpse anyway. So: converge, then assert the counter does not move
     // across a hundred more frames.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.target | ease 100ms | write plane.out",
-        .{.{ "plane.target", @as(f64, 1.0) }});
+    try mountFixture(testing.allocator, &fx, "plane.target | ease 100ms | write plane.out", .{.{ "plane.target", @as(f64, 1.0) }});
     defer fx.deinit();
 
     const node = nodeIdOf(&fx.prog, "ease1").?;
@@ -3921,8 +3890,7 @@ test "beat 1a: `lfo` and `clock | wave` are the same waveform, bit for bit" {
     // gate exists to catch.
     inline for (.{ "sine", "tri", "saw", "square" }) |shape| {
         var fx: Fixture = undefined;
-        try mountFixture(testing.allocator, &fx,
-            "lfo " ++ shape ++ " 3s | write plane.a\nclock | wave " ++ shape ++ " 3s | write plane.b", .{});
+        try mountFixture(testing.allocator, &fx, "lfo " ++ shape ++ " 3s | write plane.a\nclock | wave " ++ shape ++ " 3s | write plane.b", .{});
         defer fx.deinit();
         for (1..40) |i| {
             try fx.rt.tick(.{ .time_ns = 100 * ms * i, .frame = @intCast(i) });
@@ -3978,8 +3946,7 @@ test "beat 1a: `ramp` lands its target exactly, and retargets from where it is" 
     // so its last frame emits the target EXACTLY — a fade that stopped one ε
     // short of full would be a visible band.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | ramp 100ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | ramp 100ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ramp1.out.out";
 
@@ -4007,8 +3974,7 @@ test "beat 1a: `ramp` interrupted mid-tween resumes from where it is" {
     // so it asserted nothing — a mutation swapping one for the other survived.
     // Interrupting mid-flight is the case that distinguishes them.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | ramp 100ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | ramp 100ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ramp1.out.out";
 
@@ -4037,8 +4003,7 @@ test "beat 1a: `ease` stops inside epsilon and never snaps" {
     // honest end is "close enough, and quiet". If it snapped, the last frame
     // of every fade would be a step.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | ease 20ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | ease 20ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     try feedValue(&fx.rt, testing.allocator, "plane.v", @as(f64, 1));
     try run(&fx, 8 * ms, 60);
@@ -4052,8 +4017,7 @@ test "beat 1a: `ease up down` is the envelope follower" {
     // CHOPs and Max's `slide` in two keyword ports. Asserting the ASYMMETRY is
     // the point: rise and fall over the same interval must not match.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | abs | ease 20ms down 400ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | abs | ease 20ms down 400ms | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ease1.out.out";
 
@@ -4070,8 +4034,7 @@ test "beat 1a: `ease up down` is the envelope follower" {
 
 test "beat 1a: `hold` ignores the storm, and does not tick" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | hold 100ms | write plane.o", .{.{ "plane.v", @as(f64, 1) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | hold 100ms | write plane.o", .{.{ "plane.v", @as(f64, 1) }});
     defer fx.deinit();
     const out = "programs.p.hold1.out.out";
     const node = nodeIdOf(&fx.prog, "hold1").?;
@@ -4098,8 +4061,7 @@ test "beat 1a: `diff` baselines silently, then reports the rate" {
     // The op the keep wanted: `nearest_distance | diff` is velocity, and the
     // probe reviewer invented a sensor field because nothing derived it.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.d | diff | write plane.o", .{.{ "plane.d", @as(f64, 100) }});
+    try mountFixture(testing.allocator, &fx, "plane.d | diff | write plane.o", .{.{ "plane.d", @as(f64, 100) }});
     defer fx.deinit();
     const out = "programs.p.diff1.out.out";
 
@@ -4123,8 +4085,7 @@ test "beat 1a: `integrate` needs its clamp, and honours it" {
     try expectParseError("plane.v | integrate | write plane.o", "max");
 
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | integrate max 2 | write plane.o", .{.{ "plane.v", @as(f64, 1) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | integrate max 2 | write plane.o", .{.{ "plane.v", @as(f64, 1) }});
     defer fx.deinit();
     const out = "programs.p.integrate1.out.out";
     try testing.expectEqual(@as(f64, 0), slotNum(&fx, out).?);
@@ -4154,8 +4115,7 @@ test "integrate does not bill its sleep: one press is one tick, not eighty secon
     // previous tick. Sleep is not process time; what arrives on a tick is
     // treated as having stood through that one tick and no further.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | integrate max 0.5 | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | integrate max 0.5 | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.integrate1.out.out";
 
@@ -4185,8 +4145,7 @@ test "ease glides out of a long sleep instead of snapping" {
     // billable window floored at the previous tick, the retarget bills one
     // tick's worth and the fade takes its stated time from the wake.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.v | ease 2s | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
+    try mountFixture(testing.allocator, &fx, "plane.v | ease 2s | write plane.o", .{.{ "plane.v", @as(f64, 0) }});
     defer fx.deinit();
     const out = "programs.p.ease1.out.out";
 
@@ -4269,8 +4228,7 @@ test "beat 1a: `clock` and `frame` count from mount, not from zero" {
     fx.mock = rill.MockPlane.init(testing.allocator);
     defer fx.mock.deinit();
     var diag = rill.Diag{};
-    fx.prog = try rill.parse(testing.allocator, &fx.reg, "p",
-        "clock | write plane.secs\nframe | write plane.frames", &diag);
+    fx.prog = try rill.parse(testing.allocator, &fx.reg, "p", "clock | write plane.secs\nframe | write plane.frames", &diag);
     defer fx.prog.deinit();
     // Mounted mid-session, at t=90s / frame 5400 — the one-shot console
     // dispatch does this on every line.
@@ -4291,8 +4249,7 @@ test "beat 1a: an op-internal register is not a cycle, and the plane one still i
     // target inside the operator and mounts cleanly; the same idea routed
     // through the plane is refused, as it was before this beat.
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.target | ease 100ms | write plane.smoothed", .{.{ "plane.target", @as(f64, 1) }});
+    try mountFixture(testing.allocator, &fx, "plane.target | ease 100ms | write plane.smoothed", .{.{ "plane.target", @as(f64, 1) }});
     defer fx.deinit();
     try testing.expect(fx.prog.findCycle() == null);
 
@@ -4532,8 +4489,7 @@ test "paths: integer segments are legitimate — id-keyed rows parse" {
 test "tag: the stamped grammar parses, and the member write enters the write list" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
-    var prog = try parseOk(testing.allocator, &reg,
-        "plane.sighting | rose_above 0 | tag @tom #garrison");
+    var prog = try parseOk(testing.allocator, &reg, "plane.sighting | rose_above 0 | tag @tom #garrison");
     defer prog.deinit();
     const n = prog.node(nodeIdOf(&prog, "tag1").?);
     try testing.expectEqualStrings("@tom", n.statics[0].subject);
@@ -4548,8 +4504,7 @@ test "tag: the stamped grammar parses, and the member write enters the write lis
 
 test "tag: piped, the rousing drives — and each occurrence is its own write" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.horn | tag @tom #garrison", .{});
+    try mountFixture(testing.allocator, &fx, "plane.horn | tag @tom #garrison", .{});
     defer fx.deinit();
     try testing.expectEqual(@as(usize, 0), fx.mock.tag_writes.items.len); // no horn yet
     var pk = struple.Packer.init(testing.allocator);
@@ -4571,8 +4526,7 @@ test "tag: piped, the rousing drives — and each occurrence is its own write" {
 
 test "untag: same shape, leave direction" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.stood_down | untag @tom #garrison", .{});
+    try mountFixture(testing.allocator, &fx, "plane.stood_down | untag @tom #garrison", .{});
     defer fx.deinit();
     var pk = struple.Packer.init(testing.allocator);
     defer pk.deinit();
@@ -4712,8 +4666,7 @@ test "cast: the program's cast list names every channel — the grant policy's o
 
 test "cast: the cast list survives dump/load — restore composes it the same way" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.x | cast $alarm 1 radius 5 at plane.p to #hostile", .{});
+    try mountFixture(testing.allocator, &fx, "plane.x | cast $alarm 1 radius 5 at plane.p to #hostile", .{});
     defer fx.deinit();
     const bytes = try rill.dump(&fx.rt, testing.allocator);
     defer testing.allocator.free(bytes);
@@ -4749,8 +4702,7 @@ test "cast: `to` refuses a sigil-less word, and an optional static must be kw" {
 
 test "lerp: the piped value is t — `s | lerp 0.5 1.5` reads as the sentence says" {
     var fx: Fixture = undefined;
-    try mountFixture(testing.allocator, &fx,
-        "plane.s | lerp 0.5 1.5 | write plane.out", .{
+    try mountFixture(testing.allocator, &fx, "plane.s | lerp 0.5 1.5 | write plane.out", .{
         .{ "plane.s", @as(f64, 0.25) },
     });
     defer fx.deinit();
@@ -4778,7 +4730,6 @@ test "^: the archetype sigil lexes one token, guarded — engine-owned, never an
     try expectParseError("plane.x | mul 2 as ^x", "cannot wear");
     try expectParseError("def ^d(x) = x | mul 2", "cannot wear");
 }
-
 
 test "MockPlane.putValue: containers encode as containers, strings stay strings" {
     // The trap this closes: a string is a pointer, so the container branch
@@ -6641,7 +6592,6 @@ test "a positional argument written as a keyword names itself, and gives the spe
     // "drop the word" would be wrong advice. Gated because a check that
     // answered yes for keyword arguments too passed every other case above.
     try expectParseError("noise 40ms seed octaves | write plane.b", "unknown name 'octaves'");
-
 }
 
 test "a `use` alias used as a stream says it is an alias, and points at `as`" {
@@ -8487,7 +8437,6 @@ test "beat 4b: one PRNG family — `rand` and `shuffle` draw from the same gener
     try testing.expectEqual(prng.random().float(f64), slotNum(&fx, "programs.p.rand1.out.out").?);
 }
 
-
 // ---------------------------------------------------------------------------
 // Beat 4 close — the two ✓ rows §4 marked "re-probe at beat-4 close against a
 // noisy input". A ✓ means expressible; whether the one line is RIGHT is what
@@ -8599,7 +8548,6 @@ test "beat 4: the rest of §4's noise rows, each one line" {
     const pos = fx.rt.readSlot("programs.p.along1.out.out").?;
     try testing.expectEqual(types.Tag.record, types.typeOfValue(pos));
 }
-
 
 test "the paren form: a record field may hold a complete operator call" {
     // Ratified 2026-08-25. `( … )` in a field position is a COMPLETE call, not
@@ -8943,8 +8891,6 @@ test "manual parity: every core operator is named in the agent manual, or is sub
         return error.TestUnexpectedResult;
     }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // The identity gate (envelopes item 3 phase 1, ruled 2026-08-26).
@@ -9401,14 +9347,12 @@ test "the operator index: every printed arity is the declared one, slot by slot"
         for (printed, want, 0..) |got, exp, i| {
             if (!sameItem(got, exp)) {
                 std.debug.print("'{s}' slot {d}: index says {s} '{s}'{s}{s}{s}, registry says {s} '{s}'{s}{s}{s}\n", .{
-                    r.name,             i,
-                    @tagName(got.kind), got.name,
-                    if (got.optional) " optional" else "",
-                    if (got.kw.len > 0) " kw " else "",
-                    got.kw,             @tagName(exp.kind),
-                    exp.name,           if (exp.optional) " optional" else "",
-                    if (exp.kw.len > 0) " kw " else "",
-                    exp.kw,
+                    r.name,                                i,
+                    @tagName(got.kind),                    got.name,
+                    if (got.optional) " optional" else "", if (got.kw.len > 0) " kw " else "",
+                    got.kw,                                @tagName(exp.kind),
+                    exp.name,                              if (exp.optional) " optional" else "",
+                    if (exp.kw.len > 0) " kw " else "",    exp.kw,
                 });
                 return error.TestUnexpectedResult;
             }
@@ -9489,21 +9433,21 @@ const intent_exempt = [_][]const u8{
     // over records and arrays; there is no vector family to learn" — and a
     // reader reaching for `sqrt` is reaching for a function, not for an idiom.
     // A row each would drown the table's 35 intents in 20 arithmetic entries.
-    "abs",  "ceil", "cos", "div",  "exp", "floor", "fract", "log", "min", "mod",
-    "pow",  "round", "sign", "sin", "sqrt", "sub",  "tan",  "atan2", "pi", "tau",
+    "abs",   "ceil",   "cos",    "div",    "exp",        "floor",     "fract",    "log",    "min",    "mod",
+    "pow",   "round",  "sign",   "sin",    "sqrt",       "sub",       "tan",      "atan2",  "pi",     "tau",
 
     // The COMPARATOR family. "is it dark?" vs "did it get dark?" teaches the
     // whole family and the state/event distinction that is the actual lesson;
     // `above`/`below` earned their own row only because hysteresis is a
     // separate idea a comparator cannot express.
-    "!=", "<=", "=", ">", ">=",
+    "!=",    "<=",     "=",      ">",      ">=",
 
     // Collection SHAPING. §6a's array rows teach the two things that surprise
     // — broadcasting is map, and an array literal is live and immutable — and
     // the rest read off their own names. Candidates for promotion if a reader
     // ever reaches for them and misses: `keep`, `map`, `sort`, `reduce`.
-    "first", "last", "len", "take", "keep", "map", "sort", "reduce", "stats",
-    "partition", "transpose", "shuffle", "sample", "record",
+            "first",     "last",     "len",    "take",   "keep",
+    "map",   "sort",   "reduce", "stats",  "partition",  "transpose", "shuffle",  "sample", "record",
 
     // SPATIAL helpers. Ordinary functions of positions and directions; nothing
     // about reaching for them needs unlearning, which is what §6a is for.
@@ -9512,18 +9456,20 @@ const intent_exempt = [_][]const u8{
     // position where a parameter was wanted.) `angle`, `inside` and `cross`
     // joined 2026-08-29 by the same test: a reader reaching for them is
     // reaching for a function they already know the name of.
-    "distance", "along", "within", "angle", "inside", "cross",
+    "distance",
+    "along", "within", "angle",  "inside", "cross",
 
     // Time, rate and LATCHING. `cooldown`, `throttle` and `hold` are named for
     // what they do to a stream; `arm`/`disarm`/`toggle`/`latch` are the state
     // family §7 teaches together, and splitting one out would teach it worse.
-    "cooldown", "throttle", "hold", "edge", "changed", "latch", "toggle",
-    "arm", "disarm", "rose_above", "frame", "wave",
+         "cooldown",  "throttle", "hold",   "edge",   "changed",
+    "latch", "toggle", "arm",    "disarm", "rose_above", "frame",     "wave",
 
     // CONTRACTS and instruments. `expect`/`match` are author-side assertions
     // and `tap`/`tally` are for looking at a running program — none of them is
     // a way of thinking about a problem, which is the table's whole subject.
-    "expect", "match", "tap", "tally", "const",
+        "expect", "match",  "tap",
+    "tally", "const",
 
     // CONDITIONALS whose row points elsewhere ON PURPOSE. "when X, and Y holds"
     // answers with "the conjunction idiom, below" rather than a spelling,
@@ -9532,12 +9478,12 @@ const intent_exempt = [_][]const u8{
     // "conditions flow; the threshold IS the if". `pulse` is the periodic
     // sibling the `kick` row names as the WRONG answer, and `every` carries the
     // metronome it belongs beside.
-    "where", "select", "pulse",
+     "where",  "select", "pulse",
 
     // The rest, individually: `untag` is the other half of the `tag` row;
     // `clamp` is named in the `range` row's reason; `shape` and `merge` are
     // plumbing between shapes; `rand` sits under the `choose` row.
-    "untag", "clamp", "shape", "merge", "rand",
+         "untag",     "clamp",    "shape",  "merge",  "rand",
 };
 
 /// Every operator name that appears inside a backticked span in §6a's table.
@@ -9870,15 +9816,20 @@ test "a refusal reaches the error hook with the PORT that minded, in words" {
 
 const row_legal_core = [_][]const u8{
     // the four, outright
-    "add", "sub", "mul", "div",
+    "add",    "sub",  "mul",     "div",
     // integer-defined arithmetic
-    "min", "max", "clamp", "abs", "floor", "ceil", "round", "sign", "fract", "mod",
+    "min",    "max",  "clamp",   "abs",
+    "floor",  "ceil", "round",   "sign",
+    "fract",  "mod",
     // fixed-point interpolation — a product and a sum
-    "lerp", "range",
+     "lerp",    "range",
     // logic and comparison
-    "select", "and", "or", "not", "=", "!=", "<", "<=", ">", ">=",
+    "select", "and",  "or",      "not",
+    "=",      "!=",   "<",       "<=",
+    ">",      ">=",
     // the vec3 shape, and the sink
-    "project", "record", "write",
+      "project", "record",
+    "write",
 };
 
 test "the row column: every row-legal core op is listed, every listed op is row-legal, and legal means exact" {
@@ -9949,4 +9900,25 @@ test "the row head: `row.x` is a subscription like `plane.x`, `row` is reserved,
     }.f;
     try testing.expectError(error.ReservedName, reg.register(.{ .name = "row", .help = "", .routes = .anywhere, .eval = noop }));
     try testing.expectError(error.ReservedName, reg.register(.{ .name = "row count", .help = "", .routes = .anywhere, .eval = noop }));
+}
+
+test "the row head: a row-only word is refused at parse in a plane program, and binds in a kernel" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const noop = struct {
+        fn f(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+            return rill.Emit.none;
+        }
+        fn k(_: *rill.row.Ctx) rill.row.Error!void {}
+    };
+    _ = try reg.register(.{ .name = "gravity_like", .inputs = &.{.{ .name = "g", .ty = rill.Tag.number }}, .help = "", .routes = .anywhere, .row = .{ .exact = true, .only = true, .eval = noop.k }, .eval = noop.f });
+    var diag = rill.Diag{};
+    // An unfed input would keep a mount-time refusal from ever firing; the
+    // parser does not care what is fed.
+    try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "plane.x | gravity_like", &diag));
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "'gravity_like' is a row word") != null);
+    var prog = try rill.parseKernel(testing.allocator, &reg, "k", "plane.x | gravity_like", &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.nodeCount());
 }

@@ -2459,6 +2459,13 @@ withdrawn.
   for that row.** A division by zero on one row is that row's wave dying at
   that node; the host merges scratches after its join, so the count is
   exact with no atomics.
+- **A row word refuses at PARSE in a plane program.** The first draft
+  used `fails_mount` on the word and it leaked: `fails_mount` fires only
+  if the node evaluates at tick 0, and `plane.x | gravity` with an unfed
+  `plane.x` never evaluates — it mounted cleanly (found by spindrift's G2,
+  which asserted the refusal). `parseKernel` is `parse` with `rows` set;
+  the op-bind site refuses `row.only` words when it is not. Structural:
+  the parser is the one place that knows what kind of program it reads.
 - **`row` is a reserved word**, the parser's second path head through one
   helper (`isPathHead`), and every `plane`-head site takes both. A
   `row.…` path in a program mounted on the world plane is a path nobody

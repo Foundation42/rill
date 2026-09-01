@@ -94,8 +94,9 @@ pub const Row = struct {
     /// EARNED: the result is defined by integer arithmetic only. v1's
     /// row-legal set is exactly the exact set.
     exact: bool = false,
-    /// A row word — meaningful only on a spray. Its plane `eval` refuses,
-    /// and `fails_mount` on the same def makes that refusal fail the mount.
+    /// A row word — meaningful only on a spray. The PARSER refuses it in a
+    /// plane program by name (`parse` vs `parseKernel`); its plane `eval`
+    /// is a truthful slot-filler nothing reaches through the parser.
     only: bool = false,
     /// The integer kernel. Null = the op has no row evaluation at all.
     eval: ?*const fn (ctx: *Ctx) Error!void = null,
@@ -386,10 +387,17 @@ pub const Runtime = struct {
         self.broadcast[i] = v;
     }
 
+    /// The write queue holds one write per NODE, not per `write` node: a
+    /// row word writes the row through its kernel with no path static
+    /// (`gravity`, `spawn`), and a queue sized to the sinks alone refused
+    /// every one of them as "too many writes" — while G0 passed on a
+    /// population that never moved (spindrift beat 1, ledger). One write per
+    /// node per row is the contract; a kernel that wants two writes says
+    /// two lines.
     pub fn newScratch(self: *const Runtime, gpa: std.mem.Allocator) !Scratch {
         const slots = try gpa.alloc(?Val, self.prog.slotCount());
         errdefer gpa.free(slots);
-        const writes = try gpa.alloc(QueuedWrite, self.n_sinks);
+        const writes = try gpa.alloc(QueuedWrite, self.prog.nodeCount());
         return .{ .gpa = gpa, .slots = slots, .writes = writes };
     }
 
