@@ -537,7 +537,13 @@ perish
   the same for every row. `plane.drift.@self.<knob>` is the mounted spray's
   own knob; `@self` is resolved by the host at mount.
 - **A field read inside a kernel names where it samples**: `$wind at
-  row.pos` (P2; the standpoint ruling in `rill-casts.md` §9 holds).
+  row.pos` — value — and `$wind grad at row.pos` — gradient, toward the
+  caster. Pure desugaring to the HOST's word `hear $wind [grad] at <pos>`,
+  registered by whoever owns a lattice (spindrift's spray), never core;
+  with no `hear` registered the read says so. A bare `$wind` in a kernel is
+  the same standpoint refusal as on the plane, with the kernel's spelling
+  in the message. The standpoint ruling in `rill-casts.md` §9 holds: the
+  spray's declared ear is the instrument, `at` names where within it.
 - **Writes use the write verb with its mode word.** Bare is replace; `add`
   is the blind delta. The lane modes are refused at mount — a row has no
   lanes.

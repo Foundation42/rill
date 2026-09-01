@@ -2488,3 +2488,17 @@ used `add` on a field that was already zero, so a written zero and silence
 were the same bytes: A equalled B. Rewritten as a replace onto a non-zero
 field, and it bites. The ledger's first line, again: a gate must run where
 A ≠ B.
+
+## `$wind at row.pos` — the field read in a kernel (2026-09-01, spec §3.16, spindrift beat 2)
+
+Ruled: the read is spelled `$wind at row.pos`, bare `$wind` a parse error
+in a kernel too, coupling via `#tag` at the spray's authored ear. **Pure
+desugaring in the parser**: in a kernel, a statement head `$chan` followed
+by `at` or `grad` becomes an opcall of `hear` with the `$` token left in
+place to bind as the channel static (exactly `cast`'s), so `$wind grad at
+row.pos` is `hear $wind grad at row.pos`. `hear` is the HOST's word — the
+spray owns the lattice, so the spray registers the reader; rill's core has
+no read of a field, as before ("readings come from a standpoint"). With no
+`hear` registered the read refuses naming the missing word. On the plane
+nothing changed: the 2026-08-25 standpoint refusal stands verbatim.
+Gated both ways and on the plane, with a stub `hear`.

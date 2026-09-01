@@ -9922,3 +9922,44 @@ test "the row head: a row-only word is refused at parse in a plane program, and 
     defer prog.deinit();
     try testing.expectEqual(@as(usize, 1), prog.nodeCount());
 }
+
+test "the field read in a kernel: `$wind at row.pos` desugars to the host's `hear`; bare stays a standpoint error; the plane spelling is untouched" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var diag = rill.Diag{};
+    // No host word yet: the read says what is missing.
+    try testing.expectError(error.Parse, rill.parseKernel(testing.allocator, &reg, "k", "$wind at row.pos | write row.u0", &diag));
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "no host word `hear`") != null);
+    // A host registers `hear` with cast's channel static, a grad flag and a keyword `at`.
+    const stub = struct {
+        fn f(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+            return rill.Emit.none;
+        }
+        fn k(_: *rill.row.Ctx) rill.row.Error!void {}
+    };
+    _ = try reg.register(.{
+        .name = "hear",
+        .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "grad", .kind = .word, .flag = true, .optional = true } },
+        .inputs = &.{.{ .name = "at", .ty = rill.Tag.any, .kw = true }},
+        .outputs = &.{.{ .name = "out", .ty = rill.Tag.any }},
+        .help = "stub",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .only = true, .eval = stub.k },
+        .eval = stub.f,
+    });
+    var prog = try rill.parseKernel(testing.allocator, &reg, "k", "$wind grad at row.pos | mul 2 | write row.vel add", &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 3), prog.nodeCount());
+    const hear = prog.node(0);
+    try testing.expectEqualStrings("hear", reg.get(hear.op).name);
+    try testing.expectEqualStrings("$wind", hear.statics[0].channel);
+    try testing.expectEqualStrings("grad", hear.statics[1].word);
+    try testing.expectEqualStrings("row.pos", prog.subs.items[0].path);
+    // Bare in a kernel: the kernel's spelling, in the refusal.
+    try testing.expectError(error.Parse, rill.parseKernel(testing.allocator, &reg, "k", "$wind | write row.u0", &diag));
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "'$wind at row.pos'") != null);
+    // On the plane: the standpoint ruling as it was, `hear` or no `hear`.
+    try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "$wind at plane.x | write plane.y", &diag));
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "plane.sensors.<post>.$wind") != null);
+}

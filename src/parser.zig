@@ -959,6 +959,30 @@ const Parser = struct {
                     // The error states the spelling, not just the refusal.
                     // (This is also what keeps the cycle checker out of the
                     // field store.)
+                    //
+                    // In a KERNEL (spindrift beat 2, ruled 2026-09-01) the
+                    // standpoint is the spray's own lattice and `at` names
+                    // where within it: `$wind at row.pos` (or `$wind grad at
+                    // row.pos`) desugars to `hear $wind [grad] at row.pos` —
+                    // `hear` being the host's word, registered by whoever
+                    // owns a lattice, never core. Pure desugaring: the `$`
+                    // token is not consumed; it binds to `hear`'s channel
+                    // static exactly as it binds to `cast`'s. A BARE `$chan`
+                    // in a kernel stays the same refusal with the kernel's
+                    // own spelling in the message.
+                    if (self.rows) {
+                        const after = if (self.pos + 1 < self.toks.len) self.toks[self.pos + 1] else t;
+                        const reads = after.kind == .name and (std.mem.eql(u8, after.text, "at") or std.mem.eql(u8, after.text, "grad"));
+                        if (reads) {
+                            if (self.reg.find("hear") == null) {
+                                return self.fail(t, "'{s} at …' is a field read, and no host word `hear` is registered — a spray hears its own lattice; the world plane reads fields at plane.sensors.<post>.{s}", .{ t.text, t.text });
+                            }
+                            var hear_tok = t;
+                            hear_tok.text = "hear";
+                            return self.parseOpcall(target, hear_tok, null, false);
+                        }
+                        return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: in a kernel, '{s} at row.pos' (or '{s} grad at row.pos') — a bare channel has no implicit 'here'", .{ t.text, t.text, t.text });
+                    }
                     return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: plane.sensors.<post>.{s}, or @tom.{s} through an entity-bound ear — a bare channel has no implicit 'here'. To deposit, 'cast {s} …'", .{ t.text, t.text, t.text, t.text });
                 }
                 const op_tok = self.next();
