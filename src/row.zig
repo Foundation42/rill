@@ -1363,6 +1363,90 @@ test "row: a literal record is a vec3, and select/compare/record/project compose
     try std.testing.expectEqual(ONE, rows.size[0]);
 }
 
+test "row: a pipe carries a producer's other outputs to the consumer's like-named open ports — explicit wins, an unnamed port stays unbound" {
+    // The rule (spindrift beat 5, ruling 24): `collide | stick` hands the hit
+    // point down the pipe and the normal to `stick`'s `normal` port. Before
+    // it, no second output of any rill word had a spelling that reached it.
+    // Mutation: carried outputs bound by POSITION — `k` lands where `b`
+    // should; the sum differs. Mutation: the carry dropped — `twoout | takeb`
+    // refuses "port 'b' of 'takeb' is not bound".
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    const stub = struct {
+        fn f(_: *registry.EvalCtx) registry.EvalError!registry.Emit {
+            return registry.Emit.none;
+        }
+        fn pair(ctx: *Ctx) Error!void {
+            const x = try ctx.scalar(0);
+            ctx.out[0] = .{ .scalar = x }; // a — down the pipe
+            ctx.out[1] = .{ .scalar = x * 2 }; // b — carried by name
+            ctx.out[2] = .{ .scalar = x * 3 }; // k — carried by name, if anyone asks
+        }
+        fn take(ctx: *Ctx) Error!void {
+            const a = try ctx.scalar(0);
+            const b = try ctx.scalar(1);
+            ctx.out[0] = .{ .scalar = a * 10 + b };
+        }
+    };
+    _ = try reg.register(.{
+        .name = "twoout",
+        .inputs = &.{.{ .name = "in", .ty = types.Tag.number }},
+        .outputs = &.{ .{ .name = "a", .ty = types.Tag.number }, .{ .name = "b", .ty = types.Tag.number }, .{ .name = "k", .ty = types.Tag.number } },
+        .help = "stub",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .eval = stub.pair },
+        .eval = stub.f,
+    });
+    _ = try reg.register(.{
+        .name = "takeb",
+        .inputs = &.{ .{ .name = "in", .ty = types.Tag.number }, .{ .name = "b", .ty = types.Tag.number } },
+        .outputs = &.{.{ .name = "out", .ty = types.Tag.number }},
+        .help = "stub",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .eval = stub.take },
+        .eval = stub.f,
+    });
+    _ = try reg.register(.{
+        .name = "takec",
+        .inputs = &.{ .{ .name = "in", .ty = types.Tag.number }, .{ .name = "c", .ty = types.Tag.number } },
+        .outputs = &.{.{ .name = "out", .ty = types.Tag.number }},
+        .help = "stub",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .eval = stub.take },
+        .eval = stub.f,
+    });
+    var rows = TestRows{};
+    rows.size[1] = 7;
+    {
+        var prog: graph.Program = undefined;
+        var diag = registry.Detail{};
+        var rt = try mountText(gpa, &reg, &rows,
+            \\row.size | twoout | takeb | write row.u0
+            \\row.size | twoout | takeb 5 | write row.u1
+        , &prog, &diag);
+        defer prog.deinit();
+        defer rt.deinit();
+        var sc = try rt.newScratch(gpa);
+        defer sc.deinit();
+        rt.evalRow(&sc, 1, ONE, null);
+        try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+        // u0: a = 7 down the pipe, b = 14 carried by name → 84. Bound by
+        // position, k = 21 would land there: 91.
+        try std.testing.expectEqual(@as(Fixed, 84), rows.u[1][0]);
+        // u1: the explicit 5 wins over the carried b → 70 + 5·ONE.
+        try std.testing.expectEqual(@as(Fixed, 70 + 5 * ONE), rows.u[1][1]);
+    }
+    {
+        // A port spelled like none of the producer's outputs is unbound, as
+        // it always was — by name, so the author knows which.
+        var pdiag = parser.Diag{};
+        try std.testing.expectError(error.Parse, parser.parse(gpa, &reg, "k", "row.size | twoout | takec | write row.u0\n", &pdiag));
+        try std.testing.expect(std.mem.indexOf(u8, pdiag.msg(), "port 'c' of 'takec' is not bound") != null);
+    }
+}
+
 test "row: an array literal is the first stateless array on the row — converted once, shared, never written" {
     const gpa = std.testing.allocator;
     var reg = try registry.Registry.init(gpa);

@@ -581,6 +581,16 @@ whole difference between them. (`fails_mount` was the first draft and it
 leaked: it only fires if the node evaluates at tick 0, and `plane.x |
 gravity` with an unfed `plane.x` never did.)
 
+**The pipe carries a producer's other outputs by name (v0.4, spindrift beat
+5, ruling 24).** `a | b` feeds `a`'s FIRST output to `b`'s first port, as it
+always has. `a`'s other outputs ride along by NAME: a port of `b` left open
+after the explicit arguments that is spelled like one of them binds to it.
+`collide | stick` hands the hit point down the pipe and the normal to
+`stick`'s `normal` port. An explicit argument always wins (`twoout | takeb
+5` binds `b` to 5); a port spelled like none of the producer's outputs is
+unbound as before, refused by name; nothing binds by position. Until this
+rule no second output of any rill word had a spelling that reached it.
+
 ### 3.13 Optional sugar (later, not v0)
 
 Faust-style symmetric split/merge for the tidy cases only; names handle everything irregular:

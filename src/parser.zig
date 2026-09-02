@@ -356,6 +356,9 @@ const Arg = struct {
     tok: Token,
 };
 
+/// A producer's non-first output riding a pipe, by name (see the pipe site).
+const Carried = struct { name: []const u8, src: Source };
+
 const OpResult = struct {
     node: ?NodeId = null,
     /// One source per output port (wires), or the bare ref for non-opcall exprs.
@@ -809,8 +812,36 @@ const Parser = struct {
             if (op_tok.kind == .name and (isPathHead(op_tok.text) or self.aliases.contains(op_tok.text))) {
                 return self.fail(op_tok, "'{s}…' is a path, and a pipe feeds an operator — did you forget `set`? (… | write {s}.…)", .{ op_tok.text, op_tok.text });
             }
-            current.* = try self.parseOpcall(target, op_tok, current.outputs[0], false);
+            // The pipe carries the producer's FIRST output to the consumer's
+            // first port (the 90% case, unchanged). Its OTHER outputs ride
+            // along by NAME: a consumer port left open that is spelled like
+            // one of them binds to it. `collide | stick` hands the hit point
+            // down the pipe and the normal to `stick`'s `normal` port — the
+            // first time any second output of a rill word had a spelling
+            // that reached it (spindrift beat 5, ruling 24: the resting
+            // offset needs the normal at `stick`). An explicit argument
+            // always wins; a port with no like-named output is unbound as
+            // before; nothing binds by position.
+            const carried = try self.carriedOutputs(target, current.*);
+            current.* = try self.parseOpcallCarrying(target, op_tok, current.outputs[0], false, carried);
         }
+    }
+
+    /// What rides a pipe besides the first output: the producer's other
+    /// outputs, each with the name its operator declares (or the `as` name
+    /// bound to it). Empty for anything that is not an opcall node.
+    fn carriedOutputs(self: *Parser, target: *Target, from: OpResult) ![]const Carried {
+        const node_id = from.node orelse return &.{};
+        if (from.outputs.len < 2) return &.{};
+        const def = self.reg.get(target.nodes.items[node_id].op);
+        const n = @min(from.outputs.len, def.outputs.len);
+        if (n < 2) return &.{};
+        const out = try self.a().alloc(Carried, n - 1);
+        for (1..n) |i| {
+            const name = if (i < from.out_names.len) from.out_names[i] else def.outputs[i].name;
+            out[i - 1] = .{ .name = name, .src = from.outputs[i] };
+        }
+        return out;
     }
 
     /// alsoblock := "also" "{" branch ( newline branch )* "}"
@@ -1367,6 +1398,10 @@ const Parser = struct {
     /// `(< 20)` binds 20 to port b and computes `x < 20`, exactly as piping
     /// would.
     fn parseOpcall(self: *Parser, target: *Target, op_tok: Token, primary: ?Source, reserved_primary: bool) ParseError!OpResult {
+        return self.parseOpcallCarrying(target, op_tok, primary, reserved_primary, &.{});
+    }
+
+    fn parseOpcallCarrying(self: *Parser, target: *Target, op_tok: Token, primary: ?Source, reserved_primary: bool, carried: []const Carried) ParseError!OpResult {
         var op_name = op_tok.text;
 
         // defs shadow nothing and are single-word
@@ -1632,6 +1667,15 @@ const Parser = struct {
                 pk.appendBool(true) catch return error.OutOfMemory;
                 bound[0] = .{ .kind = .literal, .source = .{ .literal = pk.bytes() }, .ty = types.Tag.boolean, .tok = op_tok };
             }
+        }
+
+        // The pipe's other outputs, by name, into ports still open. After the
+        // explicit bindings — an argument the author wrote always wins — and
+        // never port 0, which the pipe itself fills.
+        for (carried) |c| {
+            const pi = portIndex(ports, c.name) orelse continue;
+            if (pi == 0 or bound[pi] != null) continue;
+            bound[pi] = .{ .kind = .stream, .source = c.src, .ty = self.sourceTy(target, c.src), .tok = op_tok };
         }
 
         // Type check + collect sources.

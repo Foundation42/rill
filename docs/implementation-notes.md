@@ -2502,3 +2502,18 @@ no read of a field, as before ("readings come from a standpoint"). With no
 `hear` registered the read refuses naming the missing word. On the plane
 nothing changed: the 2026-08-25 standpoint refusal stands verbatim.
 Gated both ways and on the plane, with a stub `hear`.
+
+## The pipe carries a producer's other outputs by name (2026-09-02, spec §3.16, spindrift beat 5)
+
+Spindrift's ruling 24 puts the landed row at `at + normal · size`, and
+`collide` had been emitting the normal on a port no kernel could reach —
+`parseOpcall` took `current.outputs[0]` and nothing else; no `outputs[1]`
+anywhere in the tree. The rule, in `parser.zig` at the pipe site: the
+producer's outputs after the first ride to the consumer with their
+declared names (or their `as` names), and after the explicit bindings any
+open port spelled like one binds to it; never port 0, never by position.
+Gate (`row.zig`): `twoout | takeb` — `a` down the pipe, `b` by name (84,
+not 91 if `k` had landed by position); `takeb 5` — the explicit wins; a
+consumer with port `c` refuses "port 'c' of 'takec' is not bound".
+Mutations: bound by position (91) — bitten; the carry dropped — bitten
+(the refusal). 384 tests.
