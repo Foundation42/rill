@@ -259,6 +259,7 @@ in steps.
 | "how fast is it changing?" | `\| diff` | derive it; don't ask the host to publish a velocity field |
 | "count up while this is held" | `\| integrate max <m>` | op-internal state, so no `inc` dance — and the cap is required |
 | "map 0..1 onto a real range" | `\| range lo hi`, not `lerp` | `range` clamps and `lerp` extrapolates; a modulation chain wants the interval it named |
+| "follow a shape across a whole life" | `\| over <span> [1, 0.7, 0]` | `range` is the two-knot case with the knots spelled out; more knots is a curve, evenly spaced. The knots are a *value*, so an editor can drag them |
 | "add 2 metres to a position" | `\| add {x: 0, y: 2, z: 0}` | math is elementwise over records and arrays; there is no vector family to learn |
 | "how far along the route am I?" | `\| nearest <knots>` | the inverse of `along`, and it hands back the **parameter** — so `\| along` recovers the point, and `\| diff` says which way you are going |
 | "is it in front of me?" / "how much of this is in that direction?" | `\| dot <a direction>` | one number answers both; with a unit direction it is 1 dead ahead, 0 side on, −1 behind |
@@ -1319,6 +1320,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `nth` | `nth <in> <i>` | The i-th element, 0-based. Out of range is an **error**, never a clamp. §6c |
 | `once` | `once <in>` | The first value, then deaf until remount. §6f |
 | `or` | `or <a> <b>` | Boolean or. Broadcasts over a record or an array. |
+| `over` | `over <t> <span> <curve>` | Sample a curve of evenly-spaced knots at `t/span`, clamping at the ends. §6b |
 | `partition` | `partition <in> <pred>` | Route every arrival to exactly one of two outputs. §10 |
 | `pi` | `pi` | 3.14159…, emitted once at mount. |
 | `pow` | `pow <a> <b>` | a to the power b — `x \| pow 2` is x squared. |

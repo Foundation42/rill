@@ -1090,6 +1090,65 @@ fn evalRange(ctx: *EvalCtx) EvalError!Emit {
     return emitF64(ctx, lo + (hi - lo) * t);
 }
 
+/// `t | over span [k0, k1, …]` — sample a curve of evenly-spaced knots.
+///
+/// The plane half of `row.kernels.over`; read that one's comment for the
+/// semantics, which are the same on both sides by construction. What is
+/// worth saying HERE is why the interpolation is spelled as three
+/// `broadcast2` calls rather than one arithmetic line like `evalRange`
+/// above: a knot may be a record. `[{r:1,g:1,b:1}, {r:1,g:.5,b:0}]` is a
+/// colour ramp, and `a + (b - a) * frac` written with `num()` would refuse
+/// it. Decomposing into subtract, multiply and add lets the audited
+/// broadcast recursion carry records — and arrays, and nested records —
+/// for free, and every refusal it raises already names both sides and the
+/// field where they diverged.
+///
+/// A zero span refuses here as it does on a row. See the row kernel for
+/// why this one op departs from `div`'s IEEE stance.
+fn evalOver(ctx: *EvalCtx) EvalError!Emit {
+    const t = try num(ctx, 0);
+    const span = try num(ctx, 1);
+    if (span == 0) {
+        return ctx.refuse("over: '{s}' is zero — a curve with no width has nothing to sample across", .{ctx.portName(1)});
+    }
+
+    var elems = std.ArrayListUnmanaged([]const u8).empty;
+    var r = struple.reader(try arrayInAt(ctx, 2));
+    while (r.nextView() catch return ctx.refuse("over: '{s}' is a malformed array", .{ctx.portName(2)})) |e| {
+        try elems.append(ctx.arena, e);
+    }
+    // The row side gets this refusal at MOUNT, where an empty literal is
+    // rejected before a frame runs. The plane's array can arrive at eval
+    // time from anywhere, so it is checked here.
+    if (elems.items.len == 0) return ctx.refuse("over: '{s}' is empty — a curve needs at least one knot", .{ctx.portName(2)});
+
+    const u = std.math.clamp(t / span, 0, 1);
+    const n = elems.items.len;
+    if (n == 1) {
+        ctx.out[0].appendRaw(elems.items[0]) catch return ctx.refuse("over: the curve's only knot is unencodable", .{});
+        return Emit.first;
+    }
+    const segs: f64 = @floatFromInt(n - 1);
+    const f = u * segs;
+    const i: usize = @intFromFloat(@floor(f));
+    if (i >= n - 1) {
+        ctx.out[0].appendRaw(elems.items[n - 1]) catch return ctx.refuse("over: the curve's last knot is unencodable", .{});
+        return Emit.first;
+    }
+    const a = elems.items[i];
+    const b = elems.items[i + 1];
+    const frac = f - @floor(f);
+
+    var diff = struple.Packer.init(ctx.arena);
+    try broadcast2(ctx, "over", &diff, "", b, a, leafNum(fSub));
+    var fr = struple.Packer.init(ctx.arena);
+    try fr.appendF64(frac);
+    var scaled = struple.Packer.init(ctx.arena);
+    try broadcast2(ctx, "over", &scaled, "", diff.bytes(), fr.bytes(), leafNum(fMul));
+    try broadcast2(ctx, "over", &ctx.out[0], "", a, scaled.bytes(), leafNum(fAdd));
+    return Emit.first;
+}
+
 const SHAPE_CURVES = [_][]const u8{ "linear", "smooth", "in", "out", "inout" };
 
 /// `shape <curve>` — 0..1 → 0..1, the easing curve as a value transform.
@@ -3535,6 +3594,7 @@ const CORE = [_]registry.OpDef{
     .{ .name = "diff", .inputs = &.{p.in("in", Tag.number)}, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Rate of change per second from the previous sample. First observation baselines silently; ticks while moving, stops at zero.", .class = .reads, .ticks = true, .eval = evalDiff },
     .{ .name = "integrate", .inputs = &.{ p.in("in", Tag.number), p.kwIn("max", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Running sum over fed time, clamped to +/-max. The clamp is required — unbounded state is a corpse that rides every dump.", .class = .reads, .ticks = true, .eval = evalIntegrate },
     .{ .name = "range", .row = rowk.exact(rowk.kernels.range), .inputs = &.{ p.in("t", Tag.number), p.in("lo", Tag.number), p.in("hi", Tag.number) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Map 0..1 onto lo..hi, CLAMPING outside it — the exit from the unit interval. `lerp` is the same arithmetic that extrapolates.", .eval = evalRange },
+    .{ .name = "over", .row = rowk.exact(rowk.kernels.over), .inputs = &.{ p.in("t", Tag.number), p.in("span", Tag.number), p.in("curve", Tag.array) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Sample a curve of EVENLY-SPACED knots at t/span, clamped to the ends — `row.age | over row.life [1, 0.7, 0]` is full size at birth, 0.7 halfway, nothing at death. `range` is the two-knot case. Knots may be numbers or records (a record ramp is a colour ramp); one knot is a constant. A zero span refuses.", .eval = evalOver },
     .{ .name = "shape", .inputs = &.{ p.in("t", Tag.number), p.oneOf("curve", &SHAPE_CURVES) }, .outputs = &.{p.val("out", Tag.number)}, .routes = .anywhere, .help = "Ease a 0..1 value into 0..1 — curves: linear, smooth, in, out, inout. Input clamps.", .eval = evalShape },
     // math — and a note on why every one of these declares `out` as `any`.
     //

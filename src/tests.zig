@@ -2085,6 +2085,7 @@ test "every core op declares its class deliberately" {
         .{ .name = "diff", .class = .reads }, // state
         .{ .name = "integrate", .class = .reads }, // state
         .{ .name = "range", .class = .pure },
+        .{ .name = "over", .class = .pure }, // samples a literal curve; carries nothing
         .{ .name = "shape", .class = .pure },
         .{ .name = "add", .class = .pure },
         .{ .name = "sub", .class = .pure },
@@ -2222,6 +2223,7 @@ test "every core op declares whether it may tick" {
         .{ .name = "noise", .ticks = true }, // as long as time is fed
         .{ .name = "wave", .ticks = false }, // pure shaper; ticks if its t does
         .{ .name = "range", .ticks = false },
+        .{ .name = "over", .ticks = false }, // pure shaper, like the two either side
         .{ .name = "shape", .ticks = false },
     };
 
@@ -9823,6 +9825,9 @@ const row_legal_core = [_][]const u8{
     "fract",  "mod",
     // fixed-point interpolation — a product and a sum
      "lerp",    "range",
+    // the curve sampler: a shift for the segment, a mask for the position
+    // within it, and `range`'s arithmetic between two knots
+    "over",
     // logic and comparison
     "select", "and",  "or",      "not",
     "=",      "!=",   "<",       "<=",
@@ -9962,4 +9967,73 @@ test "the field read in a kernel: `$wind at row.pos` desugars to the host's `hea
     // On the plane: the standpoint ruling as it was, `hear` or no `hear`.
     try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", "$wind at plane.x | write plane.y", &diag));
     try testing.expect(std.mem.indexOf(u8, diag.msg(), "plane.sensors.<post>.$wind") != null);
+}
+
+test "over on the plane: the same knots and the same clamping as a row, and a record ramp" {
+    // `over` is core, so it has a plane half as well as a row kernel, and
+    // the two must not drift into different pictures of the same curve.
+    // Exactness differs by construction — the row is Q16.16 and the plane is
+    // IEEE — so what this pins is the STRUCTURE they share: which knots a
+    // given t picks, that both ends are exact, and that outside the span
+    // both clamp.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.t | over 1 [1, 0.7, 0] | write plane.size
+    , .{.{ "plane.t", @as(f64, 0) }});
+    defer fx.deinit();
+
+    const at = struct {
+        fn f(x: *Fixture, t: f64) !f64 {
+            try feedValue(&x.rt, testing.allocator, "plane.t", t);
+            try x.rt.tick(.{});
+            return types.asNumber(x.mock.writes.items[x.mock.writes.items.len - 1].value).?;
+        }
+    }.f;
+
+    // t = 0 lands on the first knot exactly.
+    try testing.expectEqual(@as(f64, 1), types.asNumber(fx.mock.writes.items[0].value).?);
+    // A quarter of the way is halfway along the FIRST of two segments —
+    // the segment arithmetic, which is where an off-by-one would show.
+    try testing.expectApproxEqAbs(@as(f64, 0.85), try at(&fx, 0.25), 1e-12);
+    // Halfway is the middle knot itself, not a point between two.
+    try testing.expectEqual(@as(f64, 0.7), try at(&fx, 0.5));
+    // …and the far end is exact, as it is on a row.
+    try testing.expectEqual(@as(f64, 0), try at(&fx, 1));
+    // Outside the span, both directions clamp.
+    try testing.expectEqual(@as(f64, 0), try at(&fx, 5));
+    try testing.expectEqual(@as(f64, 1), try at(&fx, -2));
+}
+
+test "over on the plane: a knot may be a record, and a zero span refuses as it does on a row" {
+    // The record half is why the plane's interpolation is three `broadcast2`
+    // calls instead of one arithmetic line: `a + (b - a) * frac` written with
+    // `num()` would refuse a colour ramp, which is half of what the curve
+    // editor exists to author.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.t | over 1 [{x: 1, y: 0, z: 0}, {x: 0, y: 0, z: 1}] | write plane.col
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fx.deinit();
+    const w = fx.mock.writes.items[fx.mock.writes.items.len - 1];
+    const fields = try recordFields(testing.allocator, w.value);
+    defer {
+        for (fields) |f| testing.allocator.free(f.k);
+        testing.allocator.free(fields);
+    }
+    try testing.expectEqual(@as(usize, 3), fields.len);
+    // Canonical (sorted) key order: x, y, z. Each axis moves half way.
+    try testing.expectEqualStrings("x", fields[0].k);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), fields[0].v, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0), fields[1].v, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), fields[2].v, 1e-12);
+
+    // A zero span refuses rather than dividing to ±inf and clamping the nan
+    // that follows — the one place `over` departs from `div`'s IEEE stance,
+    // so that a row and the plane cannot disagree about the same curve.
+    var fz: Fixture = undefined;
+    try mountFixture(testing.allocator, &fz,
+        \\plane.t | over 0 [1, 0] | write plane.size
+    , .{.{ "plane.t", @as(f64, 0.5) }});
+    defer fz.deinit();
+    try testing.expectEqual(@as(usize, 0), fz.mock.writes.items.len);
 }

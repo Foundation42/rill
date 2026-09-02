@@ -980,7 +980,7 @@ pub const kernels = struct {
         ctx.out[0] = try lerpVal(ctx, t, a, b);
     }
 
-    /// Exposed for hosts whose words interpolate (spindrift's `over`).
+    /// Exposed for `over` below, and for any host word that interpolates.
     pub fn lerpVal(ctx: *Ctx, t: Fixed, a: Val, b: Val) Error!Val {
         return switch (a) {
             .scalar => |x| switch (b) {
@@ -1005,6 +1005,59 @@ pub const kernels = struct {
         const lo = try ctx.val(1);
         const hi = try ctx.val(2);
         ctx.out[0] = try lerpVal(ctx, t, lo, hi);
+    }
+
+    /// `t | over span [k0, k1, …]` — the curve sampler, and the array
+    /// literal's first consumer.
+    ///
+    /// `range` is the two-knot case with the knots spelled out; this is the
+    /// same arithmetic over as many as you like. `row.age | over row.life
+    /// [1, 0.7, 0]` is an ember that starts full size, is at 0.7 halfway
+    /// through its life and reaches nothing as it dies.
+    ///
+    /// **A zero span refuses on BOTH evaluators**, which is a deliberate
+    /// departure from `div` — the plane's `div` yields ±inf because IEEE
+    /// says so, and rows have no inf at all. A sampler that disagreed with
+    /// itself across the two evaluators would break the bit-identity
+    /// question (G7) for a case nobody meant to write: a curve with no
+    /// width to sample across is an authoring mistake, not a value.
+    pub fn over(ctx: *Ctx) Error!void {
+        const t = try ctx.scalar(0);
+        const span = try ctx.scalar(1);
+        const xs = try ctx.array(2);
+        if (span == 0) return ctx.refuse("{s}: port '{s}' is zero — a curve with no width has nothing to sample across", .{ ctx.op.name, ctx.portName(1) });
+        // The clamp is LOAD-BEARING, not a nicety: `sampleCurve` turns `u`
+        // into an array index, and a row read one frame past its life gives
+        // a negative one. Removing this clamp does not merely return the
+        // wrong knot — it panics on the cast, which the clamp gate below
+        // catches by feeding it an age of −1.
+        const u = @min(@max(try fDiv(ctx, t, span), 0), ONE);
+        ctx.out[0] = try sampleCurve(ctx, u, xs);
+    }
+
+    /// Sample `xs` at `u` ∈ [0, 1]: knots EVENLY spaced, linear between
+    /// them. `u` is assumed clamped — `over` is the only caller and clamps
+    /// before the divide's result can leave the interval.
+    ///
+    /// Exact, which is what earns `over` its place on the row-legal roster:
+    /// the segment index is a shift, the position within it is a mask, and
+    /// the interpolation is `lerpVal`'s product and sum. No float appears.
+    pub fn sampleCurve(ctx: *Ctx, u: Fixed, xs: []const Val) Error!Val {
+        // One knot is a constant, not a degenerate segment — `xs.len - 1`
+        // below would be a zero-length span and the index arithmetic would
+        // have nothing to divide the interval into.
+        if (xs.len == 1) return xs[0];
+        const segs: i64 = @intCast(xs.len - 1);
+        // u ≤ ONE and segs is an array length, so the product cannot leave
+        // i64 and cannot go negative.
+        const f: i64 = @as(i64, u) * segs;
+        const i: usize = @intCast(f >> FRAC_BITS);
+        // u == 1 lands exactly on the last knot, where there is no i+1 to
+        // interpolate toward. Returning it directly also makes the end of
+        // the curve exact rather than a lerp by a zero fraction.
+        if (i >= xs.len - 1) return xs[xs.len - 1];
+        const frac: Fixed = @intCast(f & FRAC_MASK);
+        return lerpVal(ctx, frac, xs[i], xs[i + 1]);
     }
 
     pub fn select(ctx: *Ctx) Error!void {
@@ -1553,4 +1606,146 @@ test "row: an array literal is the first stateless array on the row — converte
     defer bad_arr.deinit();
     try bad_arr.appendArray(bad_inner.bytes());
     try std.testing.expectEqual(@as(?[]Val, null), try arrayFromStruple(gpa, bad_arr.bytes()));
+}
+
+test "row: `over` samples a curve of evenly-spaced knots — an ember's size across its life" {
+    // The line the spindrift campaign was written around, and the one the
+    // `:::curve` editor authors: three knots, evenly spaced over the row's
+    // life — born, halfway, gone.
+    //
+    // Four rows at four ages in one sweep, because a population is exactly
+    // that: the same kernel over rows at different points of the same curve.
+    //
+    // The expectations are EXACT Q16.16, worked by hand rather than read off
+    // a run, because "it printed this" is not a check. `fixedFromF64` floors,
+    // so the literal 0.7 is 45875 (0.7 × 65536 = 45875.2). At age ¼ the
+    // segment is 0 and the position within it is ½, so the answer is
+    // 65536 + ((−19661 × 32768) >> 16) = 65536 − 9831 = 55705 — the shift
+    // floors toward −∞ on a negative, which is where the odd 1 comes from.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    for (0..4) |i| rows.u[i][0] = ONE; // u0 is `life`
+    rows.age[0] = 0;
+    rows.age[1] = ONE / 4;
+    rows.age[2] = HALF;
+    rows.age[3] = ONE;
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.age | over row.u0 [1, 0.7, 0] | write row.size
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+    for (0..4) |i| rt.evalRow(&sc, @intCast(i), ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+
+    // Both ends land on their knot EXACTLY — no lerp by a zero fraction, no
+    // 0.99998 where the author wrote 1. An ember that never quite reaches
+    // nothing is a visible bug at the end of every particle's life.
+    try std.testing.expectEqual(ONE, rows.size[0]);
+    try std.testing.expectEqual(@as(Fixed, 0), rows.size[3]);
+    // The middle knot is exact too: with three knots, u = ½ is the knot
+    // itself and not a point between two of them.
+    try std.testing.expectEqual(@as(Fixed, 45875), rows.size[2]);
+    // …and the interpolated one, which is the segment arithmetic itself.
+    try std.testing.expectEqual(@as(Fixed, 55705), rows.size[1]);
+}
+
+test "row: `over` clamps outside the span, and one knot is a constant" {
+    // Same ruling as `range` and `along`: outside the interval, clamp. A
+    // particle a frame past its life must read as dead rather than wrap to
+    // the top of the curve, and the row runs before the host reaps it.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    for (0..4) |i| rows.u[i][0] = ONE;
+    rows.age[0] = -ONE; // before the start
+    rows.age[1] = 2 * ONE; // past the end
+    rows.age[2] = HALF;
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.age | over row.u0 [1, 0.7, 0] | write row.size
+        \\row.age | over row.u0 [0.25] | write row.u1
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+    for (0..3) |i| rt.evalRow(&sc, @intCast(i), ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+    try std.testing.expectEqual(ONE, rows.size[0]); // clamped to the first knot
+    try std.testing.expectEqual(@as(Fixed, 0), rows.size[1]); // …and to the last
+    // A single knot has no segment to divide the interval into; it is a
+    // constant at every age, including the two that clamped.
+    try std.testing.expectEqual(ONE / 4, rows.u[0][1]);
+    try std.testing.expectEqual(ONE / 4, rows.u[1][1]);
+    try std.testing.expectEqual(ONE / 4, rows.u[2][1]);
+}
+
+test "row: a record ramp is a colour ramp — `over` interpolates componentwise" {
+    // `[white, orange, dark]` in the campaign doc. A knot may be a record,
+    // and `lerpVal` already carries vec3, so the curve sampler gets colour
+    // for free — this gate is what says so out loud, because a sampler that
+    // silently refused records would send the whole idea back to three
+    // parallel scalar curves.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    rows.u[0][0] = ONE;
+    rows.age[0] = HALF;
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.age | over row.u0 [{x: 1, y: 0, z: 0}, {x: 0, y: 0, z: 1}] | write row.pos
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+    // Halfway between two knots one segment apart: each axis moves half way.
+    try std.testing.expectEqual([3]Fixed{ HALF, 0, HALF }, rows.pos[0]);
+}
+
+test "row: `over` refuses a zero span rather than inventing an end to the curve" {
+    // A row has no ±inf to divide into, and a curve with no width has no
+    // sample point — so this refuses, is COUNTED, and the row's other flow
+    // still runs. The plane half refuses the same way on purpose, which is
+    // the one place `over` departs from `div`'s IEEE stance: a sampler that
+    // disagreed with itself across the two evaluators would be a worse
+    // surprise than the departure.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    rows.u[0][0] = 0; // life of zero
+    rows.age[0] = HALF;
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.age | over row.u0 [1, 0] | write row.size
+        \\row.age | add 1 | write row.u1
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual(@as(u64, 1), sc.refusals);
+    try std.testing.expect(std.mem.indexOf(u8, sc.first.text(), "nothing to sample across") != null);
+    // The flow that refused wrote nothing; the sibling flow still ran.
+    try std.testing.expectEqual(ONE, rows.size[0]); // untouched default
+    try std.testing.expectEqual(ONE + HALF, rows.u[0][1]);
 }
