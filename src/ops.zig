@@ -1108,8 +1108,12 @@ fn evalRange(ctx: *EvalCtx) EvalError!Emit {
 fn evalOver(ctx: *EvalCtx) EvalError!Emit {
     const t = try num(ctx, 0);
     const span = try num(ctx, 1);
-    if (span == 0) {
-        return ctx.refuse("over: '{s}' is zero — a curve with no width has nothing to sample across", .{ctx.portName(1)});
+    // `<= 0` and not `== 0`, and NaN refuses with them: the comparison is
+    // written as "not positive" so a NaN span falls into the refusal rather
+    // than through it. See the row kernel for why a negative span is an
+    // authoring mistake rather than a curve running backwards.
+    if (!(span > 0)) {
+        return ctx.refuse("over: '{s}' is not positive — a curve with no width has nothing to sample across", .{ctx.portName(1)});
     }
 
     var elems = std.ArrayListUnmanaged([]const u8).empty;

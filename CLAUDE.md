@@ -20,6 +20,21 @@ C-ABI seam (`zig build seam`) or anything a host reads means those become
 part of the blast radius — see `matryoshka/CLAUDE.md` for the table. A
 change to a pure-rill internal does not.
 
+**A new CORE WORD's blast radius is every host registry.** `register`
+refuses a duplicate name, so a core word that collides with a host's word
+does not shadow it or lose a race — it fails that host's registry init
+outright, and every program in it. Hosts and their words, as of
+2026-09-02:
+
+    spindrift  spawn · gravity · perish · hear · collide · ground · stick
+
+`over` landed in core on 2026-09-02 and collided with spindrift's, which
+had been its fifth word since beat 3; matryoshka registers both, so it
+stopped building until the host's was deleted. Grep the list before
+naming a core word, and read the host's version if the name is taken —
+its edges had six days of real kernels behind them and were right twice
+where the core draft was wrong.
+
 Rules that hold whatever you picked:
 
 - A gate that passed stays passed until the code changes.

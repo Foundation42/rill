@@ -1015,23 +1015,38 @@ pub const kernels = struct {
     /// [1, 0.7, 0]` is an ember that starts full size, is at 0.7 halfway
     /// through its life and reaches nothing as it dies.
     ///
-    /// **A zero span refuses on BOTH evaluators**, which is a deliberate
-    /// departure from `div` — the plane's `div` yields ±inf because IEEE
-    /// says so, and rows have no inf at all. A sampler that disagreed with
-    /// itself across the two evaluators would break the bit-identity
-    /// question (G7) for a case nobody meant to write: a curve with no
-    /// width to sample across is an authoring mistake, not a value.
+    /// **A non-positive span refuses on BOTH evaluators**, which is a
+    /// deliberate departure from `div` — the plane's `div` yields ±inf
+    /// because IEEE says so, and rows have no inf at all. A sampler that
+    /// disagreed with itself across the two evaluators would break the
+    /// bit-identity question (G7) for a case nobody meant to write: a curve
+    /// with no width to sample across is an authoring mistake, not a value.
+    ///
+    /// Both of those bounds are spindrift's, not this file's. `over` lived
+    /// there as a host word from beat 3 until rill grew a core one on
+    /// 2026-09-02, and the two collided at `register` — one name, one home,
+    /// so the host's was deleted (spindrift `cde9eec`). The middle of the
+    /// two kernels was already bit-identical; comparing the EDGES is what
+    /// found these, and the version with six days of real kernels behind it
+    /// was right both times. Kept here so the ruling outlives the merge.
     pub fn over(ctx: *Ctx) Error!void {
         const t = try ctx.scalar(0);
         const span = try ctx.scalar(1);
         const xs = try ctx.array(2);
-        if (span == 0) return ctx.refuse("{s}: port '{s}' is zero — a curve with no width has nothing to sample across", .{ ctx.op.name, ctx.portName(1) });
-        // The clamp is LOAD-BEARING, not a nicety: `sampleCurve` turns `u`
-        // into an array index, and a row read one frame past its life gives
-        // a negative one. Removing this clamp does not merely return the
-        // wrong knot — it panics on the cast, which the clamp gate below
-        // catches by feeding it an age of −1.
-        const u = @min(@max(try fDiv(ctx, t, span), 0), ONE);
+        // `<= 0`, not `== 0`. A negative span is not a curve running
+        // backwards, it is nonsense — and clamping it silently to the first
+        // knot (which is what the earlier `== 0` did) hides the mistake at
+        // the one moment an author could still be told about it.
+        if (span <= 0) return ctx.refuse("{s}: port '{s}' is not positive — a curve with no width has nothing to sample across", .{ ctx.op.name, ctx.portName(1) });
+        // Divide WIDE and clamp there, rather than narrowing to Q16.16
+        // first. A row read long past its life has a ratio that does not fit
+        // Q16.16, and narrowing first refuses it for overflow — but "past
+        // the end of the curve" is a well-defined answer however far past it
+        // is, so refusing would be wrong. The clamp is also load-bearing for
+        // safety: `sampleCurve` turns `u` into an array index, and without
+        // it a row one frame BEFORE its birth panics on the cast.
+        const wide: i64 = @divFloor(@as(i64, t) << FRAC_BITS, span);
+        const u: Fixed = if (wide >= ONE) ONE else if (wide <= 0) 0 else @intCast(wide);
         ctx.out[0] = try sampleCurve(ctx, u, xs);
     }
 
@@ -1688,6 +1703,46 @@ test "row: `over` clamps outside the span, and one knot is a constant" {
     try std.testing.expectEqual(ONE / 4, rows.u[0][1]);
     try std.testing.expectEqual(ONE / 4, rows.u[1][1]);
     try std.testing.expectEqual(ONE / 4, rows.u[2][1]);
+}
+
+test "row: `over`'s two edges, both of them spindrift's rulings" {
+    // These are the only two places the core kernel and the host word it
+    // replaced ever disagreed, found by diffing them at the hand-over
+    // (spindrift `cde9eec`). The middle was already bit-identical, so these
+    // gates are the whole of what the merge changed.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    // Row 0: a NEGATIVE span. It used to clamp silently to the first knot,
+    // which hides an authoring mistake at the one moment it could be said.
+    rows.u[0][0] = -ONE;
+    rows.age[0] = HALF;
+    // Row 1: an age enormously past its life. The ratio does not fit Q16.16,
+    // and narrowing before the clamp refused it for overflow — but "past the
+    // end" is a well-defined answer however far past it is, so it must be
+    // the LAST knot, not a refusal.
+    rows.u[1][0] = ONE / 1024; // a life of ~1 ms
+    rows.age[1] = 32000 * ONE; // …read 32000 s later: a ratio of ~32.7 million
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.age | over row.u0 [1, 0.7, 0] | write row.size
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual(@as(u64, 1), sc.refusals);
+    try std.testing.expect(std.mem.indexOf(u8, sc.first.text(), "is not positive") != null);
+    try std.testing.expectEqual(ONE, rows.size[0]); // nothing written
+
+    rt.evalRow(&sc, 1, ONE, null);
+    try std.testing.expectEqual(@as(u64, 1), sc.refusals); // still just the one
+    try std.testing.expectEqual(@as(Fixed, 0), rows.size[1]); // the last knot
 }
 
 test "row: a record ramp is a colour ramp — `over` interpolates componentwise" {
