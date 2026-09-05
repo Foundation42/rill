@@ -94,10 +94,18 @@ pub const FieldKind = enum { scalar, vec3 };
 
 /// One field of the host's row. `writable` false refuses `write row.<name>`
 /// at mount — `age`, `life`, `seed` are the spray's, a kernel reads them.
+/// `bounds` is a closed range a SCALAR field's landed value must fall in:
+/// a write outside it lands nothing and is a refusal on the write node,
+/// with the value and the range in its words (spindrift beat 6, campaign
+/// 2 ruling 3 — `alpha` in [0, 1]: a kernel that says 1.2 has a curve
+/// wrong, and a clamp would hide it while the picture looked right).
+/// Checked on the value that would LAND — after `add` and after an axis
+/// composes with its vector — never on the queued operand alone.
 pub const Field = struct {
     name: []const u8,
     kind: FieldKind,
     writable: bool = true,
+    bounds: ?[2]Fixed = null,
 };
 
 /// The host's population format, as the runtime sees it.
@@ -189,6 +197,9 @@ pub const Ctx = struct {
     detail: *registry.Detail,
     /// Pre-resolved by mount for `write` nodes; null everywhere else.
     write_ref: ?WriteRef = null,
+    /// The node being evaluated — a queued write remembers it, so a write
+    /// refused after the sweep lands its refusal on the node that wrote.
+    node: graph.NodeId = 0,
     scratch: *Scratch,
 
     pub fn refuse(self: *Ctx, comptime fmt: []const u8, args: anytype) Error {
@@ -240,7 +251,7 @@ pub const Ctx = struct {
     /// Queue a row write; applied after the sweep, in node order, so every
     /// node in a row's sweep reads the tick's snapshot (rill's own rule).
     pub fn write(self: *Ctx, ref: FieldRef, mode: WriteMode, v: Val) Error!void {
-        self.scratch.queueWrite(.{ .ref = ref, .mode = mode, .val = v }) catch
+        self.scratch.queueWrite(.{ .ref = ref, .mode = mode, .val = v, .node = self.node }) catch
             return self.refuse("{s}: too many writes in one kernel sweep", .{self.op.name});
     }
 
@@ -249,7 +260,7 @@ pub const Ctx = struct {
     }
 };
 
-const QueuedWrite = struct { ref: FieldRef, mode: WriteMode, val: Val };
+const QueuedWrite = struct { ref: FieldRef, mode: WriteMode, val: Val, node: graph.NodeId };
 
 /// Per-thread evaluation scratch. One per worker; `evalRow` touches nothing
 /// else that is mutable, which is the thread-safety contract.
@@ -596,6 +607,7 @@ pub const Runtime = struct {
                 .op = def,
                 .detail = &detail,
                 .write_ref = self.node_write[n.id],
+                .node = n.id,
                 .scratch = sc,
             };
             def.row.eval.?(&ctx) catch {
@@ -613,8 +625,26 @@ pub const Runtime = struct {
             }
         }
 
-        // Writes land after the sweep, in node order.
-        for (sc.writes[0..sc.n_writes]) |w| self.applyWrite(r, w);
+        // Writes land after the sweep, in node order. A landed value
+        // outside its field's bounds lands nothing, and is a refusal on
+        // the node that wrote it — counted like a refusal at eval, with
+        // the value and the range in its words.
+        for (sc.writes[0..sc.n_writes]) |w| {
+            if (self.applyWrite(r, w)) |_| continue else |_| {}
+            sc.refusals += 1;
+            if (sc.first_node == null) {
+                sc.first_node = w.node;
+                const f = self.plane.schema[w.ref.field];
+                const b = f.bounds.?;
+                var vb: [24]u8 = undefined;
+                var lb: [24]u8 = undefined;
+                var hb: [24]u8 = undefined;
+                const landed = self.landedScalar(r, w) orelse 0;
+                sc.first.set("{s}: row.{s} = {s} is outside [{s}, {s}] — the write lands nothing", .{
+                    prog.nodes.items[w.node].name, f.name, decimal(&vb, landed), decimal(&lb, b[0]), decimal(&hb, b[1]),
+                });
+            }
+        }
         if (sc.retire) self.plane.retire(r);
     }
 
@@ -627,31 +657,62 @@ pub const Runtime = struct {
         };
     }
 
-    fn applyWrite(self: *const Runtime, r: u32, w: QueuedWrite) void {
+    /// The value a queued write would land: the operand composed with the
+    /// snapshot under its mode and axis. Null where nothing lands (a vec3
+    /// on an axis, an add of unlike kinds — refused at eval; cannot reach).
+    fn landedVal(self: *const Runtime, r: u32, w: QueuedWrite) ?Val {
         const cur = self.plane.read(r, w.ref.field);
         var next = cur;
         if (w.ref.axis) |axis| {
             // An axis write composes with the rest of the vector.
             const s: Fixed = switch (w.val) {
                 .scalar => |x| x,
-                else => return, // refused at eval; cannot reach here with a vec3
+                else => return null,
             };
             switch (next) {
                 .vec3 => |*v| v[axis] = switch (w.mode) {
                     .replace => s,
                     .add => v[axis] +% s,
                 },
-                else => return,
+                else => return null,
             }
         } else {
             next = switch (w.mode) {
                 .replace => w.val,
-                .add => addVal(cur, w.val) orelse return,
+                .add => addVal(cur, w.val) orelse return null,
             };
+        }
+        return next;
+    }
+
+    fn landedScalar(self: *const Runtime, r: u32, w: QueuedWrite) ?Fixed {
+        const v = self.landedVal(r, w) orelse return null;
+        return if (v == .scalar) v.scalar else null;
+    }
+
+    /// Land one queued write, or refuse it: `error.OutOfBounds` when the
+    /// field carries bounds and the landed scalar is outside them.
+    fn applyWrite(self: *const Runtime, r: u32, w: QueuedWrite) error{OutOfBounds}!void {
+        const next = self.landedVal(r, w) orelse return;
+        if (self.plane.schema[w.ref.field].bounds) |b| {
+            if (next == .scalar and (next.scalar < b[0] or next.scalar > b[1])) return error.OutOfBounds;
         }
         self.plane.write(r, w.ref.field, next);
     }
 };
+
+/// A Q16.16 value as a decimal with four places, for a refusal's words —
+/// integer arithmetic, like everything on the row.
+fn decimal(buf: []u8, v: Fixed) []const u8 {
+    const mag: u64 = @abs(v);
+    var whole = mag >> 16;
+    var frac = ((mag & 0xFFFF) * 10000 + 32768) >> 16;
+    if (frac == 10000) {
+        whole += 1;
+        frac = 0;
+    }
+    return std.fmt.bufPrint(buf, "{s}{d}.{d:0>4}", .{ if (v < 0) "-" else "", whole, frac }) catch "?";
+}
 
 fn addVal(a: Val, b: Val) ?Val {
     return switch (a) {
@@ -1176,6 +1237,7 @@ const TestRows = struct {
     age: [4]Fixed = .{0} ** 4,
     size: [4]Fixed = .{ONE} ** 4,
     u: [4][4]Fixed = .{.{ 0, 0, 0, 0 }} ** 4,
+    alpha: [4]Fixed = .{0} ** 4,
     retired: [4]bool = .{false} ** 4,
 
     const schema = [_]Field{
@@ -1187,6 +1249,8 @@ const TestRows = struct {
         .{ .name = "u1", .kind = .scalar },
         .{ .name = "u2", .kind = .scalar },
         .{ .name = "u3", .kind = .scalar },
+        // A bounded field, as spindrift's `alpha` is (beat 6).
+        .{ .name = "alpha", .kind = .scalar, .bounds = .{ 0, ONE } },
     };
 
     fn asPlane(self: *TestRows) Plane {
@@ -1199,6 +1263,7 @@ const TestRows = struct {
             1 => .{ .vec3 = self.vel[r] },
             2 => .{ .scalar = self.age[r] },
             3 => .{ .scalar = self.size[r] },
+            8 => .{ .scalar = self.alpha[r] },
             else => .{ .scalar = self.u[r][field - 4] },
         };
     }
@@ -1209,6 +1274,7 @@ const TestRows = struct {
             1 => self.vel[r] = val.vec3,
             2 => self.age[r] = val.scalar,
             3 => self.size[r] = val.scalar,
+            8 => self.alpha[r] = val.scalar,
             else => self.u[r][field - 4] = val.scalar,
         }
     }
@@ -1367,6 +1433,63 @@ test "row: a refusal is per row and counted, and the sweep continues for that ro
     // Row 0's second flow still ran; row 1's division did.
     try std.testing.expectEqual(ONE, rows.u[0][1]);
     try std.testing.expectEqual(HALF, rows.u[1][0]);
+}
+
+test "row: a field's bounds refuse the LANDED value — replace, add and the inclusive top — on the write node, and the row's other writes still land" {
+    // Spindrift beat 6 (campaign 2, ruling 3): `alpha` in [0, 1]. A kernel
+    // that writes 1.2 has a curve wrong; a clamp would hide it while the
+    // picture looked right, so the write lands nothing and says so.
+    // Mutation: the check on the queued operand instead of the landed
+    // value — `add` past the top lands (row 2 below reads 1.25).
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    rows.size[0] = 2 * ONE; // outside
+    rows.size[1] = HALF; // lands
+    rows.size[3] = -ONE; // outside, below
+    {
+        var prog: graph.Program = undefined;
+        var diag = registry.Detail{};
+        var rt = try mountText(gpa, &reg, &rows,
+            \\row.size | write row.alpha
+            \\row.size | write row.u0
+        , &prog, &diag);
+        defer prog.deinit();
+        defer rt.deinit();
+        var sc = try rt.newScratch(gpa);
+        defer sc.deinit();
+        rt.evalRow(&sc, 0, ONE, null);
+        rt.evalRow(&sc, 1, ONE, null);
+        rt.evalRow(&sc, 3, ONE, null);
+        try std.testing.expectEqual(@as(u64, 2), sc.refusals);
+        try std.testing.expectEqual(@as(?graph.NodeId, 0), sc.first_node); // the first `write` is node 0
+        try std.testing.expect(std.mem.indexOf(u8, sc.first.text(), "row.alpha = 2.0000 is outside [0.0000, 1.0000]") != null);
+        try std.testing.expectEqual(@as(Fixed, 0), rows.alpha[0]); // nothing landed…
+        try std.testing.expectEqual(2 * ONE, rows.u[0][0]); // …and the row's other write did
+        try std.testing.expectEqual(HALF, rows.alpha[1]);
+        try std.testing.expectEqual(@as(Fixed, 0), rows.alpha[3]);
+    }
+    // `add`: the sum is what is checked. 0.5 + 0.5 = 1 is inside (the top
+    // is inclusive); 0.75 + 0.5 = 1.25 is not, and 0.75 stays.
+    rows.alpha[2] = ONE - ONE / 4;
+    rows.size[2] = HALF;
+    {
+        var prog: graph.Program = undefined;
+        var diag = registry.Detail{};
+        var rt = try mountText(gpa, &reg, &rows, "row.size | write row.alpha add", &prog, &diag);
+        defer prog.deinit();
+        defer rt.deinit();
+        var sc = try rt.newScratch(gpa);
+        defer sc.deinit();
+        rt.evalRow(&sc, 1, ONE, null);
+        rt.evalRow(&sc, 2, ONE, null);
+        try std.testing.expectEqual(@as(u64, 1), sc.refusals);
+        try std.testing.expect(std.mem.indexOf(u8, sc.first.text(), "row.alpha = 1.2500 is outside") != null);
+        try std.testing.expectEqual(ONE, rows.alpha[1]);
+        try std.testing.expectEqual(ONE - ONE / 4, rows.alpha[2]);
+    }
 }
 
 test "row: broadcasts are the same value for every row, and no value keeps the flow quiet" {
