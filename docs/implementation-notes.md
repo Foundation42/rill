@@ -2720,3 +2720,51 @@ gaussian's support go compactly zero at r2 ≈ 22 where loam's goes at 32, so
 the two would disagree in the tail by construction and the exactness bit could
 not be earned; and `concat`/`push` on arrays, which is a core gap noticed
 here.
+
+
+**The slate, 2026-09-07 (Christian's residual bus).** A named register file
+that lives for one row of one tick: `slide` says `contact`, the lines below
+read `slate.contact`, the next row starts blank. `docs/slate.md` has the
+shape; the reason it is not a row field is structural — `evalRow` lands
+queued writes AFTER the node loop, so a field written at node 3 is invisible
+at node 7 and arrives next tick, and a value crossing a tick boundary is
+state owing a dump, a format version and a cross-language reader. That is
+the wrong price for a fact that stops being true in sixteen milliseconds.
+
+Third path head beside `plane.` and `row.`, and reserved for the same reason
+they are. Names resolve at MOUNT into the slots that read them — the
+pre-resolution `write_ref` already gets — so eval costs one store per
+listening slot and nothing when nobody listens. `OpDef.publishes` declares
+what an operator may say, at most `MAX_PUBLISHES`, each a bare word (a dot
+would spell a path nobody can write).
+
+Two refusals, and they are why publishing is declared rather than
+discovered: a name nothing says, and a reader on or above the line that says
+it. A side channel you can misspell in silence is worse than no side
+channel. Said-and-never-read is fine — an operator says the same thing
+whether or not anyone is listening.
+
+**Gates three, mutations five, all bitten:** the seed taking a host
+broadcast for a slate name; `sub_slate` left uninitialised; `publish`
+filling only the first listener; either refusal dropped.
+
+**Found, and it is the reason the run is worth more than the reasoning.**
+`sub_slate` was allocated and never memset, so every ORDINARY subscription
+read undefined memory — a bool of 0xaa is `true`, so every `row.…` field
+would have seeded blank. The suite did not notice because the block that
+sets the slate entries happened to leave the arena in a state that worked.
+It surfaced as a mutation that appeared to BITE and then would not
+reproduce: the mutation was masking the uninitialised read rather than
+failing on it. A survivor is a signal; so is an inconsistent bite.
+
+**Not one mechanism with `node_scratch`** (`fb2164a`), which was the guess
+going in. That is a node's own memory across ticks, addressed by the node
+and private to it; the slate is name-addressed, shared, and dies at the row.
+The addressing differs, not only the lifetime.
+
+**Not built:** a slate value that is a native handle rather than a `Val`.
+The lifetime rule already makes it safe — that is the whole argument for it
+— but the row's `Val` is a closed union and no customer needs it yet, the
+one known candidate (a decoded RBF set) having been answered by
+`node_scratch` instead. Trigger: an operator with something to say that a
+`Val` cannot hold.

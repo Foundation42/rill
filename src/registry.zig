@@ -431,6 +431,11 @@ pub const Routing = enum { anywhere, main };
 /// rest. The host derives it with the same one-line loop it uses for
 /// routing (Matryoshka's `routesToMain`), which is why there is a field
 /// here and no predicate.
+/// Slate names one operator may publish. Four is a bound, not a budget: it
+/// keeps the per-node table flat and an op wanting a fifth is an op that
+/// should be publishing a record.
+pub const MAX_PUBLISHES: usize = 4;
+
 pub const OpDef = struct {
     name: []const u8,
     inputs: []const Port = &.{},
@@ -477,6 +482,24 @@ pub const OpDef = struct {
     /// the keyword. `map`/`keep`/`reduce` leave it empty, so their body is
     /// positional and required.
     body_kw: []const u8 = "",
+    /// **The slate** (2026-09-07, Christian's residual bus): names this
+    /// operator may publish to the within-tick, name-addressed side channel,
+    /// read elsewhere in the same program as `slate.<name>`.
+    ///
+    /// It exists because a row's FIELDS cannot carry it. `row.zig`'s writes
+    /// land only after the whole node loop, so a field written at node 3 is
+    /// invisible at node 7 and arrives a tick late — and a value that crosses
+    /// a tick boundary is state, owing a dump and a format version. A slate
+    /// entry crosses nothing: it is wiped per row, so `slide` can tell a line
+    /// below it that it touched something, this tick, for nothing.
+    ///
+    /// Publishing is declared rather than discovered so the registry can see
+    /// it: the audit reaches these the way it reaches ports, and a reader of
+    /// a name nobody publishes is refused at MOUNT rather than reading null
+    /// for ever. At most `MAX_PUBLISHES`, and a program that reads a name
+    /// ABOVE the line that publishes it is refused too — the ordering is by
+    /// statement, so it is checked rather than left to be discovered.
+    publishes: []const []const u8 = &.{},
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,
@@ -493,7 +516,7 @@ pub const OpDef = struct {
 
 pub const OpId = u32;
 
-pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName, AmbiguousOptionals } || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName, AmbiguousOptionals, TooManyPublishes, BadPublishName } || std.mem.Allocator.Error;
 
 /// Words the *syntax* claims, which therefore may not name an operator or an
 /// `as`/`use` binding. The list lives here because the registry owns the
@@ -505,8 +528,10 @@ pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStati
 pub fn isReservedWord(s: []const u8) bool {
     // `row` is the second path head (spindrift beat 1, ruled 2026-09-01): a
     // kernel is a rill whose plane is the row, and `row.pos` is a path the
-    // way `plane.pos` is. Reserved for the same reason `plane` is.
-    const words = [_][]const u8{ "plane", "row", "use", "def", "as", "also", "true", "false" };
+    // way `plane.pos` is. `slate` is the third (2026-09-07). Reserved for the
+    // same reason `plane` is: an operator wearing a path head's name would be
+    // permanently shadowed by the grammar.
+    const words = [_][]const u8{ "plane", "row", "slate", "use", "def", "as", "also", "true", "false" };
     for (words) |w| {
         if (std.mem.eql(u8, s, w)) return true;
     }
@@ -544,6 +569,13 @@ pub const Registry = struct {
         // `#` condition, `$` field), never operators. Refused at registration
         // for the same reason reserved words are: a `$`-led op would be
         // permanently shadowed by the channel grammar.
+        if (def.publishes.len > MAX_PUBLISHES) return error.TooManyPublishes;
+        for (def.publishes) |p| {
+            // A slate name is one bare word: it is read as `slate.<name>`, so
+            // a dot or a space in it would spell a path nobody can write.
+            if (p.len == 0) return error.BadPublishName;
+            if (std.mem.indexOfAny(u8, p, ". \t") != null) return error.BadPublishName;
+        }
         if (def.name.len > 0 and std.mem.indexOfScalar(u8, "@^#$", def.name[0]) != null) {
             return error.ReservedName;
         }

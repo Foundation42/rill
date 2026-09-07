@@ -197,10 +197,25 @@ pub const Ctx = struct {
     detail: *registry.Detail,
     /// Pre-resolved by mount for `write` nodes; null everywhere else.
     write_ref: ?WriteRef = null,
+    /// Pre-resolved by mount, one entry per name in this op's `publishes`:
+    /// the slots a `slate.<name>` read is wired to. Empty where nothing in
+    /// the program reads what this op says, which is not an error — an op
+    /// says the same thing whether or not anyone is listening.
+    pub_refs: []const []const graph.SlotId = &.{},
     /// The node being evaluated — a queued write remembers it, so a write
     /// refused after the sweep lands its refusal on the node that wrote.
     node: graph.NodeId = 0,
     scratch: *Scratch,
+
+    /// Say `v` on the slate under this op's `i`-th published name. Within
+    /// the tick and within the row: every `slate.<name>` read BELOW this
+    /// node sees it, nothing above does, and the next row starts blank.
+    /// Costs one store per listening slot and nothing at all when nobody
+    /// listens.
+    pub fn publish(self: *Ctx, i: usize, v: Val) void {
+        if (i >= self.pub_refs.len) return;
+        for (self.pub_refs[i]) |sid| self.scratch.slots[sid] = v;
+    }
 
     pub fn refuse(self: *Ctx, comptime fmt: []const u8, args: anytype) Error {
         self.detail.set(fmt, args);
@@ -288,7 +303,14 @@ pub const Scratch = struct {
     }
 };
 
+/// The path prefix a slate read wears. Not `row.` (that is a field, and
+/// lands a tick later) and not `plane.` (that is the host's, and crosses
+/// ticks by design).
+pub const SLATE = "slate.";
+
 pub const MountError = error{
+    SlateUnsaid,
+    SlateOutOfOrder,
     NotRowLegal,
     UnknownField,
     ReadOnlyField,
@@ -330,6 +352,29 @@ pub const Runtime = struct {
     /// is the first STATELESS array: one value, converted once, shared by
     /// every row, and a live element (`[row.age, 1]`) is refused by name.
     folded: []bool,
+    /// **The slate** — the within-tick, name-addressed side channel
+    /// (2026-09-07). A `slate.<name>` read is not a broadcast and not a
+    /// field: it is wired at mount to the slots that read it, filled by
+    /// whichever node publishes that name, and blank again on the next row.
+    ///
+    /// It is here rather than in a row field because `applyWrite` runs only
+    /// after the whole node loop: a field written at node 3 is invisible at
+    /// node 7 and lands a tick late, and a value crossing a tick boundary is
+    /// STATE — owing a dump, a format version and a cross-language reader.
+    /// The slate crosses nothing.
+    ///
+    /// Per slate index: the name, and every slot reading it.
+    slate_names: [][]const u8,
+    slate_targets: [][]const graph.SlotId,
+    /// Per `prog.subs` index: this subscription is a slate read, so the seed
+    /// leaves it BLANK rather than taking the host's broadcast. A host that
+    /// fed `slate.contact` would otherwise be publishing across the tick
+    /// boundary the slate exists to avoid.
+    sub_slate: []bool,
+    /// Per node × `registry.MAX_PUBLISHES`: the slots that node's i-th
+    /// published name feeds. Handed to `Ctx.pub_refs`, the same way
+    /// `node_write` is handed to `write_ref`.
+    pub_refs: [][]const graph.SlotId,
 
     /// Mount, or refuse with the words in `diag`. Every refusal names the
     /// node and what it asked for; the error names the category.
@@ -344,11 +389,22 @@ pub const Runtime = struct {
             .node_write = try gpa.alloc(?WriteRef, prog.nodeCount()),
             .node_state = try gpa.alloc(NodeState, prog.nodeCount()),
             .folded = try gpa.alloc(bool, prog.nodeCount()),
+            .slate_names = &.{},
+            .slate_targets = &.{},
+            .sub_slate = try gpa.alloc(bool, prog.subs.items.len),
+            .pub_refs = try gpa.alloc([]const graph.SlotId, prog.nodeCount() * registry.MAX_PUBLISHES),
             .channels_used = 0,
             .n_sinks = 0,
         };
         errdefer rt.deinit();
         @memset(rt.broadcast, null);
+        // Every subscription is NOT a slate read until the slate block below
+        // says so. Allocated-and-unset left this reading undefined memory for
+        // every ordinary `row.…` and broadcast sub — a bool of 0xaa is `true`,
+        // so every field read would have seeded blank. It was found by a
+        // mutation that appeared to bite and then would not reproduce: the
+        // mutation was masking the uninitialised read, not failing on it.
+        @memset(rt.sub_slate, false);
         @memset(rt.literals, null);
         @memset(rt.node_write, null);
         @memset(rt.node_state, .{});
@@ -408,6 +464,99 @@ pub const Runtime = struct {
                 rt.sub_refs[i] = try resolveField(plane.schema, s.path, diag);
             } else {
                 rt.sub_refs[i] = null;
+            }
+        }
+
+        // --- the slate ------------------------------------------------
+        // Two directions that must agree: a `slate.<name>` read wires the
+        // slots that want the value, and an op's `publishes` says who fills
+        // them. Both refusals below are the point of declaring it at all —
+        // a slate that answered null when nobody said anything would be a
+        // side channel you could misspell in silence.
+        {
+            var order = try gpa.alloc(u32, prog.nodeCount());
+            defer gpa.free(order);
+            for (prog.nodes.items, 0..) |*n, i| order[n.id] = @intCast(i);
+            // Which node reads each input slot, so a read can be placed.
+            var owner = try gpa.alloc(?graph.NodeId, prog.slotCount());
+            defer gpa.free(owner);
+            @memset(owner, null);
+            for (prog.slots.items) |*sl| {
+                if (sl.dir == .in) owner[sl.id] = sl.node;
+            }
+
+            // Every distinct name, from the reads and from the publishers.
+            var names: std.ArrayListUnmanaged([]const u8) = .empty;
+            errdefer names.deinit(gpa);
+            const find = struct {
+                fn go(list: []const []const u8, want: []const u8) ?usize {
+                    for (list, 0..) |x, i| if (std.mem.eql(u8, x, want)) return i;
+                    return null;
+                }
+            }.go;
+            for (prog.subs.items, 0..) |sub, i| {
+                if (!std.mem.startsWith(u8, sub.path, SLATE)) continue;
+                rt.sub_slate[i] = true;
+                const name = sub.path[SLATE.len..];
+                if (find(names.items, name) == null) try names.append(gpa, name);
+            }
+            for (prog.nodes.items) |*n| {
+                for (prog.reg.get(n.op).publishes) |p| {
+                    if (find(names.items, p) == null) try names.append(gpa, p);
+                }
+            }
+
+            // Ownership moves to `rt` BEFORE anything can fail, and every
+            // entry starts empty, so the `errdefer rt.deinit()` above frees
+            // exactly once however this block ends. Handing them over
+            // afterwards instead cost a double free the first time a mount
+            // refused here — the refusal gates found it, which is the whole
+            // reason a refusal gets a gate and not just a branch.
+            const targets = try gpa.alloc([]const graph.SlotId, names.items.len);
+            for (targets) |*t| t.* = &.{};
+            rt.slate_targets = targets;
+            rt.slate_names = try names.toOwnedSlice(gpa);
+            for (rt.slate_names, 0..) |name, ni| {
+                var t: std.ArrayListUnmanaged(graph.SlotId) = .empty;
+                errdefer t.deinit(gpa);
+                for (prog.subs.items) |sub| {
+                    if (!std.mem.startsWith(u8, sub.path, SLATE)) continue;
+                    if (!std.mem.eql(u8, sub.path[SLATE.len..], name)) continue;
+                    for (sub.targets.items) |sid| try t.append(gpa, sid);
+                }
+                rt.slate_targets[ni] = try t.toOwnedSlice(gpa);
+            }
+
+            // Wire each publisher to the slots its name feeds, and record
+            // where the first one sits.
+            var first_pub = try gpa.alloc(?u32, rt.slate_names.len);
+            defer gpa.free(first_pub);
+            @memset(first_pub, null);
+            for (rt.pub_refs) |*p| p.* = &.{};
+            for (prog.nodes.items) |*n| {
+                const def = prog.reg.get(n.op);
+                for (def.publishes, 0..) |p, j| {
+                    const ni = find(rt.slate_names, p).?;
+                    rt.pub_refs[@as(usize, n.id) * registry.MAX_PUBLISHES + j] = rt.slate_targets[ni];
+                    const at = order[n.id];
+                    if (first_pub[ni] == null or at < first_pub[ni].?) first_pub[ni] = at;
+                }
+            }
+
+            // Nobody says it, or it is read above the line that says it.
+            for (rt.slate_names, 0..) |name, ni| {
+                if (rt.slate_targets[ni].len == 0) continue; // said, unheard: fine
+                const pub_at = first_pub[ni] orelse {
+                    diag.set("slate.{s}: nothing in this program says '{s}' — a slate name is published by an operator that declares it, and a read of one nobody says would be quiet for ever", .{ name, name });
+                    return error.SlateUnsaid;
+                };
+                for (rt.slate_targets[ni]) |sid| {
+                    const nid = owner[sid] orelse continue;
+                    if (order[nid] <= pub_at) {
+                        diag.set("{s}: reads slate.{s} on or above the line that says it — the slate is filled as the program runs, in statement order, so a reader must sit BELOW its publisher", .{ prog.node(nid).name, name });
+                        return error.SlateOutOfOrder;
+                    }
+                }
             }
         }
 
@@ -527,6 +676,11 @@ pub const Runtime = struct {
         for (self.literal_arrays.items) |arr| self.gpa.free(arr);
         self.literal_arrays.deinit(self.gpa);
         self.gpa.free(self.folded);
+        for (self.slate_targets) |t| self.gpa.free(t);
+        self.gpa.free(self.slate_targets);
+        self.gpa.free(self.slate_names);
+        self.gpa.free(self.sub_slate);
+        self.gpa.free(self.pub_refs);
         self.gpa.free(self.sub_refs);
         self.gpa.free(self.broadcast);
         self.gpa.free(self.literals);
@@ -566,7 +720,10 @@ pub const Runtime = struct {
         // Seed: literals, then subscriptions (row fields and broadcasts).
         @memcpy(sc.slots, self.literals);
         for (prog.subs.items, 0..) |s, i| {
-            const v: ?Val = if (self.sub_refs[i]) |ref| self.readRef(r, ref) else self.broadcast[i];
+            // A slate read starts every row BLANK. Taking the host's
+            // broadcast here would let a value cross the tick boundary the
+            // slate exists to avoid.
+            const v: ?Val = if (self.sub_slate[i]) null else if (self.sub_refs[i]) |ref| self.readRef(r, ref) else self.broadcast[i];
             for (s.targets.items) |sid| sc.slots[sid] = v;
         }
         sc.n_writes = 0;
@@ -607,6 +764,10 @@ pub const Runtime = struct {
                 .op = def,
                 .detail = &detail,
                 .write_ref = self.node_write[n.id],
+                // The slate's write side, pre-resolved at mount exactly as
+                // `write_ref` is: an op says its i-th name and the store
+                // lands in whatever slots read it, with no lookup here.
+                .pub_refs = self.pub_refs[@as(usize, n.id) * registry.MAX_PUBLISHES ..][0..def.publishes.len],
                 .node = n.id,
                 .scratch = sc,
             };
@@ -1299,6 +1460,134 @@ fn mountText(gpa: std.mem.Allocator, reg: *registry.Registry, rows: *TestRows, s
     };
     return Runtime.mount(gpa, prog_out, rows.asPlane(), diag) catch |err| {
         std.debug.print("mount: {s}\n", .{diag.text()});
+        prog_out.deinit();
+        return err;
+    };
+}
+
+// A test-only publisher: nothing in the core set says anything yet, and the
+// slate's whole contract is between two operators, so the gate has to supply
+// one. It says only when its input is non-zero, which is what makes "blank
+// again on the next row" a claim a mutation can fail.
+fn kBeacon(ctx: *Ctx) Error!void {
+    const x = try ctx.scalar(0);
+    if (x != 0) ctx.publish(0, .{ .scalar = x +% ONE });
+    ctx.out[0] = .{ .scalar = x };
+}
+
+fn beaconPlane(ctx: *registry.EvalCtx) registry.EvalError!registry.Emit {
+    return ctx.refuse("beacon is a row word", .{});
+}
+
+const BEACON = registry.OpDef{
+    .name = "beacon",
+    .inputs = &.{.{ .name = "in", .ty = types.Tag.number }},
+    .outputs = &.{.{ .name = "out", .ty = types.Tag.number }},
+    .help = "Test only: passes its input on, and says input + 1 on the slate under `mark` when the input is not zero.",
+    .class = .reads,
+    .routes = .anywhere,
+    .publishes = &.{"mark"},
+    // Not `only`: these gates mount through the plane parser like every
+    // other row test here, and a row-only op is refused there by design.
+    // Row-onlyness is orthogonal to the slate — `beacon` is a stand-in for
+    // whatever really says something, and spindrift's `slide` is the real one.
+    .row = .{ .exact = true, .eval = kBeacon },
+    .eval = beaconPlane,
+};
+
+test "slate: a value said at one node is read below it, in the same row, and the next row starts blank" {
+    // The slate's reason for existing: `applyWrite` runs only AFTER the node
+    // loop, so a row FIELD written at node 3 is invisible at node 7 and lands
+    // a tick late. The slate crosses neither boundary.
+    //
+    // Mutation: the seed takes the broadcast for a slate sub instead of null
+    // — row 0 reads row 1's leftover and the "blank again" half fails.
+    // Mutation: `publish` writes one target instead of all — a second reader
+    // of the same name goes quiet.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    _ = try reg.register(BEACON);
+    var rows = TestRows{};
+    rows.vel[1] = .{ ONE, 0, 0 };
+    rows.vel[0] = .{ 0, 0, 0 }; // says nothing, so reads nothing
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.vel.x | beacon | write row.size
+        \\slate.mark | write row.pos.x
+        \\slate.mark | mul 10 | write row.pos.y
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+
+    rt.evalRow(&sc, 1, ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+    try std.testing.expectEqual(ONE, rows.size[1]);
+    // Said once, read twice, in the same row.
+    try std.testing.expectEqual(2 * ONE, rows.pos[1][0]);
+    try std.testing.expectEqual(20 * ONE, rows.pos[1][1]);
+
+    // Row 0 says nothing, so it reads nothing: the writes stay quiet and the
+    // row keeps the zeros it had.
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+    try std.testing.expectEqual([3]Fixed{ 0, 0, 0 }, rows.pos[0]);
+
+    // And the HOST cannot say it either. A slate name is not a broadcast: the
+    // seed refuses to take one, because a host-fed slate value would be a
+    // value crossing the tick boundary, which is the one thing the slate
+    // promises not to do. This is `sub_slate`'s actual job — the per-row
+    // freshness above comes from the seed overwriting the slot, so without
+    // this the line would be untested.
+    // Mutation: the seed takes the broadcast for a slate sub — row 0 reads 99.
+    for (prog.subs.items, 0..) |sub, i| {
+        if (std.mem.startsWith(u8, sub.path, SLATE)) rt.setBroadcast(i, .{ .scalar = 99 * ONE });
+    }
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual([3]Fixed{ 0, 0, 0 }, rows.pos[0]);
+}
+
+test "slate: mount refuses a name nobody says, and a read on or above the line that says it" {
+    // Both are the reason `publishes` is declared rather than discovered: a
+    // side channel you can misspell in silence is worse than no side channel.
+    // Mutation: either refusal dropped — the misspelling reads null for ever,
+    // and the out-of-order read is quiet on every row instead of loud once.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    _ = try reg.register(BEACON);
+    var rows = TestRows{};
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+
+    // Nobody says `mark`.
+    try std.testing.expectError(error.SlateUnsaid, mountTextQuiet(gpa, &reg, &rows, "slate.mark | write row.pos.x", &prog, &diag));
+    try std.testing.expect(std.mem.indexOf(u8, diag.text(), "nothing in this program says") != null);
+
+    // Said, but below the line that reads it.
+    try std.testing.expectError(error.SlateOutOfOrder, mountTextQuiet(gpa, &reg, &rows,
+        \\slate.mark | write row.pos.x
+        \\row.vel.x | beacon | write row.size
+    , &prog, &diag));
+    try std.testing.expect(std.mem.indexOf(u8, diag.text(), "above the line that says it") != null);
+
+    // Said and never read is fine: an op says the same thing whether or not
+    // anyone is listening.
+    var rt = try mountText(gpa, &reg, &rows, "row.vel.x | beacon | write row.size", &prog, &diag);
+    prog.deinit();
+    rt.deinit();
+}
+
+/// `mountText` without the print — these mounts are SUPPOSED to refuse.
+fn mountTextQuiet(gpa: std.mem.Allocator, reg: *registry.Registry, rows: *TestRows, src: []const u8, prog_out: *graph.Program, diag: *registry.Detail) !Runtime {
+    var pdiag = parser.Diag{};
+    prog_out.* = try parser.parse(gpa, reg, "k", src, &pdiag);
+    return Runtime.mount(gpa, prog_out, rows.asPlane(), diag) catch |err| {
         prog_out.deinit();
         return err;
     };

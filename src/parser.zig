@@ -1129,14 +1129,20 @@ const Parser = struct {
         return out.items;
     }
 
-    /// The two path heads. `plane` is the world; `row` is the row a kernel is
-    /// mounted on (spindrift beat 1, ruled 2026-09-01: a kernel is a rill whose
-    /// plane is the row). Both are subscriptions in the graph and write
-    /// targets for the sink; which store answers is the mount's business — a
-    /// `row.…` path in a program mounted on the world plane is a path nobody
-    /// serves, loud at the same place a mistyped knob path is.
+    /// The three path heads. `plane` is the world; `row` is the row a kernel
+    /// is mounted on (spindrift beat 1, ruled 2026-09-01: a kernel is a rill
+    /// whose plane is the row); `slate` is the within-tick side channel one
+    /// operator says something on and another reads, wiped per row
+    /// (2026-09-07, and `row.zig`'s `SLATE`). All three are subscriptions in
+    /// the graph; which store answers is the mount's business — a `row.…`
+    /// path in a program mounted on the world plane is a path nobody serves,
+    /// loud at the same place a mistyped knob path is, and a `slate.…` name
+    /// nobody says is loud at the same place again.
+    ///
+    /// `slate` is a head and not an operator name for the same reason `row`
+    /// is: it is a place, and the grammar that reaches a place is a path.
     fn isPathHead(text: []const u8) bool {
-        return std.mem.eql(u8, text, "plane") or std.mem.eql(u8, text, "row");
+        return std.mem.eql(u8, text, "plane") or std.mem.eql(u8, text, "row") or std.mem.eql(u8, text, "slate");
     }
 
     /// `plane` `.` segment… — returns either a plain path ref or, for the
