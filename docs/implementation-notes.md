@@ -2768,3 +2768,27 @@ The lifetime rule already makes it safe — that is the whole argument for it
 one known candidate (a decoded RBF set) having been answered by
 `node_scratch` instead. Trigger: an operator with something to say that a
 `Val` cannot hold.
+
+
+**The slate's handle lane, 2026-09-07.** The half recorded-not-built that
+morning, built the same day because its trigger fired: spindrift's `near`
+has a list of row ids to hand on, and a list is the one thing a row `Val`
+cannot hold — the row plane's arrays are literal-only and no operator emits
+one. So the slate grew a second lane: `Handle{ ptr, len }`, published with
+`ctx.publishHandle`, read with `ctx.handle`, declared by `OpDef.consumes`
+the way the Val lane is declared by `publishes`.
+
+It is deliberately invisible to the language. `slate.<name>` in a program is
+always the Val lane; the handle lane is between operators only, so a pointer
+never reaches a field, a dump, or a comparison. And it is safe for exactly
+the reason the rest of the slate is — it cannot survive the row, which is
+not a promise anybody keeps but the `@memset` at the top of `evalRow`.
+
+Handle consumers are held to the slate's two rules like everybody else, and
+checked against the NODE order rather than a slot, since the language never
+gives them one: a consumer of a name nothing says, or one sitting on or
+above its publisher, refuses at mount by name.
+
+`docs/slate.md` updated. Gates and mutations for the lane live in
+spindrift, with the customer that forced it — a mechanism gated only by its
+own test op is a mechanism nobody has used.

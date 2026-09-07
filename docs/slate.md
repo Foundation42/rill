@@ -82,6 +82,30 @@ in silence is worse than no side channel**.
 Said and never read is fine: an operator says the same thing whether or not
 anyone is listening.
 
+## The handle lane
+
+A slate name has two lanes. `slate.<name>` in a program is the **Val** lane
+— numbers, vectors, booleans, what the language can read. Operators also
+get a **handle** lane under the same name: `Handle{ ptr, len }`, a pointer
+the publisher owns.
+
+```zig
+.publishes = &.{"crowd"},   // on the publisher
+ctx.publishHandle(0, .{ .ptr = @ptrCast(buf.ptr), .len = n });
+
+.consumes = &.{"crowd"},    // on the reader
+const h = ctx.handle(0) orelse return;
+```
+
+The language never sees it, so a pointer cannot reach a field, a dump or a
+comparison. It is safe for the same reason as everything else here: it
+cannot survive the row. That is not a promise anybody keeps — it is the
+`@memset` at the top of `evalRow`.
+
+The first customer is spindrift's `near`, which has a list of row ids to
+hand to `push`. A list is precisely what a row `Val` cannot hold: the row
+plane's arrays are literal-only and no operator emits one.
+
 ## What it is not
 
 Not a cache. `Runtime.node_scratch` (rill `fb2164a`) is a node's own memory

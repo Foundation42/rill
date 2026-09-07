@@ -500,6 +500,11 @@ pub const OpDef = struct {
     /// ABOVE the line that publishes it is refused too — the ordering is by
     /// statement, so it is checked rather than left to be discovered.
     publishes: []const []const u8 = &.{},
+    /// Slate names this operator reads from the HANDLE lane — a pointer the
+    /// publisher owns, which no `Val` can hold and the language never sees.
+    /// Declared for the same reason `publishes` is: mount checks that
+    /// somebody says each one, and says it above this node.
+    consumes: []const []const u8 = &.{},
     /// Variadic operators (record construction) take their port list from the
     /// call site; `inputs` is ignored and one `word` static names each field.
     variadic: bool = false,
@@ -569,8 +574,12 @@ pub const Registry = struct {
         // `#` condition, `$` field), never operators. Refused at registration
         // for the same reason reserved words are: a `$`-led op would be
         // permanently shadowed by the channel grammar.
-        if (def.publishes.len > MAX_PUBLISHES) return error.TooManyPublishes;
+        if (def.publishes.len > MAX_PUBLISHES or def.consumes.len > MAX_PUBLISHES) return error.TooManyPublishes;
         for (def.publishes) |p| {
+            if (p.len == 0) return error.BadPublishName;
+            if (std.mem.indexOfAny(u8, p, ". \t") != null) return error.BadPublishName;
+        }
+        for (def.consumes) |p| {
             // A slate name is one bare word: it is read as `slate.<name>`, so
             // a dot or a space in it would spell a path nobody can write.
             if (p.len == 0) return error.BadPublishName;

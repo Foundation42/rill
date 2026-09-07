@@ -202,6 +202,10 @@ pub const Ctx = struct {
     /// the program reads what this op says, which is not an error — an op
     /// says the same thing whether or not anyone is listening.
     pub_refs: []const []const graph.SlotId = &.{},
+    /// Per `publishes` entry, and per `consumes` entry: the slate index, for
+    /// the handle lane. Resolved at mount like everything else here.
+    pub_idx: []const u16 = &.{},
+    con_idx: []const u16 = &.{},
     /// The node being evaluated — a queued write remembers it, so a write
     /// refused after the sweep lands its refusal on the node that wrote.
     node: graph.NodeId = 0,
@@ -215,6 +219,20 @@ pub const Ctx = struct {
     pub fn publish(self: *Ctx, i: usize, v: Val) void {
         if (i >= self.pub_refs.len) return;
         for (self.pub_refs[i]) |sid| self.scratch.slots[sid] = v;
+    }
+
+    /// Say a native handle under this op's `i`-th published name. Nothing in
+    /// the language can read it; the operators that declare `consumes` can.
+    pub fn publishHandle(self: *Ctx, i: usize, h: Handle) void {
+        if (i >= self.pub_idx.len) return;
+        self.scratch.handles[self.pub_idx[i]] = h;
+    }
+
+    /// The handle under this op's `i`-th consumed name, or null if the
+    /// publisher was quiet for this row.
+    pub fn handle(self: *Ctx, i: usize) ?Handle {
+        if (i >= self.con_idx.len) return null;
+        return self.scratch.handles[self.con_idx[i]];
     }
 
     pub fn refuse(self: *Ctx, comptime fmt: []const u8, args: anytype) Error {
@@ -283,6 +301,8 @@ pub const Scratch = struct {
     gpa: std.mem.Allocator,
     slots: []?Val,
     writes: []QueuedWrite,
+    /// The slate's handle lane, one per slate name, blanked per row.
+    handles: []?Handle,
     n_writes: usize = 0,
     retire: bool = false,
     /// Refusals this scratch saw, and the first one's words — merged by the
@@ -300,6 +320,7 @@ pub const Scratch = struct {
     pub fn deinit(self: *Scratch) void {
         self.gpa.free(self.slots);
         self.gpa.free(self.writes);
+        self.gpa.free(self.handles);
     }
 };
 
@@ -307,6 +328,18 @@ pub const Scratch = struct {
 /// lands a tick later) and not `plane.` (that is the host's, and crosses
 /// ticks by design).
 pub const SLATE = "slate.";
+
+/// What an operator may say on the slate that a `Val` cannot hold: a
+/// pointer the host owns, and how much of it there is. Deliberately opaque
+/// and deliberately unwritable — it never reaches a field, never reaches
+/// the dump, and never reaches the language. `slate.<name>` in a program is
+/// always the Val lane; the handle lane is between operators only.
+///
+/// It is SAFE for the same reason the rest of the slate is: it cannot
+/// survive the row, so a pointer said here cannot be read after whatever
+/// owns it has moved on. That is not a promise anybody keeps, it is the
+/// clearing at the top of `evalRow`.
+pub const Handle = struct { ptr: ?*anyopaque = null, len: usize = 0 };
 
 pub const MountError = error{
     SlateUnsaid,
@@ -375,6 +408,12 @@ pub const Runtime = struct {
     /// published name feeds. Handed to `Ctx.pub_refs`, the same way
     /// `node_write` is handed to `write_ref`.
     pub_refs: [][]const graph.SlotId,
+    /// Per node × MAX_PUBLISHES / MAX_CONSUMES: the slate index each declared
+    /// name resolved to. `pub_refs` is the Val lane's slots; these are the
+    /// handle lane's, and the consume side has no slots at all because the
+    /// language never sees it.
+    pub_idx: []u16,
+    con_idx: []u16,
 
     /// Mount, or refuse with the words in `diag`. Every refusal names the
     /// node and what it asked for; the error names the category.
@@ -393,6 +432,8 @@ pub const Runtime = struct {
             .slate_targets = &.{},
             .sub_slate = try gpa.alloc(bool, prog.subs.items.len),
             .pub_refs = try gpa.alloc([]const graph.SlotId, prog.nodeCount() * registry.MAX_PUBLISHES),
+            .pub_idx = try gpa.alloc(u16, prog.nodeCount() * registry.MAX_PUBLISHES),
+            .con_idx = try gpa.alloc(u16, prog.nodeCount() * registry.MAX_PUBLISHES),
             .channels_used = 0,
             .n_sinks = 0,
         };
@@ -501,9 +542,9 @@ pub const Runtime = struct {
                 if (find(names.items, name) == null) try names.append(gpa, name);
             }
             for (prog.nodes.items) |*n| {
-                for (prog.reg.get(n.op).publishes) |p| {
-                    if (find(names.items, p) == null) try names.append(gpa, p);
-                }
+                const d = prog.reg.get(n.op);
+                for (d.publishes) |p| if (find(names.items, p) == null) try names.append(gpa, p);
+                for (d.consumes) |p| if (find(names.items, p) == null) try names.append(gpa, p);
             }
 
             // Ownership moves to `rt` BEFORE anything can fail, and every
@@ -533,13 +574,37 @@ pub const Runtime = struct {
             defer gpa.free(first_pub);
             @memset(first_pub, null);
             for (rt.pub_refs) |*p| p.* = &.{};
+            @memset(rt.pub_idx, 0);
+            @memset(rt.con_idx, 0);
             for (prog.nodes.items) |*n| {
                 const def = prog.reg.get(n.op);
                 for (def.publishes, 0..) |p, j| {
                     const ni = find(rt.slate_names, p).?;
-                    rt.pub_refs[@as(usize, n.id) * registry.MAX_PUBLISHES + j] = rt.slate_targets[ni];
+                    const at_i = @as(usize, n.id) * registry.MAX_PUBLISHES + j;
+                    rt.pub_refs[at_i] = rt.slate_targets[ni];
+                    rt.pub_idx[at_i] = @intCast(ni);
                     const at = order[n.id];
                     if (first_pub[ni] == null or at < first_pub[ni].?) first_pub[ni] = at;
+                }
+                for (def.consumes, 0..) |p, j| {
+                    rt.con_idx[@as(usize, n.id) * registry.MAX_PUBLISHES + j] = @intCast(find(rt.slate_names, p).?);
+                }
+            }
+
+            // A handle consumer is held to the same two rules as a language
+            // reader, and for the same reasons — it just has a node instead
+            // of a slot, so it is checked here rather than through `owner`.
+            for (prog.nodes.items) |*n| {
+                for (prog.reg.get(n.op).consumes) |p| {
+                    const ni = find(rt.slate_names, p).?;
+                    const pub_at = first_pub[ni] orelse {
+                        diag.set("{s}: consumes slate.{s}, and nothing in this program says it", .{ n.name, p });
+                        return error.SlateUnsaid;
+                    };
+                    if (order[n.id] <= pub_at) {
+                        diag.set("{s}: consumes slate.{s} on or above the line that says it — a reader must sit BELOW its publisher", .{ n.name, p });
+                        return error.SlateOutOfOrder;
+                    }
                 }
             }
 
@@ -681,6 +746,8 @@ pub const Runtime = struct {
         self.gpa.free(self.slate_names);
         self.gpa.free(self.sub_slate);
         self.gpa.free(self.pub_refs);
+        self.gpa.free(self.pub_idx);
+        self.gpa.free(self.con_idx);
         self.gpa.free(self.sub_refs);
         self.gpa.free(self.broadcast);
         self.gpa.free(self.literals);
@@ -708,7 +775,9 @@ pub const Runtime = struct {
         const slots = try gpa.alloc(?Val, self.prog.slotCount());
         errdefer gpa.free(slots);
         const writes = try gpa.alloc(QueuedWrite, self.prog.nodeCount());
-        return .{ .gpa = gpa, .slots = slots, .writes = writes };
+        errdefer gpa.free(writes);
+        const handles = try gpa.alloc(?Handle, self.slate_names.len);
+        return .{ .gpa = gpa, .slots = slots, .writes = writes, .handles = handles };
     }
 
     /// Evaluate the whole program once over row `r`. Pure per row: reads the
@@ -726,6 +795,7 @@ pub const Runtime = struct {
             const v: ?Val = if (self.sub_slate[i]) null else if (self.sub_refs[i]) |ref| self.readRef(r, ref) else self.broadcast[i];
             for (s.targets.items) |sid| sc.slots[sid] = v;
         }
+        @memset(sc.handles, null); // the handle lane, blank per row like the rest
         sc.n_writes = 0;
         sc.retire = false;
 
@@ -768,6 +838,8 @@ pub const Runtime = struct {
                 // `write_ref` is: an op says its i-th name and the store
                 // lands in whatever slots read it, with no lookup here.
                 .pub_refs = self.pub_refs[@as(usize, n.id) * registry.MAX_PUBLISHES ..][0..def.publishes.len],
+                .pub_idx = self.pub_idx[@as(usize, n.id) * registry.MAX_PUBLISHES ..][0..def.publishes.len],
+                .con_idx = self.con_idx[@as(usize, n.id) * registry.MAX_PUBLISHES ..][0..def.consumes.len],
                 .node = n.id,
                 .scratch = sc,
             };
