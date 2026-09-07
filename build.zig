@@ -26,6 +26,10 @@ pub fn build(b: *std.Build) void {
     // tier-2 campaign's evidence — one before/after pair per ask on the
     // simple-things list — and evidence that never runs is prose.
     rill_mod.addAnonymousImport("idioms.rillbook", .{ .root_source_file = b.path("docs/idioms.rillbook") });
+    // The RBF pack's words doc rides in for the same reason the manuals do:
+    // its examples are the only printed record of how the two words are
+    // spelled, and a printed example that has stopped parsing is fiction.
+    rill_mod.addAnonymousImport("rbf-words.md", .{ .root_source_file = b.path("docs/rbf-words.md") });
 
     // Static library artifact (handy for C / FFI / WASM consumers later).
     const lib = b.addLibrary(.{

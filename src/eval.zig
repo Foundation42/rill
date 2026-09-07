@@ -141,6 +141,23 @@ pub const Runtime = struct {
 
     // node state
     node_state: []ValueBuf,
+    /// Per-node CACHE — one buffer per node, gpa-owned, surviving across
+    /// ticks and **absent from the dump**.
+    ///
+    /// The distinction from `node_state` is the whole point and it is worth
+    /// stating flatly: state is the ANSWER (a register's level, a gate's
+    /// side); scratch is only ever a faster way to get an answer the inputs
+    /// already determine. A restored program comes back with its scratch
+    /// EMPTY and must produce identical output — an op that cannot say that
+    /// about a buffer is holding state, and state goes in `node_state` where
+    /// serialize can see it.
+    ///
+    /// Built because a decode measured 250× the evaluation it fed: an RBF set
+    /// of 256 kernels costs 62 µs to decode off the wire and 0.25 µs to read,
+    /// and `rbf through` is asked for a fresh query every tick against a set
+    /// that changed once, at mount. Nothing else in the core set needs it yet;
+    /// the next expensive decode gets it for free.
+    node_scratch: []ValueBuf,
     dirty: []bool,
     eval_count: []u64,
     error_count: []u64,
@@ -257,6 +274,7 @@ pub const Runtime = struct {
             .has = try gpa.alloc(bool, n_slots),
             .fresh = try gpa.alloc(bool, n_slots),
             .node_state = try gpa.alloc(ValueBuf, n_nodes),
+            .node_scratch = try gpa.alloc(ValueBuf, n_nodes),
             .dirty = try gpa.alloc(bool, n_nodes),
             .eval_count = try gpa.alloc(u64, n_nodes),
             .error_count = try gpa.alloc(u64, n_nodes),
@@ -272,6 +290,7 @@ pub const Runtime = struct {
         @memset(rt.has, false);
         @memset(rt.fresh, false);
         for (rt.node_state) |*v| v.* = .empty;
+        for (rt.node_scratch) |*v| v.* = .empty;
         @memset(rt.dirty, false);
         @memset(rt.eval_count, 0);
         @memset(rt.error_count, 0);
@@ -289,6 +308,8 @@ pub const Runtime = struct {
         self.gpa.free(self.fresh);
         for (self.node_state) |*v| v.deinit(self.gpa);
         self.gpa.free(self.node_state);
+        for (self.node_scratch) |*v| v.deinit(self.gpa);
+        self.gpa.free(self.node_scratch);
         self.gpa.free(self.dirty);
         self.gpa.free(self.eval_count);
         self.gpa.free(self.error_count);
@@ -541,6 +562,7 @@ pub const Runtime = struct {
             .out = out,
             .statics = n.statics,
             .state = &self.node_state[node_id],
+            .scratch = &self.node_scratch[node_id],
             .state_gpa = self.gpa,
             .node_id = @intCast(node_id),
             .write_fn = queueWriteThunk,
@@ -733,6 +755,7 @@ pub const Runtime = struct {
             .out = outs,
             .statics = b.statics,
             .state = &self.node_state[body_id],
+            .scratch = &self.node_scratch[body_id],
             .state_gpa = self.gpa,
             .node_id = @intCast(body_id),
             .write_fn = queueWriteThunk,

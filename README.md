@@ -70,6 +70,8 @@ registry fails the build.
 | [docs/rill-for-agents.md](docs/rill-for-agents.md) | the same language for someone who reads faster than they explore |
 | [docs/idioms.rillbook](docs/idioms.rillbook) | 60 idioms as runnable cells, each with the *before* it replaces |
 | [docs/implementation-notes.md](docs/implementation-notes.md) | the ledger: every durable ruling, what bought it, and what it cost |
+| [docs/rbf-words.md](docs/rbf-words.md) | the RBF pack — two words a host opts into, for reading and authoring a packed set of gaussians on the plane |
+| [docs/namespaces.md](docs/namespaces.md) | how a family of words is scoped, counted against what is actually in the table |
 | [docs/rill-spec.md](docs/rill-spec.md) | the design spec |
 
 ## Quick start

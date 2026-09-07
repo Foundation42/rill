@@ -207,6 +207,12 @@ pub const EvalCtx = struct {
     /// side here.
     state: *std.ArrayListUnmanaged(u8),
     state_gpa: std.mem.Allocator,
+    /// Per-node CACHE, allocated from `state_gpa`, surviving across ticks and
+    /// **absent from the dump** — see `eval.Runtime.node_scratch`. An op may
+    /// keep anything here that its inputs already determine and nothing that
+    /// they do not: a restored program starts with this empty and must give
+    /// the same answers. Empty means "nothing cached", always.
+    scratch: *std.ArrayListUnmanaged(u8),
     /// Effect channel: queue a plane write, flushed in order at end of tick.
     write_fn: *const fn (ctx: *anyopaque, path: []const u8, val: []const u8, kind: plane.DeltaKind, mode: plane.WriteMode, stmt: u32) EvalError!void,
     write_ctx: *anyopaque,

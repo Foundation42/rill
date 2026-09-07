@@ -2517,3 +2517,206 @@ not 91 if `k` had landed by position); `takeb 5` — the explicit wins; a
 consumer with port `c` refuses "port 'c' of 'takec' is not bound".
 Mutations: bound by position (91) — bitten; the carry dropped — bitten
 (the refusal). 384 tests.
+
+## The RBF pack — a set of gaussians as a rill value (2026-09-07, `rbf.zig`, `ops_rbf.zig`, `fmath.zig`, `docs/rbf-words.md`, `docs/namespaces.md`)
+
+Christian's ask, after spindrift's `fire.rill` read loam's RBF evaluator at a
+particle's STATE instead of at a position and got an appearance out of it:
+*"Matryoshka is going to be using them absolutely everywhere. And if we do
+that, we don't have to do recompiles as much. Being able to generate and
+manipulate RBFs stored on the plane will be absolutely bonkers!"* The jump
+worth recording is the one spindrift's ledger already made — **an RBF set does
+not care that its query point is a position** — and its consequence for this
+repo: a thing that interpolates M properties over a D-dimensional state is an
+interpolation primitive, and it belongs beside `along`'s Catmull-Rom and
+`noise`'s hash rather than in the repo that thought of it. `State → Field →
+Properties`.
+
+**What rill took, and what it refused to take.** The model: the sum of
+gaussians, the Mahalanobis form, the cutoff, and the D and M that make it
+general. Not loam's nine-channel schema, not `compose`, not `columns`, not the
+extent or the mirror fold, not the content hash, not the `.lrbf` file, and not
+the fit — 2000 Adam iterations against a sampled pool is a host command, and
+one already exists (`loam-run --rbf`). A word that took a minute to evaluate
+would not be a dataflow operator wearing a bad name; it would be a different
+thing.
+
+### The wire form was measured, not argued
+
+A set is ONE value at ONE path — `{d, m, k}`, `k` the kernels laid end to end.
+Two facts decided it and neither was a preference.
+
+First, **the plane cannot gather a subtree.** matryoshka's `readDynamic` is an
+exact key lookup in a flat string map and rill's own `MockPlane` is the same;
+a read of an interior path is `NotFound`, never a record built from the
+children. Kernels stored at their own paths would never compose back into a
+set. (This was the previous scout's one flagged unknown, and checking it is
+what closed the design.)
+
+Second, **nesting costs 2× to decode**, because every container level is
+escaped on the wire and `containedItems` un-escapes the whole body into a
+fresh allocation. Measured, ReleaseFast, per call, decoding a 3-axis
+9-channel set:
+
+| kernels | flat `{d,m,k}` bytes | record-of-arrays bytes | flat decode | RoA decode | eval |
+|---|---|---|---|---|---|
+| 10 | 1,270 | 2,214 | 2.5 µs | 5.0 µs | 0.01 µs |
+| 64 | 8,114 | 13,608 | 15.5 µs | 30.7 µs | 0.06 µs |
+| 256 | 32,450 | 54,360 | 62.4 µs | 122.0 µs | 0.25 µs |
+| 1024 | 129,787 | 217,368 | 247.2 µs | 487.0 µs | 1.01 µs |
+
+The row that mattered is not the RoA column. It is **decode against eval: 250
+to 1.** A `through` node is handed a fresh query every tick and a set that
+changed once, at mount, so re-decoding per tick is the whole cost of the
+operator and none of its work.
+
+### `Runtime.node_scratch` — a cache is not state
+
+So the decoded kernels live in a new per-node buffer that survives ticks and
+is **absent from the dump**. `node_state` is the ANSWER (a register's level, a
+gate's side); `node_scratch` is only ever a faster way to get an answer the
+inputs already determine, and the contract is stated where it lives: a
+restored program comes back with an empty scratch and must produce identical
+output. An op that cannot say that about a buffer is holding state, and state
+goes where serialize can see it.
+
+What licenses reusing the cache is the runtime's own contract rather than a
+hope: a node whose input changed is dirty and evaluates, so `in_fresh[set]`
+false means the bytes at that port are last tick's bytes. That is an
+arrival-dependent question, which is why `rbf through` declares `.reads` and
+not `.pure` — `OpClass` defines `reads` as exactly "the op asks `in_fresh`",
+and it is what forbids a future cache pass from skipping the eval that would
+have refreshed us.
+
+End to end through the real runtime (feed, mark, sweep, write, flush),
+ReleaseFast, per tick:
+
+| kernels | set bytes | with the cache | without |
+|---|---|---|---|
+| 10 | 927 | 10.0 µs | 18.4 µs |
+| 64 | 5,811 | 10.4 µs | 50.4 µs |
+| 256 | 23,209 | **14.6 µs** | **155.5 µs** |
+
+At 256 kernels that is 10.6× on the whole tick. 155 µs is 1% of a 16 ms frame
+for ONE node; ten of them is a tenth of the frame spent decoding a set nobody
+changed.
+
+**struple was not touched.** The mandate opened it, and the measurement closed
+it: a typed float-array element would make the decode O(1) instead of 62 µs,
+but the cache already made it O(1) per tick, and the price of the type is a
+wire-format change across twelve byte-identical implementations plus their
+conformance vectors. The flat-array form keeps every number visible as a
+number to anything that reads struple, including the Python port, which is the
+inspectability the whole idea is for.
+
+### `fmath.zig`, and the measurement that says it is insurance
+
+The gate that pins rill's evaluator to loam's is byte equality in f32 over a
+frozen table, so rill needs loam's `exp` — `@exp` lowers to libm, which is
+glibc's when a binary links libc and compiler_rt's musl port when it does not,
+and loam ported a Sun `e_exp` after those two disagreed on a bud's heading in
+the last bit (its P2.1). Transcribed, and pinned to loam's own frozen output
+bits so the two copies fail together with no dependency edge between the repos
+— there is none in either direction, and adding one to carry a test would
+invert the layering (rill sits under loam, not beside it).
+
+**Then the honest part.** Swapping `expf` for `@exp` inside `rbf.eval` does
+NOT fail the frozen table, and that is a fact about this model rather than a
+hole in the gate. The gaussian's argument is `−½·r2` with r2 in [0, CUTOFF],
+so the arguments are exactly the f32s in [−16, 0] — all 1,098,907,649 of them,
+checked against both exps (x86-64, glibc 2.42, Zig 0.14.1):
+
+| build | arguments differing in f64 | differing once narrowed to f32 |
+|---|---|---|
+| libc linked | 11,626,851 (1.06%), by 1 ulp | **0** |
+| libc absent | 0 | 0 |
+
+So on this platform `@exp` would have produced loam's bits too. `fmath.zig`
+stays as insurance, not as a fix: "a 1-ulp f64 difference never survives the
+narrowing" is an empirical fact about two implementations, not a theorem, and
+rill runs wherever its host runs. Its own two gates bite (the frozen bits, and
+the ulp bound over the gaussian's range); the *choice to use it in `eval`* has
+no gate and cannot have one here, and that is recorded rather than papered
+over. **Trigger:** a platform where the f32 column is not zero settles it
+permanently; dropping the transcription needs the same exhaustive sweep on
+every platform the house ships to, which is more work than keeping it.
+
+**rill's `exp` word is untouched and stays `@exp`.** Different customer: its
+output goes to a renderer or a person, its numbers already went out to every
+consumer of this library, and moving them by an ulp to buy a property nobody
+asked of it is a behaviour change dressed as a cleanup.
+
+### The words, and the namespace
+
+`rbf through` reads a set, `rbf bump` authors one, and everything else about a
+set is ordinary record and array arithmetic on an inspectable value. Two-word
+names in an **opt-in pack** (`registerRbf`, beside `registerCore`) — the full
+argument is in `docs/namespaces.md`, and the finding that decided it is that
+**the scheme already exists and is already the house's dominant convention**:
+matryoshka registers 179 operators of which 167 are two-word (`spray add`,
+`light set`, `rill mount`), against rill core's 109 of which none are. A
+running matryoshka has 297 operators in one flat table and it works because
+93% of the newcomers are already scoped.
+
+Dotted names (`rbf.through`) were refused on a concrete ambiguity rather than
+on taste: `use plane.defense as d` binds `d` as a path prefix, so a dotted
+name whose head is not `plane` or `row` is already a legal path, and
+`use plane.rbf as rbf` would put an alias and an operator family in one
+spelling. Underscores were refused at read-aloud. **Nothing is renamed**, and
+the migration path in the doc is per-family and optional; the 109 core
+operators are primitives, and a primitive is exactly the kind of word that
+should not wear a group name.
+
+`rbf bump` composes down the PIPE rather than through an array of kernels,
+because rill has no `concat` and a variadic operator cannot be called by name
+(`array` and `record` reach theirs through `[…]` and `{…}` syntax only). That
+turned out to read better than the alternative would have. The missing word is
+recorded as a CORE gap, not an RBF one.
+
+### Gates, six, and the mutations
+
+"the evaluator is loam's, to the bit" — a frozen table of four kernels and
+seven queries, `u32` bit patterns, generated by running `loam.rbf.Set.eval`
+and living identically in `loam/src/rbf.zig`'s own gate so a drift on either
+side fails on both. One kernel of the four sits at r2 = 36 from one query and
+r2 = 31.36 from another with weights of 4096: a kernel merely parked far away
+would have pinned nothing, because exp of a large negative underflows to zero
+by itself and `CUTOFF` could then be deleted without moving a bit.
+
+"a set survives the wire", "the word reads what the evaluator reads", "kernels
+authored on the plane, read back through them, and a knob edit moves the
+answer with no remount" (Christian's payoff, as a scene), "the decoded set is
+a CACHE" (scratch populated, state empty, restore empty and still answering
+loam's bits), and "every refusal lands on the node that refused".
+
+**Mutations, thirteen, twelve bitten:** `lIndex` transposed; the cutoff
+widened; the width not inverted in `axisAligned`; the cache trusting itself
+through a fresh set; the cache moved from `scratch` to `state`; the query-axis
+check dropped; the width guard dropped; the bump shape-agreement check
+dropped; the finite check dropped; the ragged check dropped; an `exp`
+polynomial coefficient moved; `exp`'s reduction term zeroed. The thirteenth is
+`fmath.expf → @exp`, which SURVIVES, measured above, and is recorded as such.
+And loam's three, run in that repo: the `mahal` index swapped, the cutoff
+widened, the half in `exp(−½ r2)` moved — all three bitten by its half of the
+pin.
+
+**Found, one.** The knob gate did not bite the cache mutation at first, and
+the reason is worth keeping: the cheap byte-length guard that sits beside the
+freshness check was catching the edit *by accident*. struple escapes a `0x00`
+inside a container body, so 1/0.4 (`0x40200000`, three zero bytes) and 1/1.2
+(`0x3f555555`, none) do not even encode to the same LENGTH, and the width knob
+was never testing what it looked like it was testing. The gate now also edits
+a WEIGHT between 0.85 and 0.35 — `0x3f59999a` and `0x3eb33333`, four non-zero
+bytes each — so the set changes without changing size by one byte and only
+`in_fresh` can notice. The ledger's oldest line again: a gate must run where
+A ≠ B, and "the numbers differ" is not the same claim as "the mechanism under
+test is what made them differ".
+
+**Recorded, not built** (each with its trigger, in `docs/rbf-words.md`): the
+gradient; a rotated kernel authored by hand; the fit; file load and save;
+row-legality — which needs a customer whose ROW needs the field, and would
+have to answer that Q16.16's resolution of 1.5e-5 makes a fixed-point
+gaussian's support go compactly zero at r2 ≈ 22 where loam's goes at 32, so
+the two would disagree in the tail by construction and the exactness bit could
+not be earned; and `concat`/`push` on arrays, which is a core gap noticed
+here.

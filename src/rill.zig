@@ -42,6 +42,9 @@ pub const plane = @import("plane.zig");
 pub const eval = @import("eval.zig");
 pub const serialize = @import("serialize.zig");
 pub const row = @import("row.zig");
+pub const rbf = @import("rbf.zig");
+pub const fmath = @import("fmath.zig");
+pub const ops_rbf = @import("ops_rbf.zig");
 
 // The working surface, re-exported flat.
 pub const TypeId = types.TypeId;
@@ -53,6 +56,9 @@ pub const PortKind = registry.PortKind;
 pub const Emit = registry.Emit;
 pub const EvalCtx = registry.EvalCtx;
 pub const registerCore = ops.registerCore;
+/// The RBF pack — opt-in, a second call beside `registerCore`. See
+/// `docs/namespaces.md` for why families of words register apart.
+pub const registerRbf = ops_rbf.register;
 pub const Program = graph.Program;
 pub const parse = parser.parse;
 pub const parseKernel = parser.parseKernel;
@@ -81,5 +87,8 @@ test {
     _ = @import("eval.zig"); // mount / feed / tick
     _ = @import("serialize.zig"); // one-struple dump
     _ = @import("row.zig"); // a rill mounted on a spray: the row plane
+    _ = @import("fmath.zig"); // the reproducible exp, loam's twin
+    _ = @import("rbf.zig"); // the sum-of-gaussians model and its wire form
+    _ = @import("ops_rbf.zig"); // the rbf pack
     _ = @import("tests.zig"); // acceptance gates G1–G9
 }
