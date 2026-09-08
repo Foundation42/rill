@@ -3533,3 +3533,260 @@ is a useful record of how confidently a wrong rule can be defended.
 `rill-agents.md` §7 gains the dump-arity hazard. `rillbook-spec.md` §2's
 bare-expression echo gains the sink case. The `help` strings of all six ops say
 they emit their input.
+
+
+## `@self` in a def body: defs close over nothing, except relatively, 2026-09-08
+
+**What was decided.** A def body MAY name a `plane.…` path whose entity
+segment is `@self`, read or write. Absolute plane paths stay refused exactly
+as before, and so does a path naming a *different* entity.
+
+```rill
+def driver() = lfo sine 7s | mul 0.05 | write plane.drift.@self.k.flock   // ALLOWED
+def bad(x)   = x | add plane.defense.alerts                               // still REFUSED
+def worse(x) = x | mul plane.drift.@roaches.k.flock                       // REFUSED, differently
+```
+
+**The reasoning, which is the part to carry forward.** The old rule — a
+`plane.…` path in a def body is a parse error, "defs close over nothing", in
+the parser since the language's first week — is **not wrong, it is too
+BLUNT**. It was written when every plane path was absolute and it never
+considered `@self`. What the ban protects is PORTABILITY: a def moves between
+Projects intact. `plane.defense.alerts` breaks that, because it names one
+specific Project's plane. `plane.drift.@self.k.flock` does not: `@self`
+resolves to whichever instance mounts the program, so a def carrying one moves
+between Projects intact — which is the whole thing the ban was for.
+
+Christian's words, ruling it: *"`@self` is relative, so it stays portable.
+That's quite powerful but still keeps it sealed."*
+
+**Rejected: exempting `export def` wholesale.** That is an exemption rather
+than a principle, and it fails worst exactly where it would be used — the
+public surface would be the one place with no portability guarantee, so a
+pack's exported operators would be the ones that could not travel.
+
+**Rejected: a separate `drive` section for effectful code.** More machinery,
+and it splits the declaration of a knob from the driving of it: the parameter
+pack would say what `gain` means in one place and the thing that writes it
+would sit in another.
+
+### The rule as shipped
+
+- It applies to **all** defs, exported or local. Visibility is a different
+  question from reach (the parameter-pack beat settled that once already, when
+  `^` was asked to carry both addressing and visibility).
+- The test is **syntactic and it is all rill does**: some segment reads exactly
+  `@self`, and no segment names a different entity. rill does not resolve
+  `@self` — spindrift rewrites `plane.drift.@self.rate` to
+  `plane.drift.@<name>.rate` at mount (`spindrift/src/spray.zig`) — so *which*
+  instance is not a question this parser is entitled to have an opinion about.
+  It permits the spelling; resolution stays the host's business. No resolution
+  was built.
+- **Read and write both.** A write target is a `.path` static, which is why
+  `write` in a def body was refused by this rule and not by "produces no
+  output" (the effect beat, the same day, established that half).
+- **Position is not checked, and that is a decision, not an omission.** rill
+  cannot know where a host's entity room sits in its path shape — only
+  spindrift knows `@self` is segment 2 of `plane.drift.@self.k.gravity`. What
+  rill can see is the SIGIL: a segment wearing `@` is an entity segment by
+  construction. So `plane.drift.k.@self` parses (and dies at whichever mount
+  does not serve it, in the same place a mistyped knob path dies today), while
+  `plane.drift.self.k` — no sigil — is an ordinary absolute path and
+  `@selfish` is a different entity. One test, no rule about where. Gated.
+- **A named instance dominates.** `plane.drift.@self.peers.@roaches.k.flock`
+  is refused: the moment one specific instance is named the path stops
+  travelling, whatever else is in it.
+- **The exemption is the `plane` head's alone.** `row.…` and `slate.…` are the
+  MOUNT's own stores — relative already, with no entity room to name — so an
+  `@` segment there would be a spelling rill had to keep working for no
+  customer. They keep the old refusal, and their message does NOT offer the
+  `@self` remedy, because it does not work there: the fix is a port. **That
+  boundary is the subject of `docs/cc-recon-def-plane.md`**, written in the
+  same beat: a def that wants `row.pos` is asking to declare its PLANE, which
+  is a different ruling and was not taken here.
+
+### The four refusals, verbatim
+
+An absolute path (the wording someone hits should teach them the rule):
+
+> `'plane.defense.alerts': defs close over nothing — pass plane streams in
+> through a port, or name it relatively with `@self`. An absolute path names
+> one Project's plane; `@self` resolves to whichever instance mounts 'bad', so
+> a def carrying one travels with it`
+
+A different entity — a separate message, because the fix is different
+(`@self`, not "a port"):
+
+> `'plane.drift.@roaches.k.flock': defs close over nothing — `@roaches` names
+> one specific instance, exactly as unportable as an absolute path. `@self` is
+> the one entity 'bad' may name: it resolves to whichever instance mounts the
+> def`
+
+`row` / `slate`:
+
+> `'row.age': defs close over nothing — pass it in through a port of 'bad'.
+> `@self` relativises a `plane.` path; `row` is the mount's own store and has
+> no entity segment to relativise`
+
+And the fold-provenance path, which had to keep working and does — the chain
+still rides on the end:
+
+> `'plane.player.offset': defs close over nothing — … so a def carrying one
+> travels with it — expanded from :po, bound at line 1`
+
+### Where the check lives, and the copy that turned out to be dead
+
+The check moved **into `parsePlaneRef`, after the segment loop**. It used to
+sit on the head token before a single segment was read — which is precisely
+why it could only ever say "no". Judging a reach needs the whole path in hand.
+The caret still lands on the head token, where it landed before.
+
+The record sugar (`plane.a.{x, y}`) returns EARLY from that function, so it is
+judged on its PREFIX in the `lbrace` arm. A check written only after the loop
+leaves the sugar as a hole in the rule, and the mutation that deletes the
+prefix call walks `plane.player.{health, mana}` straight into a def body.
+
+A **second copy** of the refusal lived in `makeNode`, on the `.plane` source
+arm. It was **dead code**, and it was proved dead by execution rather than by
+reading: on the pre-beat tree, with that refusal replaced by
+`@panic("makeNode's close-over refusal was REACHED")`, the whole suite passed.
+Every `.plane` source in the language is built by `parsePlaneRef` (the leaf
+and the record sugar are its only two constructors), so a path that reaches
+`makeNode` has already been judged. Deleted, for the reason the two `use`
+pointers were deleted in the `using` beat, three commits back: one door, one
+message. Its `tok` parameter went with it, since nothing else in `makeNode`
+used it.
+
+And the inverse is gated: the mutation that moves the reach test INTO
+`makeNode`'s `.plane` arm and out of `parsePlaneRef` lets an absolute WRITE
+through — a write target is a `.path` STATIC and no static ever becomes a
+node's source — while every read assertion survives. That is the receipt that
+the door has to be the one every path goes through.
+
+### Three things at the splice that had to move
+
+1. **`substSource`'s `.plane` arm read `unreachable`.** It now passes the path
+   through verbatim, which is the whole point: rill does not resolve `@self`
+   and the host does, per instance, at mount.
+2. **Subscription registration moved to splice time.** `makeNode` no longer
+   registers a `.plane` source's subscription when it is building a TEMPLATE:
+   slot ids are template-local and `prog.subs` is program-global, so a record
+   written there would point at a slot the program does not have. `instantiate`
+   already registered subscriptions for a plane path handed in through a port,
+   and that same line now serves both cases.
+3. **The `target.template == null` guard on that line is what makes NESTING
+   right.** A def calling a def splices the inner body into the OUTER TEMPLATE;
+   registering there files a template slot id against the program's
+   subscription list. The outer's own splice files it once, later, against the
+   real slot. The mutation that drops the guard gives the nested gate two
+   targets where there is one.
+
+A fourth thing needed no change and is worth recording as a near miss:
+`instantiate` already called `registerWrites` at splice time, for the
+membership sinks (`tag`/`untag` inside a def). Its comment said *"templates ban
+`path` statics"* — true when it was written, false as of this beat, and the
+comment is corrected. Because that line was already there, a def that reads and
+writes one `@self` path is caught by §4.4's cycle check for free. Gated, since
+"for free" is exactly the kind of claim that is wrong.
+
+### Gates and mutations
+
+Thirteen gates, **fifteen mutations, all bitten** — but the useful part is the
+three that had to be re-aimed before they bit anything.
+
+| gate | mutation that bites it |
+|---|---|
+| a def body may READ a relative path, and the value arrives | drop the `.relative => {}` arm; `substSource`'s `.plane` arm returns `.none`; delete the splice-time `subFor` registration |
+| two instances share the subscription and get two slots | `if (sub.targets.items.len == 0)` around the splice-time append |
+| a def body may WRITE a relative path | drop the `.relative => {}` arm |
+| a def that reads and writes one relative path is still a cycle | drop the `class.writes()` arm in `instantiate`'s splice loop |
+| an ABSOLUTE path is still refused, and says why | `.absolute` arm returns instead of failing; or move the reach test into `makeNode`'s `.plane` arm (the reads survive, the WRITE slips) |
+| a DIFFERENT entity is refused — it names one instance | drop the `eql(seg, "@self")` comparison in `reachOf`, so any `@` segment counts as relative |
+| position is not checked, because rill cannot know it | make `reachOf` require the `@self` segment at a fixed index |
+| `row.` and `slate.` stay refused, with their own advice | drop the head test in `checkDefReach` |
+| the record sugar is judged on its prefix | delete the `checkDefReach` call in the `lbrace` arm |
+| a fold expanding to a relative path is allowed; an absolute one still refuses with provenance | drop the `.relative` arm; drop the `if (tok.fold != 0)` call in `fail` |
+| an export def may drive its own knob, pack and all | drop the `.relative` arm; `publishExports` does nothing |
+| a def calling a def, the INNER one naming the path | drop the `target.template == null` guard in `instantiate` |
+| (pre-beat, by experiment) the `makeNode` copy of the refusal | `@panic` in its place on the HEAD tree — the whole suite passed |
+
+**Survivor 1 — a mutation that bit three gates and left its target green.**
+`if (!tmpl.exported) continue;` appears twice, in `checkExportsDescribed` and
+in `publishExports`, and a textual replace of "the first occurrence" hit the
+wrong one. It reported BITTEN (three parity gates went down) while the gate it
+was aimed at — "an export def may drive its own knob, pack and all" — stayed
+green, which is exactly what a survivor looks like from the summary line. Only
+per-gate attribution caught it. **A mutation harness that reports a count and
+not a list can hide a survivor behind an unrelated bite.**
+
+**Survivor 2 — two mutations that panicked an EARLIER gate.** Deleting the
+splice-time subscription registration, and capping it to one target, both abort
+the test binary in a pre-existing G7/pack gate — a panic takes every gate after
+it, and these gates are at the end of the file. Under `zig build test` they
+read as "1 failing test" naming somebody else's gate entirely. They do bite
+these gates; it took a filtered run (`zig test --test-filter`, since
+`build.zig` wires no filter) to see it. This is the same hazard the effect beat
+recorded from the other side, and it is now recorded from this one: **a
+panicking mutation needs per-gate attribution before you believe the summary,
+and the repo's own CLAUDE.md already names the fix — wire `-Dtest-filter`.**
+
+**Survivor 3 — the first `@panic` mutation did not compile.** Replacing
+`makeNode`'s refusal with a panic left its `tok` parameter unused, which Zig
+refuses. Per the house rule — *a mutation that does not compile is not a
+mutation* — it was rewritten with a `_ = tok;` beside the panic and then it
+ran, and said what it was asked.
+
+### What this beat deliberately did NOT build
+
+No resolution of `@self` (that is the host's, and stays there). No widening to
+`row.…` or `slate.…`. No package format, no `^` archetype mount. The capability
+model's flatten-time cost union is untouched and now has a noted hazard:
+`rill-agents.md` records that a `@self` path's cost is the RESOLVED one, two
+paths for two instances, and that whoever implements the union resolves first
+or refuses to answer.
+
+### Docs in the same commit
+
+`rill-spec.md` §3.9's first bullet is rewritten around the rule (with both
+examples and the syntactic test), its sink bullet stops saying `write` is
+unsayable in a def, and §3.16's `@self` bullet points back at §3.9.
+`rill-manual.md` §10 gains the rule and a fenced `driver` example — the
+manual-parse gate 54 → 55. `rill-for-agents.md` §2 gains the rule and the
+exported `flock` (4 → 6 → 7), and its `using`-in-a-def paragraph now says
+*absolute*. `rill-agents.md`'s capability bullet gains the resolved-cost
+hazard, and its `export def` bullet gains the driver. `parser.zig`'s header
+bullet is rewritten, since it is where the old rule was stated in the code.
+
+### The second deliverable, riding the same commit
+
+`docs/cc-recon-def-plane.md` — **recon only, no implementation.** The question:
+*should a definition declare the plane it runs on, rather than the host
+deciding for a whole file?* It is the same boundary this beat refused to
+cross, asked as a language question: row-ness is `parseWith(…, rows: bool)`,
+a whole-program flag chosen by the caller, read in exactly two places
+(`parser.zig:1621`, `:2150`), recorded on nothing afterwards.
+
+It recommends a per-definition declaration (`def spin(x) on row = …`,
+contextual, reserving nothing) with an undeclared def defaulting to the world
+plane, coupled to a ruling that `row.…` becomes sayable inside a
+`row`-declared def — because without that a row def still cannot reach the
+row, which §2 of the recon measures. Its strongest counter-argument is
+measured too, and it is the reason the recon does not read as a foregone
+conclusion: in matryoshka, the one host that runs both planes, the plane
+registry holds no row word at all, so `parser.zig:2150` **can never fire
+there** — the separation that works in the live host is registry
+partitioning, not the flag, and a per-definition plane would force those two
+registries together.
+
+Three measurements from it are worth carrying here, because they are facts
+about rill and not about the recon:
+
+- **No `.rill` file in any of the six repos contains a `def`.** 21 kernels, 26
+  plane programs, zero definitions. Whatever is ruled is ruled ahead of its
+  first user — the `use` situation exactly.
+- **`row.…` paths parse fine in a plane program** and always have
+  (`tests.zig:10874` pins it): the flag governs row WORDS, never row paths.
+- **`rill/CLAUDE.md`'s host-word list is stale** — it names seven spindrift
+  words, there are fifteen (`spindrift/src/words.zig:41`, the `rowOnly`
+  helper). Recorded and NOT changed: that file is instructions to agents, and
+  it gets changed on purpose by its owner, not as a side effect of a beat.

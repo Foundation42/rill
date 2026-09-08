@@ -145,11 +145,38 @@ operator, a stream or a def, because none of those wear a colon.
 
 Inside a `def` body a `:name` gets no rule of its own: it expands, and the
 checks already there judge the result — a fold of operators works, a fold
-of a `plane.…` path is refused by close-over-nothing. Any parse error on
-spliced tokens names the fold it came from and the line it was bound on.
+of an ABSOLUTE `plane.…` path is refused by close-over-nothing (a fold of
+a `@self` path is fine, by the rule below). Any parse error on spliced
+tokens names the fold it came from and the line it was bound on.
 
 `use plane.x as p` is gone (it was a path prefix and nothing else); `use`
 now points at `using`.
+
+**defs close over nothing — except relatively** (2026-09-08). An
+ABSOLUTE `plane.…` path in a def body, read or write, is refused: pass
+the stream in through a port. A path whose entity segment is `@self` is
+allowed, because `@self` resolves at MOUNT to whichever instance runs the
+program, so the def stays portable — which is the only thing the ban was
+ever protecting.
+
+```rill
+export def flock(gain: number = 0.05 (0..1)) =
+  lfo sine 7s | mul gain | write plane.drift.@self.k.flock
+
+describe flock
+  "Drives this instance's own flocking knob from a slow sine."
+  gain "how far the knob swings"
+
+flock
+```
+
+The test is syntactic and rill resolves nothing: a segment spelled
+exactly `@self`, and no segment naming a different entity — a path
+carrying `@roaches` is refused, because it names one instance and is as
+unportable as an absolute path. Position is not checked (where an entity
+room sits in a path is the host's business, so the SIGIL is judged, not
+the index). `row.…` and `slate.…` stay refused whole: they are the
+mount's own stores and have no entity segment to relativise.
 
 **The parameter pack.** A def port may carry a default and an advisory
 range, and `export def` marks a definition visible to the HOST — rill has

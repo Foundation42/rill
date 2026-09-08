@@ -1101,9 +1101,27 @@ def healthbar(hp: number) = hp | clamp 0 100 | div 100
 plane.player.health | healthbar | write plane.ui.hp
 ```
 
-defs close over nothing: a `plane.…` path inside a def body is a parse
-error — pass streams in through ports. That is what keeps a def
-reusable across worlds.
+defs close over nothing — **except relatively**. An *absolute*
+`plane.…` path inside a def body is a parse error: pass the stream in
+through a port. What the rule protects is portability, so the one path a
+def may name is the one that is portable — a path whose entity segment
+is `@self`, which resolves at mount to whichever instance is running the
+program:
+
+```rill
+def driver(x: number) =
+  x | mul 0.05 | write plane.drift.@self.k.flock
+
+plane.beat | driver
+```
+
+`plane.defense.alerts` names one world's plane and a def carrying it is
+stuck there. `plane.drift.@self.k.flock` names *this* instance's knob,
+whichever instance that turns out to be, so the def travels. A path
+naming some *other* instance — `plane.drift.@roaches.k.flock` — is
+refused for the same reason an absolute one is, and the refusal says so.
+`row.…` and `slate.…` stay refused whole: they are the mount's own
+stores, and there is nothing there to relativise.
 
 ### The parameter pack
 

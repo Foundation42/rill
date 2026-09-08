@@ -3987,11 +3987,15 @@ test "the manuals parse: every printed example compiles" {
     // 53 → 54 (an effect returns its input, 2026-09-08): §4 gains the
     // mid-chain tap, which is the whole ruling in one line and the only place
     // the manual shows a chain continuing past a sink.
-    try testing.expectEqual(@as(usize, 54), human);
+    // 54 → 55 (`@self` in a def body, 2026-09-08): §10 gains the def that
+    // drives its own instance's knob. Fenced ```rill on purpose — that it
+    // parses at all is the whole beat, so this gate reads the claim.
+    try testing.expectEqual(@as(usize, 55), human);
     // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
     // ```rill fence so this gate reads it rather than the reader trusting it.
     // 5 → 6 (the parameter pack, same day): §2 gains `export def roaches`.
-    try testing.expectEqual(@as(usize, 6), agent);
+    // 6 → 7 (`@self` in a def body, same day): §2 gains the relative driver.
+    try testing.expectEqual(@as(usize, 7), agent);
 }
 
 // ---------------------------------------------------------------------------
@@ -11769,4 +11773,414 @@ test "effect: a rousing's KIND survives the pass-through — two occurrences are
             return error.TestUnexpectedResult;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// `@self` in a def body (2026-09-08) — defs close over nothing, EXCEPT
+// relatively. Ruled by Christian: *"`@self` is relative, so it stays portable.
+// That's quite powerful but still keeps it sealed."* The old rule was not
+// wrong, it was too blunt: it was written when every plane path was absolute
+// and never considered `@self`, which resolves at MOUNT, per instance, and so
+// travels with the def. rill permits the SPELLING and resolves nothing.
+// ---------------------------------------------------------------------------
+
+/// The subscription record for `path`, or null — what the gates below use to
+/// say "the def's own path was subscribed, verbatim, at splice time".
+fn subFor(prog: *const rill.Program, path: []const u8) ?*const graph.Sub {
+    for (prog.subs.items) |*s| {
+        if (std.mem.eql(u8, s.path, path)) return s;
+    }
+    return null;
+}
+
+test "@self: a def body may READ a relative plane path, and the value arrives" {
+    // Mutations that bite: drop the `.relative => {}` arm in `checkDefReach`
+    // (the def refuses); `substSource`'s `.plane` arm returns `.none` (the
+    // path is dropped at splice and `mul` gets no second operand); delete the
+    // `subFor` registration in `instantiate` (nothing ever feeds the slot, so
+    // the value stays at its mount-time read and the second assertion fails).
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def scare(x: number) =
+        \\  x | mul plane.drift.@self.k.flock
+        \\
+        \\plane.v | scare | write plane.out
+    , .{ .{ "plane.drift.@self.k.flock", @as(i64, 3) }, .{ "plane.v", @as(i64, 4) } });
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 12), try planeNum(&fx, "plane.out"));
+
+    // The path is subscribed VERBATIM — rill does not resolve `@self`, the
+    // host does, at mount. If this string ever arrives rewritten, rill has
+    // taken a decision that belongs to spindrift.
+    const sub = subFor(&fx.prog, "plane.drift.@self.k.flock") orelse {
+        std.debug.print("nothing subscribes 'plane.drift.@self.k.flock'\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(usize, 1), sub.targets.items.len);
+    // …and the slot it points at is a slot of the PROGRAM, not a leftover
+    // template id. This is the assertion that the registration moved to
+    // splice time rather than staying in `makeNode`.
+    try testing.expect(sub.targets.items[0] < fx.prog.slots.items.len);
+    try testing.expectEqualStrings("scare1.mul1", fx.prog.node(fx.prog.slot(sub.targets.items[0]).node).name);
+
+    // The knob really is live, not just read once at mount.
+    try feedValue(&fx.rt, testing.allocator, "plane.drift.@self.k.flock", @as(i64, 10));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(f64, 40), try planeNum(&fx, "plane.out"));
+}
+
+test "@self: two instances of one def share the subscription and get two slots" {
+    // A def is an archetype: two instances are two node sets (the parameter
+    // pack's gate says so), but ONE path is one subscription — `subFor`
+    // deduplicates by path and appends a target. Both instances must be fed.
+    //
+    // Mutation that bites: `if (sub.targets.items.len == 0)` around the
+    // append in `instantiate` — one target instead of two, and the second
+    // copy never updates (expected 2, found 1).
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def scare(x: number) =
+        \\  x | mul plane.drift.@self.k.flock
+        \\
+        \\plane.v | scare | write plane.a
+        \\plane.v | scare | write plane.b
+    , .{ .{ "plane.drift.@self.k.flock", @as(i64, 3) }, .{ "plane.v", @as(i64, 4) } });
+    defer fx.deinit();
+    const sub = subFor(&fx.prog, "plane.drift.@self.k.flock") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 2), sub.targets.items.len);
+    try feedValue(&fx.rt, testing.allocator, "plane.drift.@self.k.flock", @as(i64, 10));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(f64, 40), try planeNum(&fx, "plane.a"));
+    try testing.expectEqual(@as(f64, 40), try planeNum(&fx, "plane.b"));
+}
+
+test "@self: a def body may WRITE a relative plane path" {
+    // The write TARGET is a `.path` static, not a source — which is why
+    // `write` in a def was refused by the close-over rule and not by "produces
+    // no output" (2026-09-08, the effect beat). A relative target is now
+    // sayable, and this is the shape the whole ruling exists for: a def that
+    // drives its own instance's knob.
+    //
+    // Mutation that bites: drop the `.relative => {}` arm in `checkDefReach`
+    // — the def refuses and the write never happens. (The mutation that says
+    // the check must live in `parsePlaneRef` rather than in `makeNode` is on
+    // the absolute gate below, because it is the ABSOLUTE write that slips.)
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def driver(x: number) =
+        \\  x | mul 0.05 | write plane.drift.@self.k.flock
+        \\
+        \\plane.v | driver
+    , .{.{ "plane.v", @as(i64, 4) }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 0.2), try planeNum(&fx, "plane.drift.@self.k.flock"));
+}
+
+test "@self: a def that reads and writes one relative path is still a cycle" {
+    // The composed write list must see a def's `@self` write, or an
+    // instantiated feedback loop slips past §4.4's check — the same hazard the
+    // membership sinks had, one rule up. `registerWrites` at splice time is
+    // what pays for it, and until this beat it could only ever see a
+    // `@subject`/`#tag` pair, because templates banned `path` statics whole.
+    //
+    // Mutation that bites: drop the `class.writes()` arm in `instantiate`'s
+    // splice loop — the def parses and the loop is live in the graph.
+    try expectParseError(
+        \\def spin(x: number) =
+        \\  plane.drift.@self.k.flock | add x | write plane.drift.@self.k.flock
+        \\
+        \\plane.v | spin
+    , "cycle");
+}
+
+test "@self: an ABSOLUTE plane path in a def body is still refused, and says why" {
+    // The rule this beat did NOT relax, with the message that now teaches the
+    // difference — someone who hits it should learn the rule here rather than
+    // from the spec.
+    //
+    // Mutations that bite: `checkDefReach`'s `.absolute` arm returns instead
+    // of failing (every assertion here goes down, and three older gates with
+    // them); or the check is moved from `parsePlaneRef` into `makeNode`'s
+    // `.plane` arm, which is where a first draft of this beat nearly put it —
+    // the READ assertions survive that and the WRITE one below does not,
+    // because a write target is a `.path` STATIC and no static ever becomes a
+    // node's source. One door, and it has to be the one every path goes
+    // through.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add plane.defense.alerts
+        \\
+        \\plane.v | bad | write plane.out
+    , "defs close over nothing");
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add plane.defense.alerts
+        \\
+        \\plane.v | bad | write plane.out
+    , "name it relatively with `@self`");
+    // It names the path it judged, and the def it judged it for.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add plane.defense.alerts
+        \\
+        \\plane.v | bad | write plane.out
+    , "'plane.defense.alerts'");
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add plane.defense.alerts
+        \\
+        \\plane.v | bad | write plane.out
+    , "mounts 'bad'");
+    // A WRITE target is the same rule and the same message.
+    try expectParseError(
+        \\def stamp(x) =
+        \\  x | write plane.log
+        \\
+        \\plane.v | stamp | write plane.out
+    , "name it relatively with `@self`");
+}
+
+test "@self: a DIFFERENT entity is refused — it names one instance" {
+    // The decision this brief left to the beat, and the reason: an entity
+    // other than `@self` names one specific instance and is exactly as
+    // unportable as an absolute path. The message says that rather than
+    // reusing the absolute wording, because the fix is different (`@self`,
+    // not "a port").
+    //
+    // Mutation that bites: drop the `std.mem.eql(seg, "@self")` comparison in
+    // `reachOf` and let any `@` segment count as relative — `@roaches` parses.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | mul plane.drift.@roaches.k.flock
+        \\
+        \\plane.v | bad | write plane.out
+    , "names one specific instance");
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | mul plane.drift.@roaches.k.flock
+        \\
+        \\plane.v | bad | write plane.out
+    , "`@roaches`");
+    // A named instance DOMINATES a `@self` in the same path: the moment one
+    // instance is named the path stops travelling, whatever else is in it.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | mul plane.drift.@self.peers.@roaches.k.flock
+        \\
+        \\plane.v | bad | write plane.out
+    , "names one specific instance");
+    // `@selfish` is a different entity, not a misspelling of the exemption:
+    // the test is on the whole SEGMENT, never a substring. (spindrift's mount
+    // rewrite searches for the substring `@self`, so a segment-loose rule here
+    // would have handed it `@<name>ish` to resolve.)
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | mul plane.drift.@selfish.k.flock
+        \\
+        \\plane.v | bad | write plane.out
+    , "`@selfish`");
+    // And an unsigiled `self` is not an entity segment at all — it is one
+    // room's name, so it is the ABSOLUTE refusal, not this one.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | mul plane.drift.self.k.flock
+        \\
+        \\plane.v | bad | write plane.out
+    , "name it relatively with `@self`");
+}
+
+test "@self: position is not checked, because rill cannot know it" {
+    // Decided in this beat and recorded rather than left implicit. Where a
+    // host's entity room sits in its path shape is the HOST's business — only
+    // spindrift knows `@self` is segment 2 of `plane.drift.@self.k.gravity`.
+    // rill judges the SIGIL: a segment wearing `@` is an entity segment
+    // wherever it sits, so a tail `@self` parses here and is refused, loudly,
+    // by whichever mount does not serve it — the same place a mistyped knob
+    // path is refused today.
+    //
+    // Mutation that bites: make `reachOf` require the `@self` segment at a
+    // fixed index (say 2) — this parse refuses.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\def odd(x: number) =
+        \\  x | mul plane.drift.k.@self
+        \\
+        \\plane.v | odd | write plane.out
+    );
+    defer prog.deinit();
+    try testing.expect(subFor(&prog, "plane.drift.k.@self") != null);
+}
+
+test "@self: `row.` and `slate.` in a def body stay refused, with their own advice" {
+    // The exemption is the `plane` head's alone. `row` and `slate` are the
+    // MOUNT's own stores — relative already, with no entity room to name — so
+    // `@self` would be a spelling with no customer there. They keep the old
+    // refusal, and the message does NOT offer the `@self` remedy, because it
+    // does not work: the fix is a port.
+    //
+    // (This is also the boundary `docs/cc-recon-def-plane.md` was written
+    // about: a def that wants `row.pos` is asking to declare its PLANE, which
+    // is a different ruling and was not taken here.)
+    //
+    // Mutation that bites: drop the head test in `checkDefReach` and judge
+    // every head by `reachOf` — `row.@self.pos` then parses, and the advice
+    // in the `row.age` refusal starts pointing at a spelling that mounts
+    // nowhere.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add row.age
+        \\
+        \\plane.v | bad | write plane.out
+    , "the mount's own store");
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add slate.contact
+        \\
+        \\plane.v | bad | write plane.out
+    , "the mount's own store");
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add row.@self.age
+        \\
+        \\plane.v | bad | write plane.out
+    , "defs close over nothing");
+}
+
+test "@self: the record sugar is judged on its prefix, not skipped" {
+    // `plane.a.{x, y}` returns EARLY from `parsePlaneRef` — before the loop
+    // that builds the rest of the path — so a check written only after the
+    // loop leaves the sugar as a hole in the rule.
+    //
+    // Mutation that bites: delete the `checkDefReach` call in the `lbrace`
+    // arm — `plane.player.{health, mana}` walks straight into a def body.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\def pair(x: number) =
+        \\  plane.drift.@self.k.{lo, hi} as r
+        \\  r.lo | add x
+        \\
+        \\plane.v | pair | write plane.out
+    );
+    defer prog.deinit();
+    try testing.expect(subFor(&prog, "plane.drift.@self.k.lo") != null);
+    try testing.expect(subFor(&prog, "plane.drift.@self.k.hi") != null);
+
+    try expectParseError(
+        \\def pair(x: number) =
+        \\  plane.player.{health, mana} as r
+        \\  r.health | add x
+        \\
+        \\plane.v | pair | write plane.out
+    , "name it relatively with `@self`");
+}
+
+test "@self: a fold expanding to a relative path is allowed; an absolute one still refuses" {
+    // The `using` beat's ruling holds unchanged: `:name` gets NO rule of its
+    // own inside a def body — substitution happens and the check that is there
+    // judges what came out. What changed is the answer for one shape.
+    //
+    // Mutations that bite: drop the `.relative` arm (the first parse refuses);
+    // drop the `if (tok.fold != 0)` call in `fail` (the provenance half of the
+    // second assertion stops, and the refusal points at a `plane` token the
+    // author never typed).
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using plane.drift.@self.k as :k
+        \\def scare(x: number) =
+        \\  x | mul :k.flock
+        \\
+        \\plane.v | scare | write plane.out
+    );
+    defer prog.deinit();
+    try testing.expect(subFor(&prog, "plane.drift.@self.k.flock") != null);
+
+    try expectParseError(
+        \\using plane.player.offset as :po
+        \\def bad(x: number) =
+        \\  x | add :po
+        \\
+        \\plane.v | bad | write plane.b
+    , "name it relatively with `@self`");
+    try expectParseError(
+        \\using plane.player.offset as :po
+        \\def bad(x: number) =
+        \\  x | add :po
+        \\
+        \\plane.v | bad | write plane.b
+    , "expanded from :po, bound at line 1");
+}
+
+test "@self: an export def may drive its own knob, pack and all" {
+    // The shape the ruling was asked for: one definition that declares its
+    // parameters, documents them, and drives the instance's own knob — legal
+    // even though its last statement is an effect (2026-09-08, an effect
+    // returns its input).
+    //
+    // Mutations that bite: drop the `.relative` arm (the body refuses);
+    // `publishExports` does nothing ("'flock' is not on Program.exports").
+    // That the last statement may BE the effect is the effect beat's gate,
+    // one file up — what is new here is that its target may be a plane path
+    // at all.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\export def flock(gain: number = 0.05 (0..1)) =
+        \\  lfo sine 7s | mul gain | write plane.drift.@self.k.flock
+        \\
+        \\describe flock
+        \\  "Drives this spray's own flocking knob from a slow sine."
+        \\  gain "how far the knob swings"
+        \\
+        \\flock
+    );
+    defer prog.deinit();
+    const pack = prog.exported("flock") orelse {
+        std.debug.print("'flock' is not on Program.exports\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(usize, 1), pack.ports.len);
+    try testing.expectEqualStrings("gain", pack.ports[0].name);
+    try testing.expectEqual(@as(f64, 0.05), types.asNumber(pack.ports[0].default.?).?);
+    try testing.expectEqual(@as(f64, 1), types.asNumber(pack.ports[0].max.?).?);
+    try testing.expectEqualStrings("how far the knob swings", pack.ports[0].doc);
+    // and the body really did land on the relative path
+    try testing.expect(nodeIdOf(&prog, "flock1.write1") != null);
+}
+
+test "@self: a def calling a def, where the INNER one names the relative path" {
+    // The nested case, which is where the splice-time registration earns its
+    // guard: the inner def is spliced into the OUTER TEMPLATE, whose slot ids
+    // are template-local. Registering there would file a subscription against
+    // a slot the program does not have; the outer's own splice files it once,
+    // later, against the real one.
+    //
+    // Mutation that bites: drop the `target.template == null` guard in
+    // `instantiate`'s plane-source arm — the inner splice files a second
+    // target, a TEMPLATE slot id, against the program's subscription list
+    // (expected 1, found 2), and whatever program slot happens to wear that
+    // id gets fed the knob.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def inner(x: number) =
+        \\  x | mul plane.drift.@self.k.flock
+        \\
+        \\def outer(y: number) =
+        \\  y | inner | add 1
+        \\
+        \\plane.v | outer | write plane.out
+    , .{ .{ "plane.drift.@self.k.flock", @as(i64, 3) }, .{ "plane.v", @as(i64, 4) } });
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 13), try planeNum(&fx, "plane.out"));
+    const sub = subFor(&fx.prog, "plane.drift.@self.k.flock") orelse {
+        std.debug.print("nothing subscribes the inner def's path\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(usize, 1), sub.targets.items.len);
+    try testing.expectEqualStrings("outer1.inner1.mul1", fx.prog.node(fx.prog.slot(sub.targets.items[0]).node).name);
+    try feedValue(&fx.rt, testing.allocator, "plane.drift.@self.k.flock", @as(i64, 10));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(f64, 41), try planeNum(&fx, "plane.out"));
 }

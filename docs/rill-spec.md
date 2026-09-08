@@ -401,14 +401,31 @@ def rivet(m: mesh, n: int) =
   pts | instance bolt
 ```
 
-- Ports in, streams out; a def **closes over nothing** — no reaching into ambient scene state.
-  This keeps defs reusable across Projects and keeps dirty-propagation tractable.
+- Ports in, streams out; a def **closes over nothing — except relatively** (v0.4, ruled
+  2026-09-08). An ABSOLUTE `plane.…` path inside a def body, read or write, is a parse error
+  — pass the stream in through a port. A path whose entity segment is **`@self`** is allowed:
+
+  ```
+  def driver() = lfo sine 7s | mul 0.05 | write plane.drift.@self.k.flock   // legal
+  def bad(x)   = x | add plane.defense.alerts                               // refused
+  ```
+
+  The rule is **portability**, not asceticism. `plane.defense.alerts` names one Project's
+  plane, so a def carrying it cannot leave; `@self` resolves at MOUNT to whichever instance
+  mounts the program (§3.16), so a def carrying one travels with it. The test is
+  **syntactic**: a segment spelled exactly `@self`, and no segment naming a different entity
+  (`plane.drift.@roaches.k.flock` is refused — it names one instance and is as unportable as
+  an absolute path). rill never resolves `@self`; it permits the spelling, and the host
+  rewrites it. **Position is not checked** — where a host's entity room sits in its path
+  shape is the host's business, so rill judges the SIGIL, not the index. The exemption is the
+  `plane` head's alone: `row.…` and `slate.…` are the mount's own stores, have no entity
+  segment to relativise, and stay refused whole.
 - The last statement's value is the (primary) output; multi-output defs name outputs with a
   final `as`. A def whose last statement has no value at all is refused — and since an
   effect returns its input (§3.8), a def whose last statement is a `cast`, a `tag` or an
-  `untag` is an ordinary def with an ordinary output. `write`, `notify` and `inc` remain
-  unsayable inside a def body, but for the OTHER rule: their target is a plane path, and a
-  def closes over nothing.
+  `untag` is an ordinary def with an ordinary output. `write`, `notify` and `inc` take a
+  plane path as their target, so inside a def body they are held to the rule above: a `@self`
+  target is legal, an absolute one is not.
 - A def registers an operator through the exact same registry path as built-ins and host
   operators, and gets the same graph box, the same `help`, the same tab-complete.
 - **defs are archetypes.** Instances are flattened into the graph with a name prefix; internal
@@ -648,7 +665,9 @@ perish
   word for `plane`'s reason.
 - **`plane.…` reads inside a kernel are broadcasts** — one value per tick,
   the same for every row. `plane.drift.@self.<knob>` is the mounted spray's
-  own knob; `@self` is resolved by the host at mount.
+  own knob; `@self` is resolved by the host at mount. rill never resolves it,
+  which is exactly why a **def body may name one** (§3.9, 2026-09-08): the
+  spelling is relative, so a def carrying it is still portable.
 - **A field read inside a kernel names where it samples**: `$wind at
   row.pos` — value — and `$wind grad at row.pos` — gradient, toward the
   caster. Pure desugaring to the HOST's word `hear $wind [grad] at <pos>`,

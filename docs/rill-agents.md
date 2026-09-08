@@ -129,7 +129,16 @@ Rules:
 - A def's capability cost is the union of what its body touches, computed at
   flatten. `rill inspect <op>` shows what granting it costs *before* anything
   mounts. Capabilities compose bottom-up through the graph — that is the
-  whole model.
+  whole model. **Since 2026-09-08 a def body may touch a plane path of its
+  own**, if its entity segment is `@self` (an absolute path is still refused,
+  and so is one naming a different instance). That path resolves at MOUNT,
+  per instance, so the cost this model computes has to be the RESOLVED one:
+  `plane.drift.@self.k.flock` in a def instantiated on two sprays is two
+  paths, and a grant written against the unresolved spelling would be
+  checking a path nothing ever reads. Recorded, not built — the capability
+  model is not implemented — with its trigger named: whoever implements the
+  flatten-time union resolves `@self` first, or refuses to compute a cost for
+  a program whose host has not.
 - The Substrate capability-view machinery is the enforcement twin: the
   agent's plane *is* a view scoped to its grant. Per the checked-twice
   principle (§8): the mount check moves the reject earlier; the view is the
@@ -299,7 +308,10 @@ notification that there will be no more.
   a local helper: the tax lands where laziness costs somebody else. Note what
   this does NOT do — `export` is visibility only. rill has no imports and no
   cross-file reference, so "exported" means visible to the host, and the
-  qualified-identity question below is untouched by it.
+  qualified-identity question below is untouched by it. Since the same day an
+  exported definition may also **drive its own instance's knob**: a `@self`
+  plane path is sayable in a def body, so one definition can declare a
+  parameter, document it, and write it, without the host wiring anything.
 - **Qualified operator identity (noted, not designed):** when two packs both
   ship a `rivet`, the registry needs world-qualified operator names —
   `org.foundation42.mesh/rivet` — with short names resolved per-program via

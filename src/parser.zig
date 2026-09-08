@@ -20,9 +20,12 @@
 //!   statements in dependency order, not box-creation order.
 //! - `def` bodies are flattened at parse into the same arena with an
 //!   instance-name prefix; the graph does not know defs exist.
-//! - defs close over nothing: a `plane.…` path (read or write) inside a def
-//!   body is a parse error — pass streams in through ports. This keeps defs
-//!   reusable across Projects and dirty-propagation tractable.
+//! - defs close over nothing — except relatively: an ABSOLUTE `plane.…` path
+//!   (read or write) inside a def body is a parse error — pass streams in
+//!   through ports — but a path whose entity segment is `@self` is allowed
+//!   (2026-09-08, `checkDefReach`). The rule is portability, not asceticism:
+//!   `@self` resolves at MOUNT, per instance, so a def carrying one still
+//!   moves between Projects. `row.…` and `slate.…` stay refused whole.
 //! - A parenthesized opcall in argument position — `where (= 0)`,
 //!   `partition (< 20) hp` — is a predicate *section*: it becomes an ordinary
 //!   node whose primary input mirrors the consumer's primary input, and its
@@ -474,7 +477,9 @@ const Template = struct {
 // ---------------------------------------------------------------------------
 
 /// Where statements land: the program graph, or a def template under
-/// construction. Templates ban plane paths and remember `.port` name bindings.
+/// construction. A template admits only a RELATIVE plane path — one whose
+/// entity segment is `@self`, see `checkDefReach` — and remembers `.port`
+/// name bindings.
 const Target = struct {
     nodes: *std.ArrayListUnmanaged(graph.Node),
     slots: *std.ArrayListUnmanaged(graph.Slot),
@@ -1759,6 +1764,88 @@ const Parser = struct {
         return std.mem.eql(u8, text, "plane") or std.mem.eql(u8, text, "row") or std.mem.eql(u8, text, "slate");
     }
 
+    /// How far a path REACHES — the question the def-body rule actually asks.
+    ///
+    /// `relative` is the one shape a def may name (2026-09-08, see
+    /// `checkDefReach`); `instance` and `absolute` both pin a def to one
+    /// Project, and are told apart only so the refusal can say which mistake
+    /// was made.
+    const Reach = union(enum) {
+        relative, // carries an `@self` segment and no other entity
+        instance: []const u8, // names one specific instance: `@roaches`
+        absolute, // no entity segment at all
+    };
+
+    /// The test is SYNTACTIC, and it is all rill does: does some segment read
+    /// exactly `@self`, and does no segment name a different entity?
+    ///
+    /// **Position is not checked, because rill cannot know it.** Where a
+    /// host's entity room sits in its path shape is the host's business — only
+    /// spindrift knows `@self` is segment 2 of `plane.drift.@self.k.gravity`.
+    /// What rill can see is the SIGIL: a segment wearing `@` is an entity
+    /// segment by construction. So `plane.drift.self.k` (no sigil) is an
+    /// ordinary absolute path and `@selfish` is a different entity, and both
+    /// fall out of the same one test rather than needing a rule about where.
+    ///
+    /// A named instance dominates a `@self` in the same path: the moment one
+    /// specific instance is named, the path stops travelling.
+    fn reachOf(path: []const u8) Reach {
+        var it = std.mem.splitScalar(u8, path, '.');
+        _ = it.next(); // the head — `plane` / `row` / `slate`, never sigiled
+        var found_self = false;
+        while (it.next()) |seg| {
+            if (seg.len == 0 or seg[0] != '@') continue;
+            if (std.mem.eql(u8, seg, "@self")) {
+                found_self = true;
+                continue;
+            }
+            return .{ .instance = seg };
+        }
+        return if (found_self) .relative else .absolute;
+    }
+
+    /// **defs close over nothing — except relatively** (ruled by Christian,
+    /// 2026-09-08). A def body may name a `plane.…` path whose entity segment
+    /// is `@self`, read or write, and nothing else.
+    ///
+    /// The old rule was not wrong, it was too BLUNT. It was written when every
+    /// plane path was absolute and it never considered `@self`. What the ban
+    /// protects is PORTABILITY — a def moves between Projects intact — and
+    /// `plane.defense.alerts` breaks that because it names one Project's
+    /// plane, while `plane.drift.@self.k.flock` does not: `@self` resolves to
+    /// whichever instance mounts the program, so the def travels with it.
+    /// Christian's words: *"`@self` is relative, so it stays portable. That's
+    /// quite powerful but still keeps it sealed."*
+    ///
+    /// rill NEVER resolves `@self`. The HOST rewrites it at mount — spindrift
+    /// turns `plane.drift.@self.rate` into `plane.drift.@<name>.rate` on the
+    /// spray it mounted — so *which* instance is not a question this parser is
+    /// entitled to have an opinion about. It permits the spelling; resolution
+    /// stays the mount's business.
+    ///
+    /// The exemption belongs to the `plane` head alone. `row` and `slate` are
+    /// the MOUNT's own stores: relative already, with no entity room to name,
+    /// so an `@` segment there would be a spelling rill had to keep working
+    /// for no customer. They keep the old refusal, whose advice — pass it in
+    /// through a port — is the one that works there.
+    ///
+    /// Called from `parsePlaneRef` and nowhere else: one door, one message. A
+    /// fold reaches it too, and then `fail` names the fold — Christian's
+    /// earlier ruling that `:name` needs NO rule of its own inside a def body
+    /// still holds, because this is still the check that was already there
+    /// judging what came out.
+    fn checkDefReach(self: *Parser, target: *Target, head: Token, path: []const u8) ParseError!void {
+        const tmpl = target.template orelse return;
+        if (!std.mem.eql(u8, head.text, "plane")) {
+            return self.fail(head, "'{s}': defs close over nothing — pass it in through a port of '{s}'. `@self` relativises a `plane.` path; `{s}` is the mount's own store and has no entity segment to relativise", .{ path, tmpl.name, head.text });
+        }
+        switch (reachOf(path)) {
+            .relative => {},
+            .instance => |ent| return self.fail(head, "'{s}': defs close over nothing — `{s}` names one specific instance, exactly as unportable as an absolute path. `@self` is the one entity '{s}' may name: it resolves to whichever instance mounts the def", .{ path, ent, tmpl.name }),
+            .absolute => return self.fail(head, "'{s}': defs close over nothing — pass plane streams in through a port, or name it relatively with `@self`. An absolute path names one Project's plane; `@self` resolves to whichever instance mounts '{s}', so a def carrying one travels with it", .{ path, tmpl.name }),
+        }
+    }
+
     /// `plane` `.` segment… — returns either a plain path ref or, for the
     /// record sugar `plane.a.{x, y}`, a record node's wire. A fold whose
     /// tokens are a path arrives here as ordinary path tokens: `using` splices
@@ -1768,13 +1855,12 @@ const Parser = struct {
     /// only ever be a prefix.
     fn parsePlaneRef(self: *Parser, target: *Target) ParseError!Arg {
         const head = self.next(); // "plane" / "row" / "slate"
-        if (target.template != null) {
-            // Reached by a fold too, and then `fail` names the fold: this is
-            // Christian's ruling that `:name` needs NO rule of its own inside
-            // a def body — substitution happens, and the check that was
-            // already there judges what came out.
-            return self.fail(head, "defs close over nothing — pass plane streams in through a port", .{});
-        }
+        // The def-body check used to sit HERE, refusing on the head token
+        // before a single segment was read — which is why it could only ever
+        // say "no". Since a def may now name a `@self` path (2026-09-08) the
+        // whole path has to be in hand before it can be judged, so the check
+        // moved below the segment loop. The caret still lands on the head
+        // token, which is where it landed before.
         var path = std.ArrayListUnmanaged(u8).empty;
         try path.appendSlice(self.a(), head.text);
         while (self.peek().kind == .dot) {
@@ -1783,6 +1869,13 @@ const Parser = struct {
             if (seg.kind == .lbrace) {
                 // record sugar: plane.a.{x, y} — one record node, one field
                 // per name, each subscribed at path.name.
+                //
+                // Judged here rather than after the loop, because the sugar
+                // returns early. The PREFIX is what carries the entity
+                // segment — the braces hold leaf field names — so
+                // `plane.drift.@self.k.{a, b}` is relative and
+                // `plane.player.{health, mana}` is not, on the same test.
+                try self.checkDefReach(target, head, path.items);
                 _ = self.next();
                 var fields = std.ArrayListUnmanaged([]const u8).empty;
                 var sources = std.ArrayListUnmanaged(Source).empty;
@@ -1819,6 +1912,7 @@ const Parser = struct {
         if (path.items.len == head.text.len) {
             return self.fail(head, "expected '.' after '{s}'", .{head.text});
         }
+        try self.checkDefReach(target, head, path.items);
         return .{ .kind = .plane_path, .source = .{ .plane = path.items }, .ty = types.Tag.any, .text = path.items, .tok = head };
     }
 
@@ -1832,7 +1926,7 @@ const Parser = struct {
             const op_id = self.reg.find("project") orelse return self.fail(ft, "core operator 'project' is not registered", .{});
             const statics = try self.a().alloc(registry.StaticVal, 1);
             statics[0] = .{ .word = try self.a().dupe(u8, ft.text) };
-            const node_id = try self.makeNode(target, op_id, &.{src}, statics, ft);
+            const node_id = try self.makeNode(target, op_id, &.{src}, statics);
             src = .{ .wire = target.nodes.items[node_id].outputs[0] };
         }
         return src;
@@ -1898,14 +1992,14 @@ const Parser = struct {
         const op_id = self.reg.find("array") orelse return self.fail(tok, "core operator 'array' is not registered", .{});
         const statics = try self.a().alloc(registry.StaticVal, sources.len);
         for (0..sources.len) |i| statics[i] = .{ .word = try std.fmt.allocPrint(self.a(), "{d}", .{i}) };
-        return self.makeNode(target, op_id, sources, statics, tok);
+        return self.makeNode(target, op_id, sources, statics);
     }
 
     fn makeRecordNode(self: *Parser, target: *Target, fields: []const []const u8, sources: []const Source, tok: Token) ParseError!NodeId {
         const op_id = self.reg.find("record") orelse return self.fail(tok, "core operator 'record' is not registered", .{});
         const statics = try self.a().alloc(registry.StaticVal, fields.len);
         for (fields, 0..) |f, i| statics[i] = .{ .word = f };
-        return self.makeNode(target, op_id, sources, statics, tok);
+        return self.makeNode(target, op_id, sources, statics);
     }
 
     // -- shape literals -------------------------------------------------------
@@ -2343,7 +2437,7 @@ const Parser = struct {
             });
         }
 
-        const node_id = try self.makeNode(target, op_id, sources, statics, op_tok);
+        const node_id = try self.makeNode(target, op_id, sources, statics);
         target.nodes.items[node_id].body = body_node;
 
         // Predicate sections mirror the consumer's primary input. A BODY does
@@ -2813,7 +2907,7 @@ const Parser = struct {
                     st[0] = .{ .word = try self.a().dupe(u8, ft.text) };
                     const srcs = try self.a().alloc(Source, 1);
                     srcs[0] = .none;
-                    const pnode = try self.makeNode(target, proj_id, srcs, st, ft);
+                    const pnode = try self.makeNode(target, proj_id, srcs, st);
                     const pclose = self.next();
                     if (pclose.kind != .rparen) return self.fail(pclose, "expected ')' after '.{s}'", .{ft.text});
                     const pouts = target.nodes.items[pnode].outputs;
@@ -2854,7 +2948,7 @@ const Parser = struct {
 
     /// Create a node + its slots in `target`. `sources` supplies one Source
     /// per input port (variadic ops derive their ports from it).
-    fn makeNode(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal, tok: Token) ParseError!NodeId {
+    fn makeNode(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal) ParseError!NodeId {
         const def = self.reg.get(op_id);
         const node_id: NodeId = @intCast(target.nodes.items.len);
         const node_name = try self.autoName(def.name);
@@ -2881,8 +2975,22 @@ const Parser = struct {
                 .path = try self.slotPath(target, node_name, .in, port.name),
             });
             inputs[i] = slot_id;
-            if (src == .plane) {
-                if (target.template != null) return self.fail(tok, "defs close over nothing — pass plane streams in through a port", .{});
+            if (src == .plane and target.template == null) {
+                // Inside a TEMPLATE the subscription is deliberately not
+                // registered here: slot ids are template-local and
+                // `prog.subs` is program-global, so a record written now
+                // would point at a slot the program does not have.
+                // `instantiate` registers it at splice time, against the real
+                // slot, exactly as it already did for a plane path handed in
+                // through a port.
+                //
+                // A second copy of the close-over refusal used to live on
+                // this line. It was DEAD CODE and a mutation proved it: every
+                // `.plane` source in the language is built by `parsePlaneRef`
+                // (the leaf and the record sugar are its only two), so a path
+                // that reaches makeNode has already been judged. Deleted for
+                // the reason the `use` pointers were deleted on 2026-09-08 —
+                // one door, one message.
                 const sub = self.prog.subFor(src.plane) catch return error.OutOfMemory;
                 try sub.targets.append(self.a(), slot_id);
             }
@@ -3003,7 +3111,15 @@ const Parser = struct {
                     .path = try self.slotPath(target, new_name, .in, ts.name),
                 });
                 inputs[i] = slot_id;
-                if (src == .plane) {
+                // Two ways a `.plane` source reaches this line: the caller
+                // handed a path in through a port (always), or the body named
+                // a `@self` path of its own (since 2026-09-08). Both subscribe
+                // here, at the real slot — and the `target.template == null`
+                // guard is what makes the NESTED case right: a def calling a
+                // def splices the inner body into the OUTER TEMPLATE, whose
+                // slot ids are template-local, and the outer's own splice
+                // registers them once, later, against the program.
+                if (src == .plane and target.template == null) {
                     const sub = self.prog.subFor(src.plane) catch return error.OutOfMemory;
                     try sub.targets.append(self.a(), slot_id);
                 }
@@ -3033,10 +3149,13 @@ const Parser = struct {
                 .outputs = outputs,
                 .statics = statics,
             });
-            // A def body may hold a membership sink (templates ban `path`
-            // statics, but `@subject`/`#tag` pairs are legal there) — its
-            // composed member write must land in the write list HERE, or an
-            // instantiated `tag` slips past the cycle check unseen.
+            // A def body may hold a sink — a `@subject`/`#tag` pair since the
+            // membership beat, and since 2026-09-08 a `write` at a RELATIVE
+            // `path` static too (the line above read "templates ban `path`
+            // statics", which was true when it was written). Either way the
+            // write must land in the write list HERE, or an instantiated sink
+            // slips past the cycle check unseen — which is why a def that
+            // reads and writes one `@self` path is caught for free, and gated.
             if (target.template == null and self.reg.get(tn.op).class.writes()) {
                 self.prog.registerWrites(statics, new_id) catch return error.OutOfMemory;
             }
@@ -3075,7 +3194,11 @@ fn substSource(src: Source, slot_base: SlotId, port_sources: []const Source) Sou
         .none => .none,
         .wire => |s| .{ .wire = slot_base + s },
         .literal => |b| .{ .literal = b }, // arena-shared, immutable
-        .plane => unreachable, // banned in templates at parse
+        // A `@self` path in a def body survives the splice VERBATIM — the
+        // whole point of the 2026-09-08 rule is that rill does not resolve it
+        // and the host does, at mount, per instance. (This arm read
+        // `unreachable` while every plane path in a template was banned.)
+        .plane => |p| .{ .plane = p }, // arena-shared, immutable
         .port => |i| port_sources[i],
     };
 }
