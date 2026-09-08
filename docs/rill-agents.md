@@ -31,8 +31,8 @@ stream), this names the pattern.
 Canonical sentinel:
 
 ```
-use plane.perf as p
-p.gpu.traversal_ms | window 10s | stats as t
+using plane.perf as :p
+:p.gpu.traversal_ms | window 10s | stats as t
 t.max | rose_above 6.0 | cooldown 30s
       | notify agent.perfwatch { stats: t, scene: plane.scene.name }
 ```
@@ -277,7 +277,7 @@ notification that there will be no more.
 - **Qualified operator identity (noted, not designed):** when two packs both
   ship a `rivet`, the registry needs world-qualified operator names —
   `org.foundation42.mesh/rivet` — with short names resolved per-program via
-  a `use`-style import at the top of the `.rill` file. Same orthogonality as
+  a `using`-style import at the top of the `.rill` file. Same orthogonality as
   §5.1: qualification is identity, never trust. Designed when the second
   `rivet` exists.
 

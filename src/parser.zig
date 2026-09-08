@@ -5,10 +5,11 @@
 //! joints: `as` names an edge (fan-out), a bare name in argument position
 //! pulls a stream in (fan-in), `{…}` builds a live record, and any `plane.…`
 //! path in any argument position is a subscription — there is no special
-//! subscribe form. `use plane.player as p` (§3.10) declares a plane-side
-//! prefix alias, resolved entirely at parse: `p.health` is
-//! `plane.player.health` before the graph exists, unknown bare names stay
-//! loud errors, and nothing downstream of the parser knows aliases exist.
+//! subscribe form. `using plane.player as :p` (§3.10) binds a FOLD — a
+//! sequence of tokens captured verbatim — and `:p` splices them back in
+//! wherever a token may appear, so `:p.health` is `plane.player.health`
+//! before the graph exists, unknown bare names stay loud errors, and nothing
+//! downstream of the parser knows folds exist.
 //!
 //! Structural consequences the rest of the library leans on:
 //!
@@ -50,10 +51,19 @@
 //!   No new node kind, no evaluator change.
 //! - A bare word bound to a *string-typed* port becomes a string literal at
 //!   the bind moment — the console's entity names (`volume set v1 …`) are
-//!   strings, and the port type keeps the coercion narrow: local names and
-//!   aliases resolve first, and an unknown word anywhere else stays a loud
-//!   error. A `one_of` port additionally checks a bound literal's membership
-//!   at parse.
+//!   strings, and the port type keeps the coercion narrow: local names
+//!   resolve first, and an unknown word anywhere else stays a loud error. A
+//!   `one_of` port additionally checks a bound literal's membership at parse.
+//! - `using <tokens…> as :name` is a parse-time MACRO (§3.10, 2026-09-08,
+//!   replacing `use`): the tokens between `using` and the trailing `as` are
+//!   captured unparsed, and `:name` splices them into the stream wherever a
+//!   token may appear — argument position included, which is the thing `def`
+//!   structurally cannot do (`instantiate` is only reachable from opcall
+//!   position). Substitution composes with what follows (`:k.flock`), two
+//!   splices of one fold build two independent node sets (same as `def`'s
+//!   flattening), and expansion is recursive. The cost is error LOCALITY: a
+//!   refusal can land on a token nobody typed, so every spliced token carries
+//!   its expansion chain and `fail` appends it.
 //! - A `tail` port (last input only, §3.11) binds the rest of the line
 //!   *verbatim from the raw source* as a string literal — locators like
 //!   `/tmp/loop.wav` and `pack:horns#audio.stem` are text, not structure.
@@ -107,6 +117,9 @@ const TokKind = enum {
     lbracket,
     rbracket,
     colon,
+    /// `:name` — a fold reference (§3.10), sigil included, one token, exactly
+    /// as `$chan` is. `colonOpensFold` says when a `:` spells one.
+    fold,
     comma,
     dot,
     newline,
@@ -122,6 +135,11 @@ const Token = struct {
     /// Byte offset of the token's first character (a string's opening quote
     /// included) — tail capture slices the raw source between offsets.
     off: usize,
+    /// Provenance: 0 when the author typed this token; otherwise 1 + an index
+    /// into `Parser.fold_sites` — the expansion that spliced it in. This is
+    /// what pays for the one thing `using` costs that `use` did not: a
+    /// refusal on a token nobody wrote can still say whose it is.
+    fold: u32 = 0,
 };
 
 /// The syntax's own words. Owned by the registry (which gates registration on
@@ -140,6 +158,41 @@ fn isNameStart(c: u8) bool {
 /// never hold two adjacent slashes, so every `//` sits at a token boundary.
 fn isNameChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn isSigil(c: u8) bool {
+    return c == '$' or c == '@' or c == '#' or c == '^';
+}
+
+/// Does the `:` at `i` open a FOLD reference (`:flock`) rather than one of
+/// the four colons rill already had?
+///
+/// `:` was live in four places before `using` existed — a def port type
+/// (`def f(x: number)`), a record literal (`{l: 0.28}`), a shape literal, and
+/// the colon-kwarg spelling (`cast $chan at: row.pos`) — and all four glue
+/// the colon to the name BEFORE it. A fold reference glues it to the name
+/// AFTER. So **adjacency decides, not position**, and the rule is a
+/// whitelist: a fold colon is preceded by start-of-input, whitespace, or an
+/// opener (`( [ { , |`), and followed immediately by a name (or a sigil, so
+/// `:$x` reaches the parser and is refused *by name* rather than lexing into
+/// two tokens and getting "unexpected ':'").
+///
+/// Position alone would NOT have been enough. `parseArgs` decides a kwarg on
+/// a `.name`-then-`.colon` lookahead, so `radius 12 at :flock` would have
+/// read `at:` as the kwarg and `flock` as its value — the keyword pairing
+/// silently eating the fold. Adjacency separates the two spellings before the
+/// parser ever looks.
+fn colonOpensFold(src: []const u8, i: usize) bool {
+    if (i + 1 >= src.len) return false;
+    const nx = src[i + 1];
+    const opens_name = isNameStart(nx) or
+        (isSigil(nx) and i + 2 < src.len and isNameStart(src[i + 2]));
+    if (!opens_name) return false;
+    if (i == 0) return true;
+    return switch (src[i - 1]) {
+        ' ', '\t', '\r', '\n', '(', '[', '{', ',', '|' => true,
+        else => false,
+    };
 }
 
 fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Token {
@@ -268,6 +321,24 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             col += 1;
             continue;
         }
+        // `:name` — one token, colon included, the way `$chan` is one token
+        // sigil included. Additive by construction: every other `:` in the
+        // language glues to the name on its LEFT (see `colonOpensFold`), and
+        // a leading `:` in value or operator position was a parse error in
+        // every program that could ever have been written.
+        if (c == ':' and colonOpensFold(src, i)) {
+            const start = i;
+            var j = i + 1;
+            if (isSigil(src[j])) j += 1; // refused in the parser, by name
+            j += 1; // the name's first character — `colonOpensFold` checked it
+            while (j < src.len and (isNameChar(src[j]) or
+                ((src[j] == '-' or src[j] == '/') and j + 1 < src.len and isNameChar(src[j + 1])))) : (j += 1)
+            {}
+            col += @intCast(j - i);
+            try toks.append(a, .{ .kind = .fold, .text = src[start..j], .line = tl, .col = tc, .off = to });
+            i = j;
+            continue;
+        }
         const two = if (i + 1 < src.len) src[i .. i + 2] else src[i .. i + 1];
         if (std.mem.eql(u8, two, "!=") or std.mem.eql(u8, two, "<=") or std.mem.eql(u8, two, ">=")) {
             try toks.append(a, .{ .kind = .sym, .text = two, .line = tl, .col = tc, .off = to });
@@ -344,6 +415,27 @@ const Target = struct {
     template: ?*Template = null, // null = the program itself
 };
 
+/// A bound fold: tokens, unparsed, plus where the binding was written so a
+/// refusal on one of them can point back at it.
+const Fold = struct {
+    body: []const Token,
+    def_line: u32,
+};
+
+/// One splice. `via` is the site of the expansion that produced the `:name`
+/// token being expanded here (0 when the author wrote it), which makes the
+/// chain both the provenance trail and the recursion stack.
+const FoldSite = struct {
+    name: []const u8,
+    def_line: u32,
+    via: u32,
+};
+
+/// How deep a chain of folds may nest before the parser calls it a runaway.
+/// A true cycle is caught by name below and reported as one; this is the
+/// backstop for a chain that is merely absurd.
+const max_fold_depth: u32 = 32;
+
 const ArgKind = enum { literal, stream, plane_path, section, word };
 
 const Arg = struct {
@@ -412,7 +504,7 @@ fn parseWith(
     try p.parseProgram();
 
     // Publish `as` names on the program (sources that are wires only — the
-    // console watches slots, and literal/plane aliases have no slot).
+    // console watches slots, and literal/plane sources have no slot).
     var it = p.program_target.names.iterator();
     while (it.next()) |e| {
         switch (e.value_ptr.*) {
@@ -437,10 +529,16 @@ const Parser = struct {
     pos: usize = 0,
     program_target: Target = undefined,
     defs: std.StringArrayHashMapUnmanaged(*Template) = .empty,
-    /// `use` aliases: name → fully-expanded plane path prefix (§3.10).
-    /// Resolved entirely at parse — aliases are surface syntax and never
-    /// reach the graph, the dump, or the evaluator.
-    aliases: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+    /// Bound folds (§3.10): the sigil-bearing name (`:flock`, the SAME string
+    /// at both ends of the binding) → the tokens captured verbatim between
+    /// `using` and its trailing `as`. Resolved entirely at parse — folds are
+    /// surface syntax and never reach the graph, the dump, or the evaluator.
+    folds: std.StringArrayHashMapUnmanaged(Fold) = .empty,
+    /// One entry per EXPANSION, not per binding: `via` chains a splice back
+    /// through the folds it came through, so a refusal deep inside expanded
+    /// tokens can name every fold between the author's text and the token
+    /// that actually refused.
+    fold_sites: std.ArrayListUnmanaged(FoldSite) = .empty,
     op_counters: std.StringArrayHashMapUnmanaged(u32) = .empty,
     /// How many `also { … }` blocks enclose the cursor. Two rules read it: a
     /// `}` closes an argument list only inside a block, and a tail port's
@@ -484,7 +582,34 @@ const Parser = struct {
         self.diag.col = tok.col;
         const written = std.fmt.bufPrint(&self.diag.buf, fmt, args) catch &self.diag.buf;
         self.diag.len = written.len;
+        // Error locality is the one real cost of a general fold. `use` could
+        // validate at the definition, because the only thing it could bind
+        // was a plane path; `using` binds arbitrary tokens, so a refusal on
+        // spliced text lands on something the author never wrote. Every such
+        // refusal therefore ends by naming the fold and where it was bound —
+        // otherwise "defs close over nothing" points at a `plane` the author
+        // cannot find.
+        if (tok.fold != 0) self.noteProvenance(tok.fold);
         return error.Parse;
+    }
+
+    /// Append the expansion chain to the diagnostic already in the buffer,
+    /// innermost fold first. Truncates rather than fails: a message that ran
+    /// out of room is still better than no message.
+    fn noteProvenance(self: *Parser, site: u32) void {
+        var s = site;
+        var first = true;
+        while (s != 0) {
+            const f = self.fold_sites.items[s - 1];
+            const rest = self.diag.buf[self.diag.len..];
+            const w = (if (first)
+                std.fmt.bufPrint(rest, " — expanded from {s}, bound at line {d}", .{ f.name, f.def_line })
+            else
+                std.fmt.bufPrint(rest, ", spliced via {s} (line {d})", .{ f.name, f.def_line })) catch return;
+            self.diag.len += w.len;
+            first = false;
+            s = f.via;
+        }
     }
 
     fn skipNewlines(self: *Parser) void {
@@ -538,9 +663,15 @@ const Parser = struct {
             if (t.kind == .eof) break;
             if (t.kind == .name and std.mem.eql(u8, t.text, "def")) {
                 try self.parseDef();
-            } else if (t.kind == .name and std.mem.eql(u8, t.text, "use")) {
-                try self.parseUse();
+            } else if (t.kind == .name and std.mem.eql(u8, t.text, "using")) {
+                try self.parseUsing();
             } else {
+                // No `use` arm. A first draft had one, and deleting it changed
+                // nothing any gate could see: `use` at statement head already
+                // falls through here to `parseExpr`, which points at `using`,
+                // and mid-chain it reaches the op-lookup door beside
+                // `set` → `write`. A third path was dead code that only looked
+                // like a check — found by the mutation surviving, 2026-09-08.
                 _ = try self.parseStatement(&self.program_target);
             }
         }
@@ -604,10 +735,15 @@ const Parser = struct {
                 self.skipNewlines();
                 const t = self.peek();
                 if (t.kind == .eof) break;
+                // This reads a token the AUTHOR wrote, always: a fold body
+                // holds no newline, so a splice cannot straddle two
+                // statements, and by the time one expands the statement has
+                // already begun. (A first draft claimed the splice's
+                // line/col rewrite was needed HERE; the mutation that
+                // dropped it survived, which is how the claim was found to
+                // be wrong. What the rewrite is for is the diagnostic
+                // position — see `expandIfFold`.)
                 if (t.col <= def_tok.col) break; // dedent ends the body
-                if (t.kind == .name and std.mem.eql(u8, t.text, "use")) {
-                    return self.fail(t, "defs close over nothing — 'use' is not allowed inside a def body", .{});
-                }
                 last = try self.parseStatement(&target);
                 last_names = last.out_names;
                 any_stmt = true;
@@ -632,50 +768,143 @@ const Parser = struct {
         try self.defs.put(self.a(), tmpl.name, tmpl);
     }
 
-    /// usestmt := "use" path "as" name — plane aliasing (§3.10). Resolved
-    /// entirely at parse: the alias becomes a path prefix and nothing more.
-    /// The head of the path may itself be an earlier alias. Bare dotted names
-    /// never fall through to the plane — an unknown head stays a loud error;
-    /// silent recapture and typo-subscriptions are the failure modes this
-    /// design rejects.
-    fn parseUse(self: *Parser) ParseError!void {
-        _ = self.next(); // "use"
-        const head = self.next();
-        const is_plane = head.kind == .name and isPathHead(head.text);
-        const alias_base: ?[]const u8 = if (head.kind == .name) self.aliases.get(head.text) else null;
-        if (!is_plane and alias_base == null) {
-            return self.fail(head, "use paths are plane-side — expected 'plane.…' or an existing alias", .{});
+    /// usingstmt := "using" token+ "as" foldname — a parse-time MACRO
+    /// (§3.10, 2026-09-08; it replaced `use`). Everything between `using` and
+    /// the trailing `as` is captured **verbatim as tokens** and is not parsed
+    /// here: the statement ends at the newline, and its last two tokens are
+    /// `as` and the name.
+    ///
+    /// The name wears its sigil at BOTH ends — `as :flock`, referenced
+    /// `:flock` — so the binding and the reference are literally the same
+    /// string, and the map is keyed on it. That is rill's existing convention
+    /// (a `$chan` is one token, sigil included) rather than a new one, and it
+    /// is why `using` needs none of `use`'s five shadow checks: a fold cannot
+    /// collide with an operator, a stream name, or a def, because none of
+    /// those can wear a colon. Three rules survive: not a store sigil, not a
+    /// reserved word, not already bound.
+    fn parseUsing(self: *Parser) ParseError!void {
+        const kw = self.next(); // "using"
+        const start = self.pos;
+        while (self.peek().kind != .newline and self.peek().kind != .eof) _ = self.next();
+        const span = self.toks[start..self.pos];
+
+        if (span.len < 3) {
+            return self.fail(kw, "`using` binds tokens to a name: `using <tokens…> as :<name>`", .{});
         }
-        var path = std.ArrayListUnmanaged(u8).empty;
-        try path.appendSlice(self.a(), if (is_plane) head.text else alias_base.?);
-        var segs: usize = 0;
-        while (self.peek().kind == .dot) {
-            _ = self.next();
-            const seg = self.next();
-            if (seg.kind != .name) return self.fail(seg, "expected path segment after '.'", .{});
-            try path.append(self.a(), '.');
-            try path.appendSlice(self.a(), seg.text);
-            segs += 1;
-        }
-        if (segs == 0) return self.fail(head, "expected '.' after '{s}'", .{head.text});
-        const as_tok = self.next();
+        const as_tok = span[span.len - 2];
         if (as_tok.kind != .name or !std.mem.eql(u8, as_tok.text, "as")) {
-            return self.fail(as_tok, "expected 'as' in use statement", .{});
+            return self.fail(as_tok, "`using` ends with `as :<name>` — the last two tokens of the line name the fold", .{});
         }
-        const name_tok = self.next();
-        if (name_tok.kind != .name) return self.fail(name_tok, "expected alias name after 'as'", .{});
-        if (isReservedWord(name_tok.text)) return self.fail(name_tok, "'{s}' is reserved", .{name_tok.text});
-        if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#' or name_tok.text[0] == '^') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — an alias cannot wear it", .{name_tok.text});
-        if (self.aliases.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' is already bound", .{name_tok.text});
-        if (self.program_target.names.contains(name_tok.text)) return self.fail(name_tok, "alias '{s}' collides with a stream name", .{name_tok.text});
-        if (self.reg.find(name_tok.text) != null or self.defs.contains(name_tok.text)) {
-            return self.fail(name_tok, "alias '{s}' shadows an operator", .{name_tok.text});
+        const name_tok = span[span.len - 1];
+        // The bare form is an obvious slip, not a mystery: say the fix.
+        if (name_tok.kind == .name) {
+            return self.fail(name_tok, "a fold wears its sigil at both ends — bind it `as :{s}`, and the reference is `:{s}`", .{ name_tok.text, name_tok.text });
         }
-        const end = self.peek();
-        if (end.kind != .newline and end.kind != .eof) {
-            return self.fail(end, "unexpected '{s}' — expected end of statement", .{end.text});
+        if (name_tok.kind != .fold) {
+            return self.fail(name_tok, "expected a fold name after 'as' — `using <tokens…> as :<name>`", .{});
         }
-        try self.aliases.put(self.a(), try self.a().dupe(u8, name_tok.text), path.items);
+        const bare = name_tok.text[1..];
+        if (isSigil(bare[0])) {
+            return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — a fold cannot wear it", .{name_tok.text});
+        }
+        if (isReservedWord(bare)) return self.fail(name_tok, "'{s}' is reserved", .{bare});
+        if (self.folds.contains(name_tok.text)) return self.fail(name_tok, "fold '{s}' is already bound", .{name_tok.text});
+
+        const body = span[0 .. span.len - 2];
+        if (body.len == 0) {
+            return self.fail(kw, "`using` has nothing to fold — put the tokens between `using` and `as {s}`", .{name_tok.text});
+        }
+        try self.folds.put(self.a(), try self.a().dupe(u8, name_tok.text), .{
+            .body = body,
+            .def_line = kw.line,
+        });
+    }
+
+    /// At a `:name`: splice the fold's tokens into the stream in its place and
+    /// carry on parsing them. Called wherever a value or an operator may
+    /// begin — nowhere else, which is what keeps a `:name` inside a tail port
+    /// the verbatim text a tail promises.
+    ///
+    /// The splice rebuilds `self.toks` rather than pushing a cursor, so every
+    /// existing lookahead (`toks[pos+1]` for the kwarg colon,
+    /// `braceOpensRecord`, `continuesWithPipe`) keeps reading a flat array and
+    /// needs no change. Spliced tokens take the SPLICE SITE's line and column,
+    /// so the caret lands on the `:name` the author wrote rather than on the
+    /// binding line the tokens were captured from, and they carry the
+    /// expansion site so `fail` can name the fold that supplied them.
+    ///
+    /// Two splices of one fold produce two independent node sets. That is not
+    /// a compromise: it is exactly what `def` already does, flattening its
+    /// body per instance.
+    fn expandIfFold(self: *Parser) ParseError!void {
+        while (self.toks[self.pos].kind == .fold) {
+            const tok = self.toks[self.pos];
+            if (isSigil(tok.text[1])) {
+                return self.fail(tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — a fold cannot wear it", .{tok.text});
+            }
+            const f = self.folds.get(tok.text) orelse {
+                return self.fail(tok, "'{s}' is not a bound fold — bind it first with `using <tokens…> as {s}`", .{ tok.text, tok.text });
+            };
+            // The provenance chain IS the recursion stack: a fold that
+            // expands, directly or through others, back to itself would
+            // splice forever, and the name is already sitting in the chain.
+            // Reported as a cycle with every fold it runs through, because
+            // "expansion too deep" names nobody.
+            {
+                var via = tok.fold;
+                var depth: u32 = 0;
+                while (via != 0) : (via = self.fold_sites.items[via - 1].via) {
+                    depth += 1;
+                    if (std.mem.eql(u8, self.fold_sites.items[via - 1].name, tok.text)) {
+                        return self.fail(tok, "fold cycle: {s} expands through itself ({s})", .{ tok.text, try self.chainText(tok) });
+                    }
+                    if (depth > max_fold_depth) {
+                        return self.fail(tok, "folds nest more than {d} deep at {s} ({s})", .{ max_fold_depth, tok.text, try self.chainText(tok) });
+                    }
+                }
+            }
+
+            const site: u32 = @intCast(self.fold_sites.items.len + 1);
+            try self.fold_sites.append(self.a(), .{ .name = tok.text, .def_line = f.def_line, .via = tok.fold });
+
+            const out = try self.a().alloc(Token, self.toks.len - 1 + f.body.len);
+            @memcpy(out[0..self.pos], self.toks[0..self.pos]);
+            for (f.body, 0..) |bt, k| {
+                var spliced = bt;
+                spliced.line = tok.line;
+                spliced.col = tok.col;
+                spliced.fold = site;
+                out[self.pos + k] = spliced;
+            }
+            @memcpy(out[self.pos + f.body.len ..], self.toks[self.pos + 1 ..]);
+            self.toks = out;
+        }
+    }
+
+    /// The expansion chain, outermost fold first, ending at `tok` — the text
+    /// a cycle refusal reads out.
+    fn chainText(self: *Parser, tok: Token) ![]const u8 {
+        var names = std.ArrayListUnmanaged([]const u8).empty;
+        var via = tok.fold;
+        while (via != 0) : (via = self.fold_sites.items[via - 1].via) {
+            try names.append(self.a(), self.fold_sites.items[via - 1].name);
+        }
+        var buf = std.ArrayListUnmanaged(u8).empty;
+        var i = names.items.len;
+        while (i > 0) {
+            i -= 1;
+            try buf.appendSlice(self.a(), names.items[i]);
+            try buf.appendSlice(self.a(), " → ");
+        }
+        try buf.appendSlice(self.a(), tok.text);
+        return buf.items;
+    }
+
+    /// `use` became `using` on 2026-09-08. Same precedent as `set` → `write`:
+    /// a keyword that every rill ever written used must not die as "unknown
+    /// operator or name", it must point.
+    fn failRetiredUse(self: *Parser, tok: Token) ParseError {
+        return self.fail(tok, "`use` became `using` — same shape and more general: `using plane.player as :p` binds the TOKENS, and the reference wears the sigil too (`:p.health`)", .{});
     }
 
     /// chain := expr block* ( "|" (opcall | alsoblock) )* ( "as" namelist )?
@@ -711,7 +940,9 @@ const Parser = struct {
                 if (isReservedWord(nt.text)) return self.fail(nt, "'{s}' is reserved", .{nt.text});
                 if (nt.text[0] == '$' or nt.text[0] == '@' or nt.text[0] == '#' or nt.text[0] == '^') return self.fail(nt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — a stream cannot wear it", .{nt.text});
                 if (target.names.contains(nt.text)) return self.fail(nt, "name '{s}' is already bound (names are single-assignment)", .{nt.text});
-                if (self.aliases.contains(nt.text)) return self.fail(nt, "name '{s}' shadows a use alias", .{nt.text});
+                // No fold check here, and that is the point: a fold wears a
+                // colon, a stream name cannot, so the two namespaces cannot
+                // touch. `use` needed five shadow checks; `using` needs none.
                 if (self.reg.find(nt.text) != null or self.defs.contains(nt.text)) {
                     return self.fail(nt, "name '{s}' shadows an operator", .{nt.text});
                 }
@@ -797,6 +1028,7 @@ const Parser = struct {
                 current.* = .{ .outputs = try self.oneSource(projected) };
                 continue;
             }
+            try self.expandIfFold(); // `| :op …` — a fold in operator position
             const op_tok = self.next();
             if (op_tok.kind != .name and op_tok.kind != .sym) {
                 return self.fail(op_tok, "expected operator after '|'", .{});
@@ -809,7 +1041,7 @@ const Parser = struct {
             // A path after a pipe is the most-forgotten spelling in live use
             // (Chris, twice in one morning): a pipe feeds an OPERATOR, and
             // writing what's flowing to a path is `set`. Name the fix.
-            if (op_tok.kind == .name and (isPathHead(op_tok.text) or self.aliases.contains(op_tok.text))) {
+            if (op_tok.kind == .name and isPathHead(op_tok.text)) {
                 return self.fail(op_tok, "'{s}…' is a path, and a pipe feeds an operator — did you forget `set`? (… | write {s}.…)", .{ op_tok.text, op_tok.text });
             }
             // The pipe carries the producer's FIRST output to the consumer's
@@ -880,19 +1112,22 @@ const Parser = struct {
     /// wired to `src`, so it could never rouse, and a side branch that can
     /// never run is exactly the silent failure this syntax exists to avoid.
     fn parseBranch(self: *Parser, target: *Target, src: Source) ParseError!void {
+        // A `:fold` branch head expands first, and then the rule below judges
+        // what it expanded TO — a fold of an operator is a legal branch head,
+        // a fold of a path is not, and neither needs a rule of its own.
+        try self.expandIfFold();
         const head = self.peek();
         if (head.kind == .name and std.mem.eql(u8, head.text, "also")) {
             return self.fail(head, "'also' needs a value to pass along — write it after a '|'", .{});
         }
         // Every head that names a *value* rather than an operator — a plane
-        // path, a `use` alias, a local stream, a literal, a record — would
-        // build a branch nothing wires `src` into. It would parse, sit in the
-        // graph, and never once run.
+        // path, a local stream, a literal, a record — would build a branch
+        // nothing wires `src` into. It would parse, sit in the graph, and
+        // never once run.
         const is_expr_head = switch (head.kind) {
             .name => isPathHead(head.text) or
                 std.mem.eql(u8, head.text, "true") or
                 std.mem.eql(u8, head.text, "false") or
-                self.aliases.contains(head.text) or
                 target.names.contains(head.text),
             .sym => false,
             else => true,
@@ -925,6 +1160,7 @@ const Parser = struct {
 
     /// expr := opcall | path | literal | record | name
     fn parseExpr(self: *Parser, target: *Target) ParseError!OpResult {
+        try self.expandIfFold();
         const t = self.peek();
         switch (t.kind) {
             .lbrace => {
@@ -940,9 +1176,13 @@ const Parser = struct {
                 return .{ .outputs = try self.oneSource(lit.source) };
             },
             .name => {
-                if (std.mem.eql(u8, t.text, "use")) {
-                    return self.fail(t, "'use' is only allowed at the top level of a program", .{});
-                }
+                // No `use` / `using` arms here either. A bare keyword in
+                // expression position falls straight through to `parseOpcall`,
+                // whose op-lookup miss is where `set` → `write` already
+                // points — one door, one message, for every position. Two
+                // earlier drafts put a copy here and in `parseProgram`; both
+                // mutations SURVIVED the suite, which is how they were found
+                // to be unreachable (2026-09-08).
                 if (std.mem.eql(u8, t.text, "also")) {
                     return self.fail(t, "'also' needs a value to pass along — write it after a '|'", .{});
                 }
@@ -958,10 +1198,6 @@ const Parser = struct {
                     _ = self.next();
                     const projected = try self.parseProjections(target, src);
                     return .{ .outputs = try self.oneSource(projected) };
-                }
-                if (self.aliases.contains(t.text)) {
-                    const arg = try self.parsePlaneRef(target);
-                    return .{ .outputs = try self.oneSource(arg.source) };
                 }
                 if (t.text[0] == '@') {
                     // An `@name.field` read is folded to its id-keyed plane
@@ -1146,20 +1382,23 @@ const Parser = struct {
     }
 
     /// `plane` `.` segment… — returns either a plain path ref or, for the
-    /// record sugar `plane.a.{x, y}`, a record node's wire. The head may also
-    /// be a `use` alias (§3.10), which expands to its plane prefix here —
-    /// aliasing is purely textual and over before graph construction.
+    /// record sugar `plane.a.{x, y}`, a record node's wire. A fold whose
+    /// tokens are a path arrives here as ordinary path tokens: `using` splices
+    /// before this function ever runs, so there is no alias case any more —
+    /// which is also why a fold of a LEAF path (`using plane.env.light as
+    /// :dusk`, then `:dusk | < 0.15`) simply works, where a `use` alias could
+    /// only ever be a prefix.
     fn parsePlaneRef(self: *Parser, target: *Target) ParseError!Arg {
-        const head = self.next(); // "plane" or a use alias
+        const head = self.next(); // "plane" / "row" / "slate"
         if (target.template != null) {
+            // Reached by a fold too, and then `fail` names the fold: this is
+            // Christian's ruling that `:name` needs NO rule of its own inside
+            // a def body — substitution happens, and the check that was
+            // already there judges what came out.
             return self.fail(head, "defs close over nothing — pass plane streams in through a port", .{});
         }
-        const base: []const u8 = if (isPathHead(head.text))
-            head.text
-        else
-            self.aliases.get(head.text) orelse unreachable;
         var path = std.ArrayListUnmanaged(u8).empty;
-        try path.appendSlice(self.a(), base);
+        try path.appendSlice(self.a(), head.text);
         while (self.peek().kind == .dot) {
             _ = self.next();
             const seg = self.peek();
@@ -1199,16 +1438,7 @@ const Parser = struct {
             try path.append(self.a(), '.');
             try path.appendSlice(self.a(), seg.text);
         }
-        if (path.items.len == base.len) {
-            // A `use` alias is a path PREFIX, and aliasing a LEAF gives a name
-            // that can never be used — `use plane.environment.ambient_light as
-            // dusk` then `dusk | …`. Every example in both manuals aliases a
-            // namespace, so the constraint is invisible, and `<path> as <name>`
-            // sits beside it looking interchangeable. Found by a no-priors
-            // reader, 2026-08-26; "expected '.'" sent them nowhere.
-            if (!isPathHead(head.text)) {
-                return self.fail(head, "'{s}' is a `use` alias — a path PREFIX, so a field must follow it ('{s}.something'). To name a STREAM instead, bind it with `as`: '{s} as {s}'", .{ head.text, head.text, base, head.text });
-            }
+        if (path.items.len == head.text.len) {
             return self.fail(head, "expected '.' after '{s}'", .{head.text});
         }
         return .{ .kind = .plane_path, .source = .{ .plane = path.items }, .ty = types.Tag.any, .text = path.items, .tok = head };
@@ -1431,6 +1661,11 @@ const Parser = struct {
             // not die as a shrug when every rill ever written used it.
             if (std.mem.eql(u8, op_name, "set"))
                 return self.fail(op_tok, "`set` became `write` — same shape, bare means the old durable replace (`x | write plane.foo`); say a mode (hold/add/mul/stops/clear) only if you mean one", .{});
+            // Same door, for the same reason: `use` and `using` are statement
+            // keywords, so mid-chain they reach op lookup and would shrug.
+            if (std.mem.eql(u8, op_name, "use")) return self.failRetiredUse(op_tok);
+            if (std.mem.eql(u8, op_name, "using"))
+                return self.fail(op_tok, "'using' binds at the top level of a program — a fold is file-scoped, and a `:name` reference is what goes here", .{});
             return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
         };
         const def = self.reg.get(op_id);
@@ -2063,6 +2298,13 @@ const Parser = struct {
             var from: usize = self.src.len;
             if (self.pos > 0) {
                 const prev = self.toks[self.pos - 1];
+                // A tail slices the RAW SOURCE, and a spliced token's offset
+                // points into the `using` line it was captured from — so the
+                // slice would silently start in the wrong place. Refuse
+                // instead of guessing (and `fail` names the fold).
+                if (prev.fold != 0) {
+                    return self.fail(prev, "'{s}' takes its tail from the raw source, so a fold cannot supply the token before it — write the value out", .{def.name});
+                }
                 // A string token's off sits on its opening quote and its text
                 // is the raw span between quotes: raw end = off + 1 + len + 1.
                 from = prev.off + prev.text.len + @as(usize, if (self.src.len > prev.off and self.src[prev.off] == '"') 2 else 0);
@@ -2080,7 +2322,15 @@ const Parser = struct {
             return;
         }
 
+        // A tail is VERBATIM SOURCE, so nothing here expands: a `:name` inside
+        // a tail is text, exactly as `//` and `#` are text there. The one case
+        // that cannot be text is a fold that expanded INTO the tail's first
+        // token — then the offsets belong to the `using` line and the slice
+        // would be nonsense — so that refuses by name.
         const start_tok = self.peek();
+        if (start_tok.fold != 0) {
+            return self.fail(start_tok, "'{s}' takes the rest of the line verbatim from the source — a fold cannot supply its tail", .{def.name});
+        }
         var text: []const u8 = "";
         if (start_tok.kind != .newline and start_tok.kind != .eof) {
             while (self.peek().kind != .newline and self.peek().kind != .eof) _ = self.next();
@@ -2123,6 +2373,7 @@ const Parser = struct {
     fn parseFieldValue(self: *Parser, target: *Target) ParseError!Arg {
         if (self.peek().kind != .lparen) return self.parseArgValue(target);
         const open = self.next();
+        try self.expandIfFold(); // `{x: (:op 2)}`
         const op_tok = self.next();
         if (op_tok.kind != .name and op_tok.kind != .sym) {
             return self.fail(op_tok, "expected an operator inside '(…)'", .{});
@@ -2136,6 +2387,11 @@ const Parser = struct {
     }
 
     fn parseArgValue(self: *Parser, target: *Target) ParseError!Arg {
+        // Argument position is the reason `using` exists rather than a
+        // namespace import: `push :flock` splices a whole expression where a
+        // def could never go, because `instantiate` is only reachable from
+        // opcall position.
+        try self.expandIfFold();
         const t = self.peek();
         switch (t.kind) {
             .number, .duration, .string => {
@@ -2177,6 +2433,7 @@ const Parser = struct {
                     const pouts = target.nodes.items[pnode].outputs;
                     return .{ .kind = .section, .source = .{ .wire = pouts[0] }, .section_node = pnode, .tok = ft };
                 }
+                try self.expandIfFold(); // `where (:pred)`
                 const op_tok = self.next();
                 if (op_tok.kind != .name and op_tok.kind != .sym) return self.fail(op_tok, "expected operator inside '(…)'", .{});
                 const res = try self.parseOpcall(target, op_tok, null, true);
@@ -2198,9 +2455,6 @@ const Parser = struct {
                     _ = self.next();
                     const projected = try self.parseProjections(target, src);
                     return .{ .kind = .stream, .source = projected, .ty = self.sourceTy(target, projected), .tok = t };
-                }
-                if (self.aliases.contains(t.text)) {
-                    return self.parsePlaneRef(target);
                 }
                 // a bare word: static word (label) or an error at bind time
                 _ = self.next();

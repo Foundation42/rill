@@ -181,6 +181,26 @@ fn expectParseError(source: []const u8, needle: []const u8) !void {
     }
 }
 
+/// Same, plus WHERE the caret lands. Only worth asserting where the position
+/// is itself the claim — which, since `using`, it is: a refusal on spliced
+/// tokens must point at the splice the author wrote, not at the `using` line
+/// the tokens were captured from.
+fn expectParseErrorAt(source: []const u8, needle: []const u8, line: u32, col: u32) !void {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    const result = rill.parse(testing.allocator, &reg, "p", source, &diag);
+    try testing.expectError(error.Parse, result);
+    if (std.mem.indexOf(u8, diag.msg(), needle) == null) {
+        std.debug.print("diagnostic \"{s}\" does not mention \"{s}\"\n", .{ diag.msg(), needle });
+        return error.TestUnexpectedResult;
+    }
+    if (diag.line != line or diag.col != col) {
+        std.debug.print("diagnostic \"{s}\" landed at {d}:{d}, wanted {d}:{d}\n", .{ diag.msg(), diag.line, diag.col, line, col });
+        return error.TestUnexpectedResult;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // G1 — compatibility *shape*: console-shaped one-liners parse to a chain and
 // bind as dispatched today, table-driven over stub verbs. The substantive G1
@@ -620,21 +640,30 @@ test "G2's hash moved because the slot TYPE moved, not because a value did" {
 }
 
 // ---------------------------------------------------------------------------
-// use — plane aliasing (§3.10): resolved entirely at parse; aliases are
-// surface syntax and never reach the graph, the dump, or the evaluator.
+// using — the parse-time fold (§3.10, 2026-09-08; it replaced `use`).
+//
+// `using <tokens…> as :name` captures tokens VERBATIM; `:name` splices them
+// back wherever a token may appear. Resolved entirely at parse: folds are
+// surface syntax and never reach the graph, the dump, or the evaluator. The
+// eleven gates below are the ones the design was ruled against — each names
+// the mutation that had to bite before it was believed.
 // ---------------------------------------------------------------------------
 
-test "use: aliases expand in chains, args, record sugar, and sinks" {
+test "using: a fold of a plane path splices, composes, and resolves" {
+    // The `use` gate this replaces, kept whole: chains, record sugar, argument
+    // position, and a nested fold, with every subscription fully expanded — no
+    // fold residue anywhere. Mutation that bites: splice one token short
+    // (`f.body[0 .. f.body.len - 1]`) — `:p.health` loses `player` and the
+    // gate goes down on the subscription list, loudly.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\use plane.player as p
-        \\use p.vitals as v
-        \\p.health | clamp 0 100 | div 100 | write plane.ui.hp
-        \\v.{mana, stamina} as pools
-        \\select p.underwater 1 0 as tint
+        \\using plane.player as :p
+        \\using :p.vitals as :v
+        \\:p.health | clamp 0 100 | div 100 | write plane.ui.hp
+        \\:v.{mana, stamina} as pools
+        \\select :p.underwater 1 0 as tint
     , .{ .{ "plane.player.health", @as(i64, 50) }, .{ "plane.player.underwater", false } });
     defer fx.deinit();
-    // every subscription is fully expanded — no alias residue anywhere
     const expected_subs = [_][]const u8{
         "plane.player.health",
         "plane.player.vitals.mana",
@@ -649,43 +678,392 @@ test "use: aliases expand in chains, args, record sugar, and sinks" {
     try testing.expectEqual(@as(f64, 0.5), types.asNumber(fx.mock.writes.items[0].value).?);
 }
 
-test "use: cycle detection sees through aliases" {
-    try expectParseError(
-        \\use plane.a as pa
-        \\pa.x | add 1 | write pa.x
-    , "cycle");
+test "using: substitution composes with the segment that follows it" {
+    // This is what subsumes `use`'s whole reason to exist: the fold is a
+    // PREFIX only because splicing leaves the following tokens where they
+    // were. Mutation that bites: delete the `expandIfFold` at the head of
+    // `parseExpr` — the statement head stops expanding and `:k.flock` refuses
+    // as "expected an expression". (Also bitten by shortening the captured
+    // body by one token, which is the composition claim from the other side.)
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using plane.drift.k as :k
+        \\:k.flock | write plane.out
+    );
+    defer prog.deinit();
+    try testing.expectEqualStrings("plane.drift.k.flock", prog.subs.items[0].path);
+
+    // …and a fold of a LEAF is a stream, which a `use` alias could never be:
+    // `use plane.environment.ambient_light as dusk` then `dusk | …` was a
+    // dedicated refusal ("an alias is a path PREFIX"), found by a no-priors
+    // reader on 2026-08-26. The fold has no prefix rule to violate.
+    var leaf = try parseOk(testing.allocator, &reg,
+        \\using plane.environment.ambient_light as :dusk
+        \\:dusk | < 0.15 | write plane.dark
+    );
+    defer leaf.deinit();
+    try testing.expectEqualStrings("plane.environment.ambient_light", leaf.subs.items[0].path);
 }
 
-test "use: the loud-error properties survive aliasing" {
-    // bare dotted names never fall through to the plane
+test "using: a fold splices in ARGUMENT position — what a def cannot do" {
+    // The whole argument for a token fold over a namespace import or a def:
+    // `instantiate` is only reachable from opcall position, so no `def` can
+    // ever stand where `1` and `0` stand here. Mutation that bites: drop the
+    // `expandIfFold` at the head of `parseArgValue` — `select :wet 1 0` then
+    // refuses with "unexpected ':wet' in arguments".
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\using plane.player.underwater as :wet
+        \\select :wet 1 0 | write plane.grade
+    , .{.{ "plane.player.underwater", true }});
+    defer fx.deinit();
+    try testing.expectEqualStrings("plane.player.underwater", fx.prog.subs.items[0].path);
+    try testing.expectEqualStrings("plane.grade", fx.mock.writes.items[0].path);
+    try testing.expectEqual(@as(f64, 1), types.asNumber(fx.mock.writes.items[0].value).?);
+}
+
+test "using: a fold spliced twice builds TWO node sets, not one" {
+    // Intended, and the same thing `def` already does — a def body is
+    // flattened per instance with an instance-name prefix, so two calls are
+    // two node sets. A fold that were shared would make the second `clamp`
+    // read the first's state. Mutation that bites: `_ = self.folds.swapRemove
+    // (tok.text);` after a splice (a plausible "consume it" bug) — the second
+    // `:cl` then refuses as an unbound fold.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using clamp 0 100 as :cl
+        \\plane.a | :cl | write plane.x
+        \\plane.b | :cl | write plane.y
+    );
+    defer prog.deinit();
+    try testing.expect(nodeIdOf(&prog, "clamp1") != null);
+    try testing.expect(nodeIdOf(&prog, "clamp2") != null);
+    try testing.expect(nodeIdOf(&prog, "clamp1").? != nodeIdOf(&prog, "clamp2").?);
+
+    // A fold may hold a TWO-WORD operator, which is the claim `namespaces.md`
+    // makes for `using` as a namespacing lever: a program can abbreviate a
+    // registered family locally, and it costs the global operator table
+    // nothing. Gated here because namespaces.md is prose, not a ```rill fence
+    // the manual-parse gate reads. Mutation that bites: delete the
+    // `expandIfFold` that runs after a `|` in `parseChain` — the fold never
+    // becomes an operator token and the two-word lookup is never reached.
+    var fam = try parseOk(testing.allocator, &reg,
+        \\using rbf through as :through
+        \\plane.coat | :through plane.flame | write plane.out
+    );
+    defer fam.deinit();
+    try testing.expect(nodeIdOf(&fam, "rbf through1") != null);
+}
+
+test "using: expansion is recursive — a fold may reference an earlier fold" {
+    // Defined-before-use, the same rule the whole language runs on (parse
+    // order is topological order). Mutation that bites: `while` → `if` in
+    // `expandIfFold` (expand once, not to fixpoint) — `:f` then leaves a `:d`
+    // token where a path head belongs.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using plane.drift as :d
+        \\using :d.flock as :f
+        \\:f.radius | write plane.out
+    );
+    defer prog.deinit();
+    try testing.expectEqualStrings("plane.drift.flock.radius", prog.subs.items[0].path);
+}
+
+test "using: a fold cycle is refused, naming every fold in it" {
+    // A fold body is captured unparsed, so a self-reference binds cleanly and
+    // only bites at the splice. The provenance chain a splice already carries
+    // IS the recursion stack, which is why the message can read the folds out
+    // rather than saying "too deep". Mutation that bites: drop the name
+    // comparison in the `via` walk and keep only the depth cap — the parse
+    // still refuses, but "expands through itself (:a → :b → :a)" is gone and
+    // the second assertion fails.
+    try expectParseError(
+        \\using :a as :a
+        \\:a | write plane.x
+    , "fold cycle");
+    try expectParseError(
+        \\using :b as :a
+        \\using :a as :b
+        \\:a | write plane.x
+    , ":a → :b → :a");
+    // Indirect recursion through a TAIL position, not a head: `:a` expands to
+    // `mul 2 :a`, whose second `:a` is reached from argument position on the
+    // next call into `expandIfFold`. A cycle check that only looked at the
+    // head of one expansion would loop forever here.
+    try expectParseError(
+        \\using mul 2 :a as :a
+        \\plane.b | :a | write plane.x
+    , "fold cycle");
+}
+
+test "using: an undefined :name is refused, naming it" {
+    // Mutation that bites: `orelse return` instead of `orelse fail` in
+    // `expandIfFold` — the unknown fold token then falls through to
+    // "expected an expression, got ':nope'", which names the token but not
+    // the thing to bind.
+    try expectParseError(":nope | write plane.x", "':nope' is not a bound fold");
+    try expectParseError("plane.a | mul :nope | write plane.x", "':nope' is not a bound fold");
+    // …and it says what to do about it, in the spelling that works.
+    try expectParseError(":nope | write plane.x", "using <tokens…> as :nope");
+}
+
+test "using: inside a def body the EXISTING checks run on the expanded tokens" {
+    // Christian's ruling, 2026-09-08: `:name` is allowed inside a def body and
+    // gets NO rule of its own. A fold of pure operators works; a fold that
+    // expands to a plane path is refused by the "defs close over nothing"
+    // check that was already there — which preserves def's portability
+    // guarantee without `using` needing to know defs exist.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using mul 2 as :dbl
+        \\def scale(x: number) =
+        \\  x | :dbl
+        \\
+        \\plane.a | scale | write plane.b
+    );
+    defer prog.deinit();
+    try testing.expect(nodeIdOf(&prog, "scale1.mul1") != null);
+
+    // The refusal carries PROVENANCE. Without it this reads as "defs close
+    // over nothing" pointing at a `plane` token the author never typed — the
+    // exact failure the error-locality requirement exists to prevent.
+    // Mutation that bites: drop the `if (tok.fold != 0)` call in `fail` — the
+    // first assertion still passes and the second stops.
+    try expectParseError(
+        \\using plane.player.offset as :po
+        \\def bad(x: number) =
+        \\  x | add :po
+        \\
+        \\plane.v | bad | write plane.b
+    , "close over nothing");
+    try expectParseError(
+        \\using plane.player.offset as :po
+        \\def bad(x: number) =
+        \\  x | add :po
+        \\
+        \\plane.v | bad | write plane.b
+    , "expanded from :po, bound at line 1");
+
+    // A fold reference is an ordinary statement inside a body, and the body
+    // does not end at it. (The dedent rule reads the token at STATEMENT
+    // START, which is always one the author wrote — a fold body holds no
+    // newline, so a splice can never straddle two statements. That is why the
+    // `spliced.col` rewrite is gated on the DIAGNOSTIC position instead, in
+    // the provenance gate below, and not here: the mutation that dropped it
+    // survived this gate, and the survival is what said where it mattered.)
+    var indented = try parseOk(testing.allocator, &reg,
+        \\using mul 3 as :tri
+        \\def scale3(x: number) =
+        \\  x | add 1
+        \\  x | :tri
+        \\
+        \\plane.a | scale3 | write plane.b
+    );
+    defer indented.deinit();
+    try testing.expect(nodeIdOf(&indented, "scale31.mul1") != null);
+}
+
+test "using: a parse error inside expanded tokens names the fold and its line" {
+    // The one real cost of a general fold: `use` could validate at the
+    // definition, because a use path was always plane-side. A fold of
+    // arbitrary tokens cannot, so the error lands at the splice, on tokens the
+    // author did not literally write — and every such refusal must say whose
+    // they are. Mutation that bites: have `noteProvenance` stop after the
+    // innermost site (drop `s = f.via`) — the nested case loses "spliced via".
+    try expectParseError(
+        \\using mul nonsense as :bad
+        \\plane.a | :bad | write plane.b
+    , "unknown name 'nonsense'");
+    try expectParseError(
+        \\using mul nonsense as :bad
+        \\plane.a | :bad | write plane.b
+    , "expanded from :bad, bound at line 1");
+    // Nested: the innermost fold first, then what it was spliced through.
+    try expectParseError(
+        \\using mul nonsense as :inner
+        \\using :inner as :outer
+        \\plane.a | :outer | write plane.b
+    , "expanded from :inner, bound at line 1, spliced via :outer (line 2)");
+
+    // …and the CARET lands on the splice the author wrote, not on the `using`
+    // line the tokens were captured from. A spliced token therefore takes the
+    // splice site's line and column; only its provenance points back.
+    //
+    // This gate exists because the first draft asserted the message and not
+    // the position, and a mutation that stopped rewriting `spliced.col`
+    // SURVIVED it — the def-body dedent rule reads a column, but it reads the
+    // token at STATEMENT START, which is always one the author wrote, so
+    // nothing in the suite could tell. The position was the load-bearing part
+    // all along. Mutation that bites: drop `spliced.line = tok.line;` (caret
+    // goes to line 1) or `spliced.col = tok.col;` (caret goes to column 7,
+    // where `nonsense` sits on the binding line).
+    // (The reference sits at column 19 and the offending token at column 11 of
+    // the binding line ON PURPOSE: the first draft put both at 11 by accident
+    // and the `spliced.col` mutation survived on the coincidence.)
+    try expectParseErrorAt(
+        \\using mul nonsense as :bad
+        \\plane.a | mul 1 | :bad | write plane.b
+    , "unknown name 'nonsense'", 2, 19);
+}
+
+test "using: all four existing colon spellings still parse" {
+    // The implementation hazard: `:` was already live in four places, and all
+    // four are used heavily in real kernels in the sibling repos. The lexer
+    // rule is ADJACENCY — a fold colon glues to the name AFTER it, every
+    // existing colon glues to the name BEFORE it.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\def half(x: number) = x | div 2
+        \\plane.a | half | write plane.b
+        \\{l: 0.28, r: 1} | write plane.rec
+        \\plane.c | match {id: string, distance: number} | write plane.m
+        \\plane.lvl | cast $blight radius: 12 at: plane.origin
+    );
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "cast1").?);
+    try testing.expectEqual(@as(f64, 12), types.asNumber(n.statics[1].literal).?);
+    try testing.expectEqualStrings("plane.origin", prog.slot(n.inputs[2]).source.plane);
+
+    // …and the SAME four written with no space after the colon, which is what
+    // makes the preceding-character whitelist load-bearing. The first draft of
+    // this gate used only the spaced forms above, and a mutation that deleted
+    // the whitelist entirely SURVIVED it: with a space after the colon the
+    // next character is not a name start, so the fold rule never fires and the
+    // spaced spellings are safe either way. It is `x:number`, `{a:b}`,
+    // `{id:string}` and `at:plane.origin` — colon glued on BOTH sides — that
+    // the whitelist is the only thing standing between and a fold token.
+    // Mutation that bites: `colonOpensFold` returns true whenever a name
+    // follows, ignoring what precedes.
+    var tight = try parseOk(testing.allocator, &reg,
+        \\def third(x:number) = x | div 3
+        \\plane.a | third | write plane.b
+        \\{l:0.28, r:plane.rr} | write plane.rec
+        \\plane.c | match {id:string, distance:number} | write plane.m
+        \\plane.lvl | cast $blight radius:12 at:plane.origin
+    );
+    defer tight.deinit();
+    const n2 = tight.node(nodeIdOf(&tight, "cast1").?);
+    try testing.expectEqual(@as(f64, 12), types.asNumber(n2.statics[1].literal).?);
+    try testing.expectEqualStrings("plane.origin", tight.slot(n2.inputs[2]).source.plane);
+
+    // The kwarg case is the one that needed adjacency and not position: a
+    // keyword followed by a fold must stay a keyword. `parseArgs` decides a
+    // kwarg on a `.name`-then-`.colon` lookahead, so with a position-only rule
+    // `at :origin` would read `at:` as the kwarg and eat the fold's name.
+    var kw = try parseOk(testing.allocator, &reg,
+        \\using plane.origin as :here
+        \\plane.lvl | cast $blight radius 12 at :here
+    );
+    defer kw.deinit();
+    const c2 = kw.node(nodeIdOf(&kw, "cast1").?);
+    try testing.expectEqualStrings("plane.origin", kw.slot(c2.inputs[2]).source.plane);
+}
+
+test "using: the binding form refuses what it must, and points" {
+    // The name wears its sigil at BOTH ends (Christian, 2026-09-08): it is
+    // more explicit, it visually ties the two ends of the string together, and
+    // it matches rill's existing convention that a sigil is part of the token
+    // (`$chan` is one token, sigil included). The bare form `as flock` was the
+    // rejected spelling, so it gets a POINTING error, not "expected ':'".
+    // Mutation that bites: `return self.fail(name_tok, "expected a fold name")`
+    // for the `.name` case — the refusal still happens, and stops naming the
+    // fix.
+    try expectParseError("using plane.a as flock", "bind it `as :flock`");
+    // The sigil rule applies to what comes AFTER the colon.
+    try expectParseError("using plane.a as :$s", "cannot wear");
+    try expectParseError("using plane.a as :#s", "cannot wear");
+    // Redefining a bound fold is an error; a reserved word is not a fold name.
+    try expectParseError(
+        \\using plane.a as :p
+        \\using plane.b as :p
+    , "fold ':p' is already bound");
+    try expectParseError("using plane.a as :as", "reserved");
+    // Shape errors in the statement itself.
+    try expectParseError("using plane.a :p", "ends with `as :<name>`");
+    try expectParseError("using as :p", "binds tokens to a name");
+    // `using` is a top-level binding; the reference is what goes mid-chain.
+    try expectParseError("plane.a | using plane.b as :p", "top level");
+}
+
+test "using: the loud-error properties survive folding" {
+    // Ported from `use`. Bare dotted names still never fall through to the
+    // plane, and the cycle check still sees through a fold, because a fold is
+    // gone before the graph exists.
     try expectParseError("q.health | tap t", "unknown operator or name 'q'");
-    // aliases are plane-side declarations only
-    try expectParseError("use q.health as h", "plane-side");
-    // single-assignment holds across aliases and stream names, both ways
     try expectParseError(
-        \\use plane.a as p
-        \\use plane.b as p
-    , "already bound");
+        \\using plane.a as :pa
+        \\:pa.x | add 1 | write :pa.x
+    , "cycle");
+    // What `using` DELETED: `use` needed five shadow checks (reserved, sigil,
+    // already-bound, collides-with-a-stream-name, shadows-an-operator) because
+    // an alias and a bare name lived in one namespace. A fold wears a colon,
+    // so the last two cannot happen — a fold named `:add` and the operator
+    // `add` are different strings, and both work in the same program.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using plane.k as :add
+        \\plane.a | add :add.x | write plane.b
+        \\plane.c | add 1 as add_out
+    );
+    defer prog.deinit();
+    try testing.expectEqualStrings("plane.k.x", prog.subs.items[1].path);
+}
+
+test "using: a tail port takes the line verbatim — a fold there is text" {
+    // A tail slices the RAW SOURCE between token offsets (§3.11), and a
+    // spliced token's offset points into the `using` line it was captured
+    // from. So nothing expands inside a tail — `:name` is text there, exactly
+    // as `//` and `#` are — and the one case that cannot be text, a fold
+    // landing ON the tail's first token, refuses by name instead of slicing
+    // somewhere absurd. Mutation that bites: delete the `start_tok.fold != 0`
+    // guard — the second case then parses and binds a locator built from the
+    // bytes between the two lines.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using plane.a as :flock
+        \\sound play :flock.wav
+    );
+    defer prog.deinit();
+    const n = prog.node(nodeIdOf(&prog, "sound play1").?);
+    try testing.expectEqualStrings(":flock.wav", types.asString(prog.slot(n.inputs[0]).source.literal).?);
+
+    // The case that cannot be text: a fold expanded at the FIXED positional
+    // before the tail, whose remaining tokens land on the tail's first token.
+    // `emitter drop` takes one static word and then the tail, so a two-token
+    // fold runs one token into the tail — and the slice would start back on
+    // the `using` line.
     try expectParseError(
-        \\use plane.a as p
-        \\plane.b | add 0 as p
-    , "shadows a use alias");
-    // defs close over nothing — neither use statements nor alias references
+        \\using boom 2 as :f
+        \\plane.x | emitter drop :f /tmp/a.wav
+    , "verbatim from the source");
+}
+
+test "use: the retired keyword points at `using`" {
+    // Same precedent as `set` → `write` (2026-08-29): a keyword every rill
+    // ever written used must not die as "unknown operator or name". Zero
+    // `.rill` files across the six sibling repos held a `use … as` statement,
+    // which is why removing it cost nothing — but the pointer is what makes
+    // that true for anyone reading an old doc. Mutation that bites: delete the
+    // `use` arm from `parseProgram`'s dispatch — the statement then fails as
+    // "unknown operator or name 'use'" and says nothing about `using`.
+    try expectParseError("use plane.player as p", "`use` became `using`");
+    try expectParseError("plane.a | add 1\nuse plane.b as q", "`use` became `using`");
+    // …including where it used to be refused for a different reason.
     try expectParseError(
-        \\use plane.player as p
         \\def bad(x: number) =
         \\  x | add 1
-        \\  use p.q as z
+        \\  use plane.q as z
         \\
         \\plane.v | bad | tap t
-    , "close over nothing");
-    try expectParseError(
-        \\use plane.player as p
-        \\def bad(x: number) =
-        \\  x | add p.offset
-        \\
-        \\plane.v | bad | tap t
-    , "close over nothing");
+    , "`use` became `using`");
 }
 
 test "publish hook: freshened wires reach the host each tick, then go quiet" {
@@ -1894,10 +2272,10 @@ test "the garrison: two watchers see one attacker, and the tally rises by two" {
     }
     for ([_][]const u8{ "gate", "tower" }, 0..) |post, i| {
         const src = try std.fmt.allocPrint(gpa,
-            \\use plane.defense as d
+            \\using plane.defense as :d
             \\plane.{s}.enemy_count | rose_above 0
-            \\  | also {{ inc d.sightings 1 }}
-            \\  | notify d.alerts
+            \\  | also {{ inc :d.sightings 1 }}
+            \\  | notify :d.alerts
         , .{post});
         defer gpa.free(src);
         progs[i] = try parseOk(gpa, &reg, src);
@@ -1980,11 +2358,11 @@ test "the spec's §3.14 example parses, verbatim" {
     defer reg.deinit();
     try rill.registerCore(&reg);
     var prog = try parseOk(testing.allocator, &reg,
-        \\use plane.defense as d
+        \\using plane.defense as :d
         \\
         \\plane.gate.enemy_count | rose_above 0
-        \\  | also { inc d.sightings 1 }
-        \\  | notify d.alerts
+        \\  | also { inc :d.sightings 1 }
+        \\  | notify :d.alerts
     );
     defer prog.deinit();
     try testing.expectEqual(@as(usize, 0), prog.warnings.items.len);
@@ -2640,7 +3018,7 @@ test "cast: what refuses to parse, refuses loudly" {
     try expectParseError("plane.x | mul 2 as $x", "cannot wear");
     try expectParseError("plane.x | mul 2 as @x", "cannot wear");
     try expectParseError("@tom | mul 2 | write plane.x", "entity reference");
-    try expectParseError("use plane.a as $s", "cannot wear");
+    try expectParseError("using plane.a as :$s", "cannot wear");
     try expectParseError("def $d(x) = x | mul 2", "cannot wear");
 }
 
@@ -3016,8 +3394,13 @@ test "the manuals parse: every printed example compiles" {
     // "most operators pass the kind through" while `mul` did not, so the
     // documentation was right and the code was wrong; the example is there so
     // the claim is now something this gate parses rather than prose.
-    try testing.expectEqual(@as(usize, 50), human);
-    try testing.expectEqual(@as(usize, 4), agent);
+    // 50 → 51 (`using`, 2026-09-08): §10 gains the argument-position example,
+    // which is the one thing a fold does that a `def` structurally cannot —
+    // and the section's other two blocks moved from `use` to `using`.
+    try testing.expectEqual(@as(usize, 51), human);
+    // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
+    // ```rill fence so this gate reads it rather than the reader trusting it.
+    try testing.expectEqual(@as(usize, 5), agent);
 }
 
 // ---------------------------------------------------------------------------
@@ -4481,8 +4864,8 @@ test "diagnostics: a path after a pipe names the forgotten `set`" {
     // intent is a write, the spelling is `set`, and the error says so.
     try expectParseError("plane.render.grade.exposure | plane.render.grade.highlights", "did you forget `set`?");
     try expectParseError(
-        \\use plane.render.grade as g
-        \\plane.hp | g.exposure
+        \\using plane.render.grade as :g
+        \\plane.hp | :g.exposure
     , "did you forget `set`?");
 }
 
@@ -4593,7 +4976,7 @@ test "tag: what refuses to parse, refuses loudly" {
     try expectParseError("#garrison | write plane.x", "plane.tags.garrison.count");
     // The sigil guards hold for `#` as they do for `$` and `@`.
     try expectParseError("plane.x | mul 2 as #x", "cannot wear");
-    try expectParseError("use plane.a as #s", "cannot wear");
+    try expectParseError("using plane.a as :#s", "cannot wear");
     try expectParseError("def #d(x) = x | mul 2", "cannot wear");
 }
 
@@ -6608,33 +6991,29 @@ test "a positional argument written as a keyword names itself, and gives the spe
     try expectParseError("noise 40ms seed octaves | write plane.b", "unknown name 'octaves'");
 }
 
-test "a `use` alias used as a stream says it is an alias, and points at `as`" {
-    // `use plane.environment.ambient_light as dusk` then `dusk | …` said
-    // "expected '.' after 'dusk'", which names nothing and fixes nothing. A
-    // `use` alias is a path PREFIX, so aliasing a LEAF produces a name that
-    // can never be used — and every example in both manuals aliases a
-    // namespace, so the constraint is invisible while `<path> as <name>` sits
-    // beside it looking interchangeable.
-    try expectParseError(
-        \\use plane.environment.ambient_light as dusk
-        \\dusk | < 0.15 | write plane.b
-    , "'dusk' is a `use` alias");
-    try expectParseError(
-        \\use plane.environment.ambient_light as dusk
-        \\dusk | < 0.15 | write plane.b
-    , "plane.environment.ambient_light as dusk"); // the fix, spelled out
-
-    // The prefix itself still works, and so does the `as` the message names.
+test "the leaf-alias refusal is GONE, because a fold has no prefix rule" {
+    // What this gate used to watch: `use plane.environment.ambient_light as
+    // dusk` then `dusk | …` said "expected '.' after 'dusk'", because a `use`
+    // alias was a path PREFIX and aliasing a LEAF produced a name that could
+    // never be used. It took a dedicated refusal naming the alias and spelling
+    // out the fix (found by a no-priors reader, 2026-08-26).
+    //
+    // `using` deletes the class rather than the message: a fold is tokens, and
+    // tokens that happen to be a whole path are a whole path. The gate is now
+    // that both spellings WORK — leaf and namespace, same rule, no rule.
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
-        \\use plane.environment as env
-        \\env.ambient_light | < 0.15 | write plane.dark
+        \\using plane.environment.ambient_light as :dusk
+        \\using plane.environment as :env
+        \\:dusk | < 0.15 | write plane.dark
+        \\:env.ambient_light | < 0.05 | write plane.pitch
     , .{.{ "plane.environment.ambient_light", @as(f64, 0.1) }});
     defer fx.deinit();
     try testing.expect(types.asBool(fx.rt.readSlot("programs.p.lt1.out.out").?).?);
+    try testing.expect(!types.asBool(fx.rt.readSlot("programs.p.lt2.out.out").?).?);
 
-    // …and `plane` itself keeps the plain message: it is not an alias, and
-    // telling someone to bind `plane` with `as` would be nonsense.
+    // …and `plane` itself keeps the plain message, which is now the ONLY
+    // message this site emits: there is no alias case left to disambiguate.
     try expectParseError("plane | write plane.b", "expected '.' after 'plane'");
 }
 

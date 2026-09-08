@@ -511,7 +511,7 @@ lands), not just the refusal.
 Two things recorded here, not built:
 
 - **`@self.$chan` sugar** inside an instance-bound def, when R4
-  arrives — under the `use` precedent: parse-time expansion, dumps
+  arrives — under the `use`/`using` precedent: parse-time expansion, dumps
   store the expanded path, nothing downstream of the parser knows
   the sugar exists.
 - **A positioned read for a supervisor is an ear with a `position`

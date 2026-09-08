@@ -103,15 +103,44 @@ actual spelling *is* the design.
 
 ```
 program   := statement*
-statement := chain | "def" … | "use" plane-path "as" name
+statement := chain | "def" … | "using" token+ "as" ":"name
 chain     := expr block* ( "|" (opcall | "also" "{" branch* "}") )* ( "as" name ("," name)* )?
 branch    := opcall ( "|" opcall | alsoblock )*        // head MUST be an operator
-expr      := opcall | plane-path | literal | record | name
+expr      := opcall | plane-path | literal | record | name | ":"name
 opcall    := opname arg*
-arg       := literal | plane-path | name(.field)* | record | (op …) | kwarg
+arg       := literal | plane-path | name(.field)* | record | (op …) | kwarg | ":"name
 kwarg     := portname ":" value          // and keyword ports: `radius 12 at <ref>`
 record    := "{" field ":" value ("," …)* "}"
 ```
+
+**`using` binds a FOLD of tokens; `:name` splices them back.** Everything
+between `using` and the trailing `as` is captured verbatim and unparsed;
+the statement is one line and its last two tokens are `as` and the name.
+The name wears its colon at both ends, so a binding and a reference are
+the same string — `using plane.player as :p`, then `:p.health`.
+
+```rill
+using plane.player as :p
+using :p.vitals as :v
+:p.health | clamp 0 100 | div 100 | write plane.ui.hp
+```
+
+What follows from it being tokens and not a path: substitution
+**composes** with what comes after (`:p.health`), a fold may stand in
+**argument position** (`select :wet 1 0` — a `def` structurally cannot,
+because instantiation is only reachable from opcall position), a fold may
+reference an earlier fold, and two splices of one fold build **two
+independent node sets**, exactly as two `def` instances do. Folds are
+defined before use; a cycle refuses by name. A fold cannot collide with an
+operator, a stream or a def, because none of those wear a colon.
+
+Inside a `def` body a `:name` gets no rule of its own: it expands, and the
+checks already there judge the result — a fold of operators works, a fold
+of a `plane.…` path is refused by close-over-nothing. Any parse error on
+spliced tokens names the fold it came from and the line it was bound on.
+
+`use plane.x as p` is gone (it was a path prefix and nothing else); `use`
+now points at `using`.
 
 Word rules: `_` and alphanumerics are name characters; `/` and `-` are
 name-interior when they **join two name characters**

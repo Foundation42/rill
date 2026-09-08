@@ -523,8 +523,8 @@ pub const OpId = u32;
 
 pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName, AmbiguousOptionals, TooManyPublishes, BadPublishName } || std.mem.Allocator.Error;
 
-/// Words the *syntax* claims, which therefore may not name an operator or an
-/// `as`/`use` binding. The list lives here because the registry owns the
+/// Words the *syntax* claims, which therefore may not name an operator, an
+/// `as` binding, or a `using` fold. The list lives here because the registry owns the
 /// operator namespace, and the only useful thing to say about a reserved word
 /// is that the namespace may not contain it: the parser recognises these
 /// before it ever asks `find`, so a host row named `also` or `as` would
@@ -536,7 +536,11 @@ pub fn isReservedWord(s: []const u8) bool {
     // way `plane.pos` is. `slate` is the third (2026-09-07). Reserved for the
     // same reason `plane` is: an operator wearing a path head's name would be
     // permanently shadowed by the grammar.
-    const words = [_][]const u8{ "plane", "row", "slate", "use", "def", "as", "also", "true", "false" };
+    // `using` binds a fold (§3.10, 2026-09-08). `use` stays on the list after
+    // its retirement: the parser recognises it before `find` in order to POINT
+    // at `using`, so an operator named `use` would register cleanly and then
+    // be permanently unreachable — which is precisely what this list prevents.
+    const words = [_][]const u8{ "plane", "row", "slate", "use", "using", "def", "as", "also", "true", "false" };
     for (words) |w| {
         if (std.mem.eql(u8, s, w)) return true;
     }

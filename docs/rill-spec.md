@@ -389,22 +389,55 @@ def rivet(m: mesh, n: int) =
 - defs live in the rig/Project like everything else: cut, mounted, provenance-tracked. A pack
   can ship operators, not just assets.
 
-### 3.10 `use` — plane aliasing (v0.1, agreed 2026-08-23)
+### 3.10 `using` — the parse-time fold (v0.3, ruled 2026-09-08; replaced `use`)
 
 ```
-use plane.player as p
-p.health | dropped_below 20 | play heartbeat
+using plane.player as :p
+:p.health | dropped_below 20 | play heartbeat
 ```
 
-Resolved entirely at parse: `p.` expands to `plane.player.` before graph construction. The
-alias is *declared* plane-side, so everything that depends on plane refs being syntactically
-distinguishable survives intact — unknown bare names stay loud parse errors, `as` bindings can
-never silently recapture a path, the def close-over-nothing rule remains parse-enforceable
-(`use` is banned inside def bodies for the same reason `plane.` is), and a program's full I/O
-contract is still auditable from the text. Bare dotted names falling through to the plane is
-**rejected** as a design: silent recapture and typo-subscriptions are the failure modes.
-REPL-only affordance permitted: at the interactive prompt, an unresolved dotted expression may
-*offer* plane completion — never in a `.rill` file.
+**`using <tokens…> as :name` binds a FOLD.** Everything between `using` and the trailing `as`
+is captured *verbatim as tokens* and is not parsed at the binding; the statement is one line,
+and its last two tokens are `as` and the name. A `:name` reference then **splices those tokens
+into the stream** wherever a token may appear, and parsing continues on them.
+
+The name wears its sigil at both ends — bound `as :p`, referenced `:p` — so a binding and a
+reference are literally the same string, the way `$chan` is one token sigil included.
+
+Consequences, all intended:
+
+- **Substitution composes with what follows.** `using plane.drift.k as :k` then `:k.flock`
+  parses as `plane.drift.k.flock`. This is how `using` subsumes what `use` did, and it is why
+  a fold of a *leaf* path is a perfectly good stream — the prefix-only constraint that `use`
+  had is not a rule that was relaxed, it is a rule that no longer exists.
+- **A fold may stand in ARGUMENT position** — `select :wet 1 0` — which a `def` structurally
+  cannot, because instantiation is only reachable from opcall position. This is the case that
+  decided the design.
+- **Two splices of one fold build two independent node sets**, exactly as two instances of a
+  `def` do (a def body is flattened per instance with an instance-name prefix).
+- **Expansion is recursive** and defined-before-use, consistent with parse order being
+  topological order. A cycle is refused loudly, naming every fold in it; depth is capped.
+- **No shadow rules.** A fold cannot collide with an operator, a stream name or a def, because
+  none of those can wear a colon. Three rules survive: the name may not wear a store sigil
+  (`$ @ # ^`), may not be a reserved word, and may not already be bound.
+
+Everything the old §3.10 protected still holds: resolution happens entirely at parse, nothing
+downstream of the parser knows folds exist, unknown bare names stay loud parse errors, and a
+program's full I/O contract is still auditable from the text. Bare dotted names falling
+through to the plane remains **rejected**: silent recapture and typo-subscriptions are the
+failure modes. REPL-only affordance permitted: at the interactive prompt, an unresolved dotted
+expression may *offer* plane completion — never in a `.rill` file.
+
+**`:name` needs no rule inside a `def` body.** Substitution happens, and then the checks that
+were already there judge what came out: a fold of pure operators works, and a fold that
+expands to a `plane.…` path is refused by close-over-nothing. What `using` owes in exchange is
+**provenance** — the one thing a general fold costs that `use` did not, because `use` could
+validate at the definition and a fold of arbitrary tokens cannot. Every parse error occurring
+inside spliced tokens names the fold it came from and the line that fold was bound on, and the
+caret lands on the reference the author wrote, not on the binding.
+
+`use plane.player as p` was the earlier, narrower spelling: a path prefix, five shadow checks,
+and nothing else. It is removed. `use` now points at `using`, the way `set` points at `write`.
 
 ### 3.11 Tail ports (v0.1, agreed 2026-08-23)
 
@@ -608,11 +641,11 @@ match plane.player.state { idle: idleAnim, running: runAnim }
 ### 3.14 `also` — a side branch, inline (v0.2, ratified 2026-08-24)
 
 ```
-use plane.defense as d
+using plane.defense as :d
 
 plane.gate.enemy_count | rose_above 0
-  | also { inc d.sightings 1 }
-  | notify d.alerts
+  | also { inc :d.sightings 1 }
+  | notify :d.alerts
 ```
 
 (This exact program is parsed by a gate test — a spec example that does not
@@ -638,8 +671,10 @@ Rules, all parse-time:
 
 - **A branch begins with an operator.** Its implicit source is the in-flowing value, bound
   to port 0 exactly as a pipe would. A head that names a value instead (a plane path, a
-  `use` alias, a local stream, a literal, a record) is refused: nothing would wire the
-  source into it, so it would parse, sit in the graph, and never once run.
+  local stream, a literal, a record) is refused: nothing would wire the source into it, so
+  it would parse, sit in the graph, and never once run. A `:fold` head expands FIRST and
+  then meets this same rule — a fold of an operator is a legal branch head, a fold of a
+  path is not, and neither needs a rule of its own.
 - **No `as` escapes the block** — anonymous scope, the same enforcement shape as def's
   close-over-nothing. Bind the stream before the block instead.
 - **The block's writes join the program's write list** at the ordinary bind site, so the

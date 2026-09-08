@@ -509,8 +509,8 @@ rill granted `tags/squads/*` is refused at mount when it writes
   — the sink shape unchanged (port 0 rouses; subject and tag are statics).
   Subjects are `@`-refs ONLY: a string subject has no death, so nothing ever
   cleans its tags — an orphan-tag factory, the §4.1 corpse wearing
-  membership. No `@self` until R4 (then parse-time sugar, the `use`
-  precedent). Rill's `tag` is one of THREE writers — spawn-stamps and
+  membership. No `@self` until R4 (then parse-time sugar, the
+  `use`/`using` precedent). Rill's `tag` is one of THREE writers — spawn-stamps and
   derived-tag maintainers are the others — and all three go through the one
   membership write.
 - **Order: T1 store → T2 `@` registry → T3 rill surface → T4 ears-bind + F4
@@ -561,7 +561,7 @@ rill granted `tags/squads/*` is refused at mount when it writes
   supervisor that casts `$dread` at where Tom died needs the occurrence to
   say where) plus reason and frame — the `rills/unmounted` shape.
   ③ **Name binding is MOUNT-TIME, ruled:** `@tom` binds to an id at mount
-  (the `use` precedent; rebind by remount), the ack says which id, and a
+  (the `use`/`using` precedent; rebind by remount), the ack says which id, and a
   re-registered `@tom` does not reattach to a running program. CC concurs —
   live resolution would be ambient mutable naming and a replay leak — with
   the consequences stated before building: entity field mirrors are

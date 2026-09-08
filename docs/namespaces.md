@@ -57,17 +57,27 @@ already does.
 
 ### C. Dotted names — `rbf.through`
 
-**Refused on a concrete ambiguity, not on taste.** `use plane.defense as d`
-binds `d` as a *path prefix* (`parser.zig`'s `usestmt`, §3.10), so `d.alerts`
-is a legal dotted path whose head is not `plane` or `row`. A dotted operator
-name is therefore lexically indistinguishable from a path under an alias, and
-`use plane.rbf as rbf` would put an alias and an operator family in the same
-spelling. The parser would have to resolve that by precedence, and whichever
-precedence it picked would silently shadow something.
+**Refused on a concrete ambiguity, not on taste** — and the ambiguity has
+since moved, so this section is worth reading twice.
 
-`plane` and `row` are reserved words precisely so that a path head is knowable
-without a table lookup. Dotted operator names would give that up for the whole
-language to scope one family.
+*As written (2026-09-07):* `use plane.defense as d` bound `d` as a *path
+prefix*, so `d.alerts` was a legal dotted path whose head is not `plane` or
+`row`. A dotted operator name was therefore lexically indistinguishable from a
+path under an alias, and `use plane.rbf as rbf` would have put an alias and an
+operator family in one spelling.
+
+*Since `using` (2026-09-08):* that half is gone. A fold wears a colon at both
+ends — `using plane.defense as :d`, referenced `:d.alerts` — so no bare dotted
+name can have a bound head any more, and `plane` / `row` / `slate` are again
+the only path heads there are.
+
+**C stays refused, on the narrower half that survives.** `name.field` is a
+*projection* (`parseProjections`), so a stream bound `as rbf` makes `rbf.through`
+a field read of `rbf`, and an operator by that name would be indistinguishable
+from it. That is still a precedence question the parser would have to answer by
+guessing, and whichever way it guessed would silently shadow something — but it
+is now one ambiguity rather than two, and it is worth saying out loud that the
+reason recorded here is no longer the reason that applies.
 
 ### D. Two-word names — `rbf through`
 
@@ -137,3 +147,27 @@ a rename with no forcing function is churn wearing a tidy hat.
 **The rule going forward, in one line:** a word that is a primitive of the
 language keeps a bare name; a word that belongs to a family wears the family's
 name and registers in the family's pack.
+
+## Postscript: `using` gives the reader a lever the registry does not
+
+*2026-09-08.* `using <tokens…> as :name` (§3.10) binds a fold of tokens, and
+one of the things a fold can hold is an operator call:
+
+```rill
+using rbf through as :through
+plane.coat | :through plane.flame | write plane.out
+```
+
+That is a **program-local abbreviation of a two-word family**, and it costs the
+global operator table nothing: the fold lives in one file, wears a colon so it
+can never collide with a word, and is gone before the graph exists. It is not
+an answer to "the namespace is filling up" — the table is still 297 rows — but
+it does answer the ergonomic half of the complaint, which is that a two-word
+family is verbose at the point of use. A host tenant with fifteen row words
+(spindrift) can now be abbreviated by the *program that uses them*, rather than
+by the registry that owns them, which is the right place for a preference to
+live.
+
+It is also the reason D's second stated cost — "a two-word name cannot be a
+`def`" — matters less than it did: a `def` cannot abbreviate a family, but a
+fold can, and unlike a def it can stand in argument position.

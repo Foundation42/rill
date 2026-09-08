@@ -184,11 +184,11 @@ write. The payload says what; the rousing says when.
 To do a side effect *and* continue, branch with `also { … }`:
 
 ```rill
-use plane.defense as d
+using plane.defense as :d
 
 plane.gate.enemy_count | rose_above 0
-  | also { inc d.sightings 1 }
-  | notify d.alerts
+  | also { inc :d.sightings 1 }
+  | notify :d.alerts
 ```
 
 The block's branches are fed the in-flowing value; the main stream
@@ -1066,7 +1066,7 @@ on `rills/unmounted`. One deliberate non-error: `div` by zero is IEEE
 
 ---
 
-## 10. `def` and `use`
+## 10. `def` and `using`
 
 `def` mints a reusable operator from a subgraph. Instances flatten at
 parse — the graph never knows defs exist — and their internals stay
@@ -1081,21 +1081,41 @@ defs close over nothing: a `plane.…` path inside a def body is a parse
 error — pass streams in through ports. That is what keeps a def
 reusable across worlds.
 
-`use` declares a plane-side alias, resolved entirely at parse:
+`using` binds a **fold**: the tokens between `using` and the trailing
+`as` are captured verbatim, and `:name` splices them back wherever a
+token may appear. The name wears its sigil at both ends, so the binding
+and the reference are the same string.
 
 ```rill
-use plane.render.grade as g
-plane.hour | select plane.night_exposure plane.day_exposure | write g.exposure
+using plane.render.grade as :g
+plane.hour | select plane.night_exposure plane.day_exposure | write :g.exposure
 ```
 
 Wait — `select` takes a *condition* first:
 
 ```rill
-use plane.render.grade as g
-plane.is_night | select plane.night_exposure plane.day_exposure | write g.exposure
+using plane.render.grade as :g
+plane.is_night | select plane.night_exposure plane.day_exposure | write :g.exposure
 ```
 
 Both versions above parse; only the second means what it says.
+
+A fold is not limited to a path. It is tokens, so it composes with
+whatever follows it (`:g.exposure`), it may reference an earlier fold,
+and — unlike a `def` — it can stand in **argument position**:
+
+```rill
+using plane.player.underwater as :wet
+select :wet 1 0 | write plane.grade.tint
+```
+
+Two splices of one fold build two independent sets of nodes, exactly as
+two calls of a `def` do. Folds are defined before use, and a cycle
+refuses by name. The cost is error locality: a refusal on spliced text
+names the fold it came from and the line it was bound on.
+
+`use plane.x as p` was the older, narrower spelling — a path prefix and
+nothing else. It is gone; `use` now points here.
 Selection is an operator, not syntax: **all branches exist as live
 data, and one is chosen per tick.** Gating is `where`/`partition` over
 streams, with predicate sections for the common case:

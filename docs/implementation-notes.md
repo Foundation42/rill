@@ -54,15 +54,18 @@ it. Spec section numbers in parentheses.
   piped, so `(< 20)` computes `x < 20`), whose output binds to the consumer's
   first free boolean port, and whose reserved input mirrors the consumer's
   primary input source. No closures, no higher-order anything.
-- **`use` aliasing (§3.10, spec v0.1)** is implemented exactly as specced:
+- **`use` aliasing (§3.10, spec v0.1)** was implemented exactly as specced:
   pure parse-time prefix expansion, invisible to the graph, the dump, and
   the evaluator (the frozen G2 hash did not move). Resolution precedence
   for a bare name: locals (`as` bindings / def ports) → `use` aliases →
-  operators; collisions are loud in every direction and alias heads may be
-  earlier aliases. `use` is top-level only — inside a def body it gets the
-  close-over-nothing error, like the `plane.` paths it stands for. Small
+  operators; collisions were loud in every direction and alias heads could
+  be earlier aliases. `use` was top-level only — inside a def body it got
+  the close-over-nothing error, like the `plane.` paths it stood for. Small
   hardening that rode along: `as` can no longer bind reserved words
   (`plane use def as true false`).
+  **Superseded 2026-09-08 by `using`** (see *"`use` became `using`"*, below);
+  `use` is now a named refusal that points, and the five shadow checks in
+  this paragraph are deleted rather than ported.
 - **Tail ports (§3.11, spec v0.1)** — the console's `rest` grammar, landed
   ahead of Matryoshka's Phase C so the handler migration stands on tested
   ground. Decisions inside the ruling's envelope:
@@ -2662,7 +2665,12 @@ Dotted names (`rbf.through`) were refused on a concrete ambiguity rather than
 on taste: `use plane.defense as d` binds `d` as a path prefix, so a dotted
 name whose head is not `plane` or `row` is already a legal path, and
 `use plane.rbf as rbf` would put an alias and an operator family in one
-spelling. Underscores were refused at read-aloud. **Nothing is renamed**, and
+spelling. Underscores were refused at read-aloud. *(That first ambiguity is
+gone since `using` — a fold wears a colon, so no bare dotted name has a bound
+head any more. C stays refused on the half that survives: `name.field` is a
+projection, so a stream bound `as rbf` would make `rbf.through` a field read.
+`namespaces.md` §C records both readings rather than quietly restating the
+argument with a new reason.)* **Nothing is renamed**, and
 the migration path in the doc is per-family and optional; the 109 core
 operators are primitives, and a primitive is exactly the kind of word that
 should not wear a group name.
@@ -2792,3 +2800,196 @@ above its publisher, refuses at mount by name.
 `docs/slate.md` updated. Gates and mutations for the lane live in
 spindrift, with the customer that forced it — a mechanism gated only by its
 own test op is a mechanism nobody has used.
+
+
+## `use` became `using`: a parse-time fold, 2026-09-08
+
+**What was decided.** `use <plane path> as <name>` is deleted. In its place,
+`using <tokens…> as :<name>` binds a **fold**: everything between `using` and
+the trailing `as` is captured *verbatim as tokens* and is not parsed at the
+binding. A `:name` reference splices those tokens back into the stream
+wherever a token may appear, and parsing continues on them.
+
+The name wears its sigil at both ends — bound `as :flock`, referenced
+`:flock` — so a binding and a reference are literally the same string, and the
+map is keyed on it. That is Christian's spelling and his reasoning: it is more
+explicit, it visually ties the two ends of the string together, and it matches
+rill's existing convention that a sigil is part of the token rather than a
+decoration on it (`$chan` was already "a field-channel name, sigil included,
+one token"; `@ # ^` behave the same).
+
+**Rejected: `as flock`, bare.** The first draft of this beat bound bare and
+referenced with the sigil, on the reasoning that the sigil marks the *use*
+site where the reader needs it. It loses to sigil-at-both-ends on all three
+counts above, and it costs a lookup rule (strip on bind, re-add on reference)
+for nothing. The bare form is now a POINTING refusal — *"a fold wears its
+sigil at both ends — bind it `as :flock`, and the reference is `:flock`"* —
+because someone who writes it has made an obvious slip and should be told the
+fix, not "expected ':'".
+
+**Rejected: a namespace import.** The alternative on the table was
+`using drift` — a statement that aliased an operator *prefix*, so a host
+tenant's words could be reached unqualified. It loses to a general token fold
+for one concrete reason: **argument position**. `select :wet 1 0` splices a
+whole expression where nothing else in the language can go, because
+`instantiate` is only reachable from opcall position and a `def` therefore
+structurally cannot stand there. A prefix aliaser would have solved a smaller
+problem and added a second namespace to reason about; the fold solves the
+namespace problem as a *consequence* (`using rbf through as :through` is a
+program-local abbreviation of a two-word family, gated) and is one mechanism
+instead of two. `namespaces.md` gained a postscript saying so.
+
+**Why removing `use` was cheap, stated as the fact it is:** `use` had 16 gates
+and **zero users** — not one `.rill` file across the six sibling repos
+(rill, spindrift, matryoshka, loam, struple, common) contained a `use … as`
+statement. A feature with gates and no callers is a feature whose cost is
+entirely in the gates, and porting them was the whole migration.
+
+### The lexer decision, and why adjacency rather than position
+
+`:` was already live in four places: a def port type (`def f(x: number)`), a
+record literal (`{l: 0.28}`), a shape literal, and the colon-kwarg spelling
+(`cast $chan at: row.pos`), the last two of which are used heavily in real
+kernels in the sibling repos.
+
+`:name` became **one lexer token, colon included** (`.fold`), on an
+**adjacency** rule: a fold colon is preceded by start-of-input, whitespace or
+an opener (`( [ { , |`) and followed immediately by a name (or a sigil, so
+`:$x` reaches the parser and is refused *by name*). All four existing colons
+glue to the name BEFORE them; a fold colon glues to the name AFTER.
+
+Position alone would not have been enough, and this is the part worth
+recording. `parseArgs` decides a kwarg on a `.name`-then-`.colon` lookahead,
+so with a position-only rule `radius 12 at :flock` would have read `at:` as
+the kwarg and `flock` as its value — the keyword pairing silently eating the
+fold. Adjacency separates the two spellings before the parser ever looks.
+
+Keeping `.colon` + `.name` and deciding in the parser was the alternative. It
+was rejected for the same reason: the decision would have had to be made
+independently at four call sites that already disagree about what a colon
+means, and one of them (the kwarg lookahead) reads *two tokens ahead* and
+would have had to learn a third case.
+
+### The splice mechanism
+
+`expandIfFold` **rebuilds `self.toks`** in place of the `:name` token rather
+than pushing a cursor onto a stack. That is the whole implementation, and it
+is why nothing else in the parser changed: every existing lookahead
+(`toks[pos+1]` for the kwarg colon, `braceOpensRecord`, `continuesWithPipe`,
+the `$chan at` sniff) keeps reading one flat array. A cursor stack would have
+broken all four.
+
+It is called at six sites, all of them places where a value or an operator may
+begin — `parseExpr`, `parseArgValue`, `parseBranch`, after a `|` in
+`parseChain`, and inside both paren forms. Nowhere else, which is what keeps a
+`:name` inside a **tail port** the verbatim text a tail promises: a tail
+slices the RAW SOURCE between token offsets, so `sound play :flock.wav` binds
+the locator `":flock.wav"`, exactly as `//` and `#` are text there.
+
+Spliced tokens take the **splice site's** line and column, and carry a
+provenance id. The line/col rewrite is not cosmetic: it is what makes the
+caret land on the reference the author wrote instead of on the binding line.
+
+### Error locality, which is the one real cost
+
+`use` could validate at the definition — *"use paths are plane-side"* — because
+the only thing it could ever bind was a plane path. A fold of arbitrary tokens
+cannot, so a refusal now lands at the splice, on tokens the author did not
+literally write. That was treated as a first-class requirement, not polish.
+
+Every `Token` carries `fold: u32` — 0 when the author typed it, otherwise
+1 + an index into `fold_sites`, one entry per **expansion** with a `via` link
+to the expansion it came through. `fail` appends the chain, innermost first:
+
+> `defs close over nothing — pass plane streams in through a port — expanded
+> from :po, bound at line 1`
+
+> `unknown name 'nonsense' — expanded from :inner, bound at line 1, spliced
+> via :outer (line 2)`
+
+The same chain is the recursion stack, which is why a **cycle** can be
+reported as one — *"fold cycle: :a expands through itself (:a → :b → :a)"* —
+rather than as "expansion too deep". A depth cap of 32 stays as the backstop
+for a chain that is merely absurd rather than circular. Indirect recursion
+through a tail position (`using mul 2 :a as :a`) is caught by the same walk,
+which a head-only check would have missed by looping forever.
+
+### Christian's ruling on defs, implemented as ruled
+
+**`:name` is allowed inside a def body and gets NO rule of its own.** The
+point is that substitution happens and then the *existing* checks run on the
+expanded tokens: a fold of pure operators works, and a fold that expands to a
+`plane.…` path is refused by close-over-nothing — which preserves def's
+portability guarantee without `using` needing to know defs exist. What the
+refusal owes is provenance, and it pays it.
+
+### Gates and mutations
+
+Fourteen gates replace `use`'s sixteen. **Twenty mutations, all bitten** — but
+three of them survived first, and the survivors are the interesting part.
+
+| gate | mutation that bites it |
+|---|---|
+| a fold of a plane path splices, composes, resolves | splice one token short (`f.body[0..len-1]`) — panics in this gate |
+| substitution composes with the following segment | delete `expandIfFold` at the head of `parseExpr` |
+| splices in ARGUMENT position | delete `expandIfFold` at the head of `parseArgValue` |
+| spliced twice ⇒ two node sets | `swapRemove` the fold after splicing (the "consume it" bug) |
+| expansion is recursive | `while` → `if` in `expandIfFold` (expand once, not to fixpoint) |
+| a cycle is refused, naming the folds | drop the name comparison, keep only the depth cap |
+| an undefined `:name` is refused, naming it | `orelse return` instead of `orelse fail` |
+| inside a def body the existing checks run | drop `if (tok.fold != 0)` from `fail` |
+| a parse error names the fold and its line | `noteProvenance` stops at the innermost site; or drop `spliced.line`; or drop `spliced.col` |
+| all four colon spellings still parse | `colonOpensFold` ignores the preceding character |
+| the binding form refuses and points | generic message for the bare form; drop the already-bound check; drop the sigil check; drop the `using` pointer |
+| a tail takes the line verbatim | delete the `start_tok.fold != 0` guard |
+| `use` points at `using` | delete the pointer beside `set` → `write` |
+
+**Survivor 1 — the colon gate watched nothing.** Deleting the whole
+preceding-character whitelist from `colonOpensFold` passed the suite. The
+reason is that every spelling in the gate had a **space after the colon**
+(`x: number`, `at: plane.origin`, `{l: 0.28}`), and with a space the next
+character is not a name start, so the fold rule never fires either way. It is
+`x:number`, `{a:b}`, `{id:string}` and `at:plane.origin` — colon glued on
+*both* sides — that the whitelist is the only thing standing between and a
+fold token. The gate now carries both spacings, and the mutation bites.
+
+**Survivor 2 — the `spliced.col` rewrite.** The comment said the def-body
+dedent rule needed it: a fold bound at column 1 whose tokens kept their own
+column would read as a dedent. Wrong, and the mutation said so. The dedent
+test reads the token at STATEMENT START, which is always one the author wrote,
+and a fold body holds no newline, so a splice can never straddle two
+statements. What the rewrite is actually load-bearing for is the **diagnostic
+position**, which nothing asserted. A new helper (`expectParseErrorAt`) now
+gates line and column — and the first draft of *that* put the reference and
+the offending token at column 11 by coincidence, so it had to move too.
+
+**Survivor 3 — two of the three `use` pointers were dead code.** Deleting the
+`use` arm from `parseProgram`'s dispatch changed nothing; so did deleting the
+one in `parseExpr`. A bare keyword in either position already falls through to
+`parseOpcall`, whose op-lookup miss is where `set` → `write` has pointed since
+2026-08-29. Both copies are gone. One door, one message, for every position —
+and the surviving mutation is what proved the other two were checks that only
+looked like checks.
+
+### What else moved
+
+- The `use`-alias-used-as-a-stream refusal (2026-08-26, a no-priors reader:
+  *"'dusk' is a `use` alias — a path PREFIX…"*) is **deleted, not ported**. A
+  fold of a leaf path is a stream, because it is tokens and the tokens are a
+  whole path. The gate now asserts that both the leaf and the namespace
+  spelling work.
+- `use`'s five shadow checks are deleted. A fold cannot collide with an
+  operator, a stream name or a def, because none of those can wear a colon —
+  gated by a program in which `:add` the fold and `add` the operator both
+  appear and both work. Three rules survive: not a store sigil, not a reserved
+  word, not already bound.
+- `using` joins the reserved-word list. `use` **stays** on it: the parser
+  recognises it before `find` in order to point, so an operator named `use`
+  would register cleanly and then be permanently unreachable — which is
+  precisely what that list exists to prevent.
+- Docs in the same commit: `rill-spec.md` §3.10 rewritten, §3.14's example and
+  the branch-head rule; `rill-manual.md` §5 and §10 (which gains the
+  argument-position example, so the manual-parse gate reads the claim rather
+  than the reader trusting it); `rill-for-agents.md` §2's grammar;
+  `rill-agents.md`'s sentinel; `namespaces.md` §C and a postscript;
+  `rill-casts.md` and `ironwood.md`'s references to "the `use` precedent".
