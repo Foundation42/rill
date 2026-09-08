@@ -540,7 +540,14 @@ pub fn isReservedWord(s: []const u8) bool {
     // its retirement: the parser recognises it before `find` in order to POINT
     // at `using`, so an operator named `use` would register cleanly and then
     // be permanently unreachable — which is precisely what this list prevents.
-    const words = [_][]const u8{ "plane", "row", "slate", "use", "using", "def", "as", "also", "true", "false" };
+    // `export` and `describe` are the parameter-pack beat's two statement
+    // keywords (2026-09-08). `export def` marks a definition VISIBLE TO THE
+    // HOST — rill's first visibility concept — and `describe <name>` opens the
+    // prose block its ports are held to. Both are recognised at statement head
+    // before the parser ever asks `find`, so an operator named either would
+    // register cleanly and then be permanently unreachable: exactly what this
+    // list exists to prevent.
+    const words = [_][]const u8{ "plane", "row", "slate", "use", "using", "def", "export", "describe", "as", "also", "true", "false" };
     for (words) |w| {
         if (std.mem.eql(u8, s, w)) return true;
     }

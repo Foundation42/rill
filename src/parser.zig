@@ -69,6 +69,17 @@
 //!   `/tmp/loop.wav` and `pack:horns#audio.stem` are text, not structure.
 //!   The tokenizer therefore rejects no character: unknown bytes become inert
 //!   `raw` tokens that only error when a non-tail position consumes one.
+//! - A def port carries a PARAMETER PACK (§3.9, 2026-09-08): an optional
+//!   default (`rate = 60`) that makes the port optional at the call site, an
+//!   advisory range (`(0..500)`) that nothing enforces, and — through a
+//!   separate `describe` block — one sentence per port. `export def` marks a
+//!   definition visible to the HOST; rill has no imports and no cross-file
+//!   reference, so that is all visibility can mean here, and the pack of an
+//!   exported def is the ONE thing that survives the parse that flattens its
+//!   body away (`Program.exports`). For an exported def the descriptions are
+//!   mandatory, checked both ways: no port may be undescribed, and no
+//!   describe line may name a port that does not exist. A local def is not
+//!   enumerable, needs no prose, and vanishes exactly as it always did.
 //!
 //! There is no `if` statement and no exec wire, by design (§4.3). Selection
 //! and gating are ordinary operators over data.
@@ -122,6 +133,13 @@ const TokKind = enum {
     fold,
     comma,
     dot,
+    /// `..` — the range separator, and nowhere else in the language
+    /// (`def f(rate = 60 (0..500))`, §3.9). Additive by construction: two
+    /// adjacent dots have never been legal anywhere a token is read — a
+    /// number could swallow them (`0..500` lexed as one number and died as
+    /// "bad number"), and outside a number they lexed as two `.dot`s and died
+    /// as a projection with no field name.
+    dotdot,
     newline,
     raw, // a character with no token of its own; legal only inside a tail
     eof,
@@ -271,6 +289,13 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             while (i < src.len and (std.ascii.isDigit(src[i]) or src[i] == '.' or src[i] == 'e' or src[i] == 'E' or
                 ((src[i] == '-' or src[i] == '+') and (src[i - 1] == 'e' or src[i - 1] == 'E')))) : (i += 1)
             {
+                // A `..` belongs to the RANGE, not to the number: without
+                // this, `0..500` is one `.number` token whose text no
+                // `parseFloat` accepts, and the range spelling is unsayable.
+                // The number is what has to yield, because `0.` is a number
+                // and `.` is a token, so only the number lexer can see both
+                // dots at once.
+                if (src[i] == '.' and i + 1 < src.len and src[i + 1] == '.') break;
                 col += 1;
             }
             // A trailing '.' belongs to the next token (record sugar never
@@ -346,6 +371,14 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
             col += 2;
             continue;
         }
+        // `..` before `.`, so a range separator never lexes as two
+        // projections. (The number lexer already stopped short of it.)
+        if (std.mem.eql(u8, two, "..")) {
+            try toks.append(a, .{ .kind = .dotdot, .text = two, .line = tl, .col = tc, .off = to });
+            i += 2;
+            col += 2;
+            continue;
+        }
         const kind: TokKind = switch (c) {
             '|' => .pipe,
             '{' => .lbrace,
@@ -382,9 +415,30 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
 // Def templates
 // ---------------------------------------------------------------------------
 
+/// One declared port of a `def`, and — since 2026-09-08 — its parameter pack:
+/// a default that makes the port optional at the call site, an advisory range,
+/// and the line of prose a `describe` block gave it. Blade3D's
+/// `[OperatorParameter(Description=…, DefaultValue=…, MinValue=…, MaxValue=…)]`,
+/// which is where the idea comes from: one declaration is the signature, the
+/// widget, the documentation and the validation at once.
+///
+/// `default`, `min` and `max` hold struple-encoded literals, allocated in the
+/// program arena, so a default is spliced into a call as an ordinary
+/// `.literal` Source and needs no new node kind, no new Source case, and
+/// nothing in the evaluator.
 const PortDecl = struct {
     name: []const u8,
     ty: types.TypeId,
+    default: ?[]const u8 = null,
+    min: ?[]const u8 = null,
+    max: ?[]const u8 = null,
+    /// Filled by a later `describe` block, never at the signature. Prose does
+    /// nothing at runtime, so it lives where it reads best; a default is
+    /// behaviour and stays inline where it cannot drift (Christian's ruling,
+    /// carried over from SPL).
+    doc: []const u8 = "",
+    /// Where the port name was written — the caret for a parity refusal.
+    tok: Token,
 };
 
 const TemplateOut = struct {
@@ -400,6 +454,19 @@ const Template = struct {
     nodes: std.ArrayListUnmanaged(graph.Node) = .empty,
     slots: std.ArrayListUnmanaged(graph.Slot) = .empty,
     outputs: []TemplateOut = &.{},
+    /// `export def` — visible to the HOST (rill has no imports and no
+    /// cross-file reference, so there is nothing else for visibility to mean).
+    /// The one thing it changes here: descriptions become mandatory, and the
+    /// pack survives the parse on `Program.exports`.
+    exported: bool = false,
+    /// The definition's own description, from the leading bare string of its
+    /// `describe` block.
+    doc: []const u8 = "",
+    /// Whether a `describe` block was seen at all — distinct from `doc.len`,
+    /// because a block may describe every port and skip the leading string.
+    described: bool = false,
+    /// The name token, so the end-of-parse parity refusal has a caret.
+    name_tok: Token,
 };
 
 // ---------------------------------------------------------------------------
@@ -662,7 +729,22 @@ const Parser = struct {
             const t = self.peek();
             if (t.kind == .eof) break;
             if (t.kind == .name and std.mem.eql(u8, t.text, "def")) {
-                try self.parseDef();
+                try self.parseDef(null);
+            } else if (t.kind == .name and std.mem.eql(u8, t.text, "export")) {
+                // `export def name(…)` — visibility, and only visibility. It
+                // is a PREFIX rather than a sigil on the name because those
+                // are two different questions: `^` says how a mounted
+                // archetype is ADDRESSED on the plane, `export` says who can
+                // see this definition, and a spelling that did both would
+                // conflate them (ruled 2026-09-08, replacing `def ^roaches`).
+                const ex = self.next();
+                const d = self.peek();
+                if (d.kind != .name or !std.mem.eql(u8, d.text, "def")) {
+                    return self.fail(d, "`export` marks a DEFINITION visible to the host — write `export def <name>(…)`; there is nothing else to export", .{});
+                }
+                try self.parseDef(ex);
+            } else if (t.kind == .name and std.mem.eql(u8, t.text, "describe")) {
+                try self.parseDescribe();
             } else if (t.kind == .name and std.mem.eql(u8, t.text, "using")) {
                 try self.parseUsing();
             } else {
@@ -675,14 +757,137 @@ const Parser = struct {
                 _ = try self.parseStatement(&self.program_target);
             }
         }
+        try self.checkExportsDescribed();
+        try self.publishExports();
         if (self.prog.findCycle()) |cyc| {
             const n = self.prog.node(cyc.write.node);
             return self.fail(self.toks[self.toks.len - 1], "cycle — node {s} writes {s}, which the program also subscribes to (via {s})", .{ n.name, cyc.write.path, cyc.sub_path });
         }
     }
 
-    fn parseDef(self: *Parser) ParseError!void {
-        const def_tok = self.next(); // "def"
+    /// The parity gate, half two — run at the END of the program because a
+    /// `describe` block follows the `def` it describes (parse order is
+    /// topological order here as everywhere else, so the definition must
+    /// exist before anything names it). The other half — a describe line
+    /// naming a port the definition does not have — runs at the block, where
+    /// the offending word is.
+    ///
+    /// It is deliberately BOTH directions. One direction catches orphans and
+    /// lets everybody skip writing prose, which is the exact failure the
+    /// feature exists to prevent: the burden belongs on whoever writes the
+    /// definition, at the moment they write it.
+    ///
+    /// Exported only. A `def` is also just a private helper, and taxing every
+    /// two-line helper with a description block would be tax rather than
+    /// discipline (Christian's ruling). What is exported is what a HUD
+    /// renders, what `schema` emits and what an agent reads — the surface
+    /// where laziness costs somebody else.
+    fn checkExportsDescribed(self: *Parser) ParseError!void {
+        for (self.defs.values()) |tmpl| {
+            if (!tmpl.exported) continue;
+            if (!tmpl.described) {
+                return self.fail(tmpl.name_tok, "exported def '{s}' has no `describe` block — an exported definition documents itself (add `describe {s}` with one line per port: {s})", .{ tmpl.name, tmpl.name, try self.portList(tmpl) });
+            }
+            // The definition's own sentence is required too, not just the
+            // ports'. It is the first thing a generated panel shows and the
+            // first thing an agent reads; a pack that says what every knob
+            // does and never says what the THING is has skipped the useful
+            // half.
+            if (tmpl.doc.len == 0) {
+                return self.fail(tmpl.name_tok, "exported def '{s}': its `describe` block has no leading description — the first line of the block is a bare string saying what '{s}' does", .{ tmpl.name, tmpl.name });
+            }
+            for (tmpl.ports) |pd| {
+                if (pd.doc.len > 0) continue;
+                return self.fail(pd.tok, "exported def '{s}': port '{s}' has no description — add a line `{s} \"…\"` to `describe {s}`", .{ tmpl.name, pd.name, pd.name, tmpl.name });
+            }
+        }
+    }
+
+    /// Copy every exported def's pack onto the Program, where a host can read
+    /// it. This is the whole of what `export` DOES in this beat: a def body
+    /// still flattens per instance and the graph still does not know defs
+    /// exist, so without this table `export` would be inert — rill has no
+    /// imports and no cross-file reference, and "visible" can only mean
+    /// "visible to the host". A local def is not copied and vanishes exactly
+    /// as it always did.
+    fn publishExports(self: *Parser) ParseError!void {
+        for (self.defs.values()) |tmpl| {
+            if (!tmpl.exported) continue;
+            const ports = try self.a().alloc(graph.DefPort, tmpl.ports.len);
+            for (tmpl.ports, ports) |src, *dst| {
+                dst.* = .{
+                    .name = src.name,
+                    .ty = src.ty,
+                    .default = src.default,
+                    .min = src.min,
+                    .max = src.max,
+                    .doc = src.doc,
+                };
+            }
+            try self.prog.exports.append(self.a(), .{
+                .name = tmpl.name,
+                .doc = tmpl.doc,
+                .ports = ports,
+            });
+        }
+    }
+
+    /// A literal in a def signature — a default, a range end. `parseLiteral`
+    /// does the work; this exists for the refusal, which must name the def,
+    /// the port and which of the three slots the author was filling. "expected
+    /// a literal, got 'plane'" would leave them hunting.
+    fn parseDefLiteral(self: *Parser, def_name: []const u8, port_name: []const u8, role: []const u8) ParseError!ParsedLit {
+        const t = self.peek();
+        const is_lit = switch (t.kind) {
+            .number, .duration, .string => true,
+            .name => std.mem.eql(u8, t.text, "true") or std.mem.eql(u8, t.text, "false"),
+            else => false,
+        };
+        if (!is_lit) {
+            // A fold colon is decided by ADJACENCY (`colonOpensFold`, the
+            // previous beat): it must be preceded by whitespace, the start of
+            // input, or an opener. `..` and `=` are neither, so `(0..:ceiling)`
+            // and `x =:fast` lex the colon as the four-year-old `.colon` and
+            // arrive here as a bare `:`. That rule is load-bearing and stays
+            // untouched — widening the whitelist to earn one marginal spelling
+            // would trade a gated rule for a convenience — so the refusal
+            // points at the space instead of shrugging "must be a literal".
+            if (t.kind == .colon and self.toks[self.pos + 1].kind == .name) {
+                return self.fail(t, "def '{s}' port '{s}': a fold reference needs a space before its colon here — write ': {s}' as ' :{s}'", .{ def_name, port_name, self.toks[self.pos + 1].text, self.toks[self.pos + 1].text });
+            }
+            return self.fail(t, "def '{s}' port '{s}': the {s} must be a literal, got '{s}' — a def closes over nothing, so a default cannot read a stream or a plane path", .{ def_name, port_name, role, t.text });
+        }
+        return self.parseLiteral(&self.program_target);
+    }
+
+    /// A template's port names, comma-separated — what a refusal reads out so
+    /// the author is never left guessing which ones exist.
+    fn portList(self: *Parser, tmpl: *Template) ![]const u8 {
+        var out = std.ArrayListUnmanaged(u8).empty;
+        for (tmpl.ports, 0..) |pd, i| {
+            if (i > 0) try out.appendSlice(self.a(), ", ");
+            try out.appendSlice(self.a(), pd.name);
+        }
+        if (out.items.len == 0) try out.appendSlice(self.a(), "(none)");
+        return out.items;
+    }
+
+    /// defstmt := ["export"] "def" name "(" port* ")" "=" body
+    /// port    := name [":" type] ["=" literal] ["(" literal ".." literal ")"]
+    ///
+    /// The pack (2026-09-08) is Blade3D's, transposed: a default makes the
+    /// port optional at the call site, and a range is a SANE RANGE for a
+    /// generated widget and for a reader — advice, never a constraint.
+    fn parseDef(self: *Parser, export_tok: ?Token) ParseError!void {
+        const kw_tok = self.next(); // "def"
+        // The dedent that ends the body is measured from the STATEMENT HEAD,
+        // which is `export` when there is one — not from `def`. Measuring from
+        // `def` puts the anchor at column 8 for every exported definition, and
+        // a body indented two spaces reads as a dedent: the whole def parses
+        // as empty. (Found by writing the first exported def with a two-line
+        // body; the mutation that reverts it is `def_tok = kw_tok`.)
+        const def_tok = export_tok orelse kw_tok;
+        const exported = export_tok != null;
         const name_tok = self.next();
         if (name_tok.kind != .name) return self.fail(name_tok, "expected operator name after 'def'", .{});
         if (name_tok.text[0] == '$' or name_tok.text[0] == '@' or name_tok.text[0] == '#' or name_tok.text[0] == '^') return self.fail(name_tok, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — an operator cannot wear it", .{name_tok.text});
@@ -704,7 +909,66 @@ const Parser = struct {
                 if (tt.kind != .name) return self.fail(tt, "expected type name after ':'", .{});
                 ty = self.reg.types.intern(tt.text) catch return error.OutOfMemory;
             }
-            try ports.append(self.a(), .{ .name = try self.a().dupe(u8, pt.text), .ty = ty });
+            var decl = PortDecl{ .name = try self.a().dupe(u8, pt.text), .ty = ty, .tok = pt };
+            // `= <literal>` — the default. A literal and nothing else: a def
+            // closes over nothing, so a default cannot be a plane path or a
+            // stream, and a constant is the only thing that could be spliced
+            // into every call site anyway. A fold IS allowed to supply it
+            // (`expandIfFold` runs first): this is a value position like any
+            // other, and the tokens it splices are judged by the same rule.
+            if (self.peek().kind == .sym and std.mem.eql(u8, self.peek().text, "=")) {
+                _ = self.next();
+                try self.expandIfFold();
+                const lit = try self.parseDefLiteral(name_tok.text, pt.text, "default");
+                if (!types.accepts(ty, lit.ty)) {
+                    return self.fail(self.toks[self.pos - 1], "def '{s}' port '{s}': the default is {s}, but the port is declared {s}", .{ name_tok.text, pt.text, self.reg.types.name(lit.ty), self.reg.types.name(ty) });
+                }
+                decl.default = lit.source.literal;
+            }
+            // `(<lo>..<hi>)` — the advisory range. Contextual: parens claim
+            // nothing, and inside a signature a `(` can only ever open one.
+            if (self.peek().kind == .lparen) {
+                _ = self.next();
+                try self.expandIfFold();
+                const lo = try self.parseDefLiteral(name_tok.text, pt.text, "range minimum");
+                const dd = self.next();
+                if (dd.kind != .dotdot) {
+                    return self.fail(dd, "def '{s}' port '{s}': a range is written '(<min>..<max>)' — expected '..', got '{s}'", .{ name_tok.text, pt.text, dd.text });
+                }
+                try self.expandIfFold();
+                const hi = try self.parseDefLiteral(name_tok.text, pt.text, "range maximum");
+                const close = self.next();
+                if (close.kind != .rparen) {
+                    return self.fail(close, "def '{s}' port '{s}': expected ')' to close the range", .{ name_tok.text, pt.text });
+                }
+                const lo_n = types.asNumber(lo.source.literal);
+                const hi_n = types.asNumber(hi.source.literal);
+                if (lo_n == null or hi_n == null) {
+                    return self.fail(close, "def '{s}' port '{s}': a range is two numbers — a widget cannot draw a slider between anything else", .{ name_tok.text, pt.text });
+                }
+                // Backwards is a typo with one reading, so say the reading.
+                if (lo_n.? > hi_n.?) {
+                    return self.fail(close, "def '{s}' port '{s}': the range runs backwards ({d}..{d}) — write it low to high", .{ name_tok.text, pt.text, lo_n.?, hi_n.? });
+                }
+                decl.min = lo.source.literal;
+                decl.max = hi.source.literal;
+            }
+            // A required port may not follow a defaulted one. This is rill's
+            // own `AmbiguousOptionals` rule (registry.zig — "a word marks an
+            // argument that could otherwise be mistaken for another"), applied
+            // where a def port has no word to mark it with: positional fill is
+            // strictly left-to-right, so `f 5` would silently land on the
+            // OPTIONAL port and leave the required one unbound — the `arm
+            // gate_closed` bug, one level up. Forcing the defaults to the tail
+            // is also what makes two ADJACENT defaults safe here, where the
+            // registry has to refuse them: nothing after them can shift.
+            if (decl.default == null and ports.items.len > 0) {
+                if (ports.items[ports.items.len - 1].default != null) {
+                    const before = ports.items[ports.items.len - 1].name;
+                    return self.fail(pt, "def '{s}': port '{s}' has no default but follows '{s}', which does — an argument would fill '{s}' and leave '{s}' unbound. Give '{s}' a default, or declare it before '{s}'", .{ name_tok.text, pt.text, before, before, pt.text, pt.text, before });
+                }
+            }
+            try ports.append(self.a(), decl);
             const sep = self.peek();
             if (sep.kind == .comma) {
                 _ = self.next();
@@ -716,7 +980,12 @@ const Parser = struct {
         if (eq.kind != .sym or !std.mem.eql(u8, eq.text, "=")) return self.fail(eq, "expected '=' after def signature", .{});
 
         const tmpl = try self.a().create(Template);
-        tmpl.* = .{ .name = try self.a().dupe(u8, name_tok.text), .ports = ports.items };
+        tmpl.* = .{
+            .name = try self.a().dupe(u8, name_tok.text),
+            .ports = ports.items,
+            .exported = exported,
+            .name_tok = name_tok,
+        };
 
         var target = Target{ .nodes = &tmpl.nodes, .slots = &tmpl.slots, .template = tmpl };
         for (tmpl.ports, 0..) |pd, i| {
@@ -766,6 +1035,106 @@ const Parser = struct {
         tmpl.outputs = outs.items;
 
         try self.defs.put(self.a(), tmpl.name, tmpl);
+    }
+
+    /// describestmt := "describe" name NEWLINE (INDENT (string | name string))+
+    ///
+    /// Prose lives in its own block, not inline in the signature (Christian's
+    /// ruling, carried over from SPL, and settled — three reasons):
+    ///
+    /// 1. A number does not clutter a signature; a sentence does. Defaults and
+    ///    ranges are BEHAVIOUR and stay inline where they cannot drift from
+    ///    the thing they describe. Prose changes nothing at runtime and can
+    ///    live where it reads best.
+    /// 2. It is a **safe surface for a local model to write**. Generated prose
+    ///    landing in a describe block cannot break a definition — the worst it
+    ///    can do is describe the wrong port, and the parity gate catches that
+    ///    by name.
+    /// 3. It can be added to existing code without touching the code.
+    ///
+    /// A leading BARE STRING describes the definition itself (Blade3D's
+    /// `[Operator(Description = …)]`); every other line is `<port> "…"`.
+    ///
+    /// The block must FOLLOW its definition, like everything else in a
+    /// language where parse order is topological order — and the refusal says
+    /// so rather than shrugging, because "unknown name" would send the author
+    /// hunting for a typo that is not there.
+    fn parseDescribe(self: *Parser) ParseError!void {
+        const kw = self.next(); // "describe"
+        const name_tok = self.next();
+        if (name_tok.kind != .name) {
+            return self.fail(name_tok, "expected the name of a def after 'describe' — `describe <name>`", .{});
+        }
+        const tmpl = self.defs.get(name_tok.text) orelse {
+            if (self.reg.find(name_tok.text) != null) {
+                return self.fail(name_tok, "'{s}' is a registered operator, not a def — `describe` documents a definition in this program, and an operator's help lives in its registration", .{name_tok.text});
+            }
+            return self.fail(name_tok, "'{s}' is not a def in this program — a `describe` block follows the `def` it describes (parse order is definition order here)", .{name_tok.text});
+        };
+        if (tmpl.described) {
+            return self.fail(name_tok, "'{s}' already has a `describe` block — one block per definition, so there is one place to read", .{name_tok.text});
+        }
+        tmpl.described = true;
+
+        var any_line = false;
+        while (true) {
+            self.skipNewlines();
+            const t = self.peek();
+            if (t.kind == .eof) break;
+            if (t.col <= kw.col) break; // dedent ends the block
+            // A describe block splices NOTHING. It is prose, read verbatim
+            // into the pack, and the one surface the design intends a local
+            // model to write into: a fold in the port-NAME position could
+            // rename what the parity gate then checks, and a fold in the
+            // string position buys indirection where the whole point is that
+            // the sentence sits where a reader finds it. Refused by name
+            // rather than by "unexpected token".
+            if (t.kind == .fold) {
+                return self.fail(t, "a `describe` block is prose and is read verbatim — '{s}' is not spliced here; write the text out", .{t.text});
+            }
+            if (t.kind == .string) {
+                _ = self.next();
+                if (any_line) {
+                    return self.fail(t, "describe '{s}': a bare string describes the DEFINITION and comes first — a port's line is `<port> \"…\"`", .{tmpl.name});
+                }
+                if (t.text.len == 0) {
+                    return self.fail(t, "describe '{s}': the definition's description is empty — say what it does, or leave the line out", .{tmpl.name});
+                }
+                tmpl.doc = try self.unescape(t.text);
+                any_line = true;
+                continue;
+            }
+            if (t.kind != .name) {
+                return self.fail(t, "describe '{s}': expected a port name or a leading description string, got '{s}'", .{ tmpl.name, t.text });
+            }
+            _ = self.next();
+            const st = self.next();
+            if (st.kind != .string) {
+                return self.fail(st, "describe '{s}': port '{s}' needs a quoted description — `{s} \"what it means\"`", .{ tmpl.name, t.text, t.text });
+            }
+            // An empty string is not a description, and letting one through
+            // would make the parity gate say "port has no description" about a
+            // line that is visibly right there.
+            if (st.text.len == 0) {
+                return self.fail(st, "describe '{s}': port '{s}' has an empty description — say what it means", .{ tmpl.name, t.text });
+            }
+            // Direction two of the parity gate, and it runs for a LOCAL def
+            // too: a describe block that names a port the definition does not
+            // have is wrong whoever wrote it, and the fix is the list.
+            const pd = for (tmpl.ports) |*p| {
+                if (std.mem.eql(u8, p.name, t.text)) break p;
+            } else {
+                return self.fail(t, "describe '{s}': '{s}' is not a port of '{s}' — it has: {s}", .{ tmpl.name, t.text, tmpl.name, try self.portList(tmpl) });
+            };
+            if (pd.doc.len > 0) {
+                return self.fail(t, "describe '{s}': port '{s}' is described twice", .{ tmpl.name, t.text });
+            }
+            pd.doc = try self.unescape(st.text);
+            any_line = true;
+        }
+        if (!any_line) {
+            return self.fail(kw, "describe '{s}' says nothing — put the description on the next line, indented", .{tmpl.name});
+        }
     }
 
     /// usingstmt := "using" token+ "as" foldname — a parse-time MACRO
@@ -1666,6 +2035,14 @@ const Parser = struct {
             if (std.mem.eql(u8, op_name, "use")) return self.failRetiredUse(op_tok);
             if (std.mem.eql(u8, op_name, "using"))
                 return self.fail(op_tok, "'using' binds at the top level of a program — a fold is file-scoped, and a `:name` reference is what goes here", .{});
+            // Same door, same reason (2026-09-08). Both are reserved, so
+            // `find` can never answer for them, and a def body or a mid-chain
+            // position would otherwise shrug "unknown operator" at a keyword
+            // the author spelled correctly. ONE door: the previous beat proved
+            // the copies in `parseProgram` and `parseExpr` were dead code by
+            // mutating them and watching the suite stay green.
+            if (std.mem.eql(u8, op_name, "export") or std.mem.eql(u8, op_name, "describe"))
+                return self.fail(op_tok, "'{s}' is a statement keyword and stands at the top level of a program — it cannot appear in a chain or inside a def body", .{op_name});
             return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
         };
         const def = self.reg.get(op_id);
@@ -2569,7 +2946,20 @@ const Parser = struct {
         }
         const port_sources = try self.a().alloc(Source, tmpl.ports.len);
         for (tmpl.ports, 0..) |pd, i| {
-            const arg = bound[i] orelse return self.fail(op_tok, "port '{s}' of '{s}' is not bound", .{ pd.name, tmpl.name });
+            const arg = bound[i] orelse {
+                // A port with a default is OPTIONAL at the call site: the
+                // declared literal is spliced in exactly as if the caller had
+                // typed it. Same bytes, same `.literal` Source, so the node it
+                // feeds is indistinguishable from one built by a written
+                // argument — and its knob path is settable from outside like
+                // any other (G7). The signature ban on a required port after a
+                // defaulted one is what makes this fill unambiguous.
+                if (pd.default) |bytes| {
+                    port_sources[i] = .{ .literal = bytes };
+                    continue;
+                }
+                return self.fail(op_tok, "port '{s}' of '{s}' is not bound", .{ pd.name, tmpl.name });
+            };
             if (!types.accepts(pd.ty, arg.ty)) {
                 return self.fail(arg.tok, "'{s}' port '{s}': expected {s}, got {s}", .{
                     tmpl.name, pd.name, self.reg.types.name(pd.ty), self.reg.types.name(arg.ty),

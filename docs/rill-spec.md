@@ -389,6 +389,57 @@ def rivet(m: mesh, n: int) =
 - defs live in the rig/Project like everything else: cut, mounted, provenance-tracked. A pack
   can ship operators, not just assets.
 
+#### The parameter pack (v0.3, ruled 2026-09-08)
+
+A port may carry a **default** and an advisory **range**, and an `export def` must carry
+**descriptions**. The model is Blade3D's `[OperatorParameter(Description=…, DefaultValue=…,
+MinValue=…, MaxValue=…)]`: one declaration is at once the call signature, the slider's range,
+the documentation and the validation.
+
+```
+export def roaches(rate: number = 60 (0..500), speed = 0.15 (0..5), spread = 0.35 (0..3)) =
+  rate | mul speed | mul spread
+
+describe roaches
+  "Cockroaches milling on a floor, scattering and regrouping."
+  rate   "how many rows are born each second"
+  speed  "metres per second along the spray's aim at birth"
+  spread "± metres per second of random jitter added at birth"
+```
+
+`port := name [":" type] ["=" literal] ["(" number ".." number ")"]`
+
+- **A default makes the port optional at the call site.** Omitted, the declared literal is
+  spliced in exactly as if the caller had typed it — the same `.literal` source, the same
+  addressable knob path under the instance. A default must be a literal (a def closes over
+  nothing) and must match the port's declared type.
+- **A required port may not follow a defaulted one.** Positional fill is strictly
+  left-to-right, so an argument would land on the optional port and leave the required one
+  unbound. This is the registry's `AmbiguousOptionals` rule — *a word marks an argument that
+  could otherwise be mistaken for another* — applied where a def port has no word to mark it
+  with. Forcing defaults to the tail is also what makes two *adjacent* defaults safe here,
+  where the registry has to refuse them: nothing after them can shift.
+- **A range is advice, not a constraint** — the Blade3D reading, kept deliberately (a spawn
+  position with min -10 does not forbid spawning at 20). Nothing clamps and nothing refuses;
+  it is for the reader and for the generated widget. The spelling is contextual and reserves
+  no word: inside a signature a `(` can only ever open a range.
+- **`export` marks a definition visible to the HOST**, and is rill's first visibility concept.
+  rill has no imports and no cross-file reference, so that is the only thing visibility can
+  mean here. An exported def's pack **survives the parse that flattens its body away**, on
+  `Program.exports` — name, ports, types, defaults, ranges and prose. A local def is not
+  enumerable and vanishes exactly as it always did.
+- **Descriptions live in a `describe` block, never inline.** A number does not clutter a
+  signature; a sentence does. Defaults and ranges are behaviour and stay inline where they
+  cannot drift; prose changes nothing at runtime and can live where it reads best. A describe
+  block is also a safe surface for a local model to write into, and can be added to existing
+  code without touching the code. A leading bare string describes the definition itself; every
+  other line is `<port> "…"`.
+- **The parity gate runs BOTH ways.** For an exported def: every port must be described, the
+  definition itself must be described, and the block must exist at all. For any def, exported
+  or not: a describe line naming a port the definition does not have is refused, and the
+  refusal lists the ports that do exist. One-directional parity would catch orphans and let
+  everybody skip writing prose, which is the exact failure this exists to prevent.
+
 ### 3.10 `using` — the parse-time fold (v0.3, ruled 2026-09-08; replaced `use`)
 
 ```

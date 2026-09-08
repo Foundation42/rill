@@ -2993,3 +2993,317 @@ looked like checks.
   than the reader trusting it); `rill-for-agents.md` §2's grammar;
   `rill-agents.md`'s sentinel; `namespaces.md` §C and a postscript;
   `rill-casts.md` and `ironwood.md`'s references to "the `use` precedent".
+
+
+## The parameter pack: defaults, ranges, `export` and `describe`, 2026-09-08
+
+**Why it exists, in Christian's words.** He spent a morning unable to work out
+what a particle demo's parameters meant, because they were unlabelled
+positional numbers with no defaults, no ranges and no descriptions anywhere.
+The model for the fix is his earlier engine, Blade3D, where every operator
+parameter carried its own metadata:
+
+```csharp
+[OperatorParameter(Description = "The spawn position for the object.",
+                   DefaultValue = "0,0,0",
+                   MinValue = "-10,-10,-10", MaxValue = "10,10,10")] Vector3 spawnPosition
+```
+
+One declaration is simultaneously the call signature, the UI (a slider with the
+right range), the documentation and the validation. And the goal beyond
+ergonomics, stated: **make the system discoverable to agents and humans alike,
+documented at source.**
+
+**This is the rill half of a two-sided design.** Matryoshka's console `Arg` is
+growing the same pack in a parallel beat. A later reader should treat them as
+one idea with two implementations, not two features that happen to rhyme — and
+should expect the two to be held to each other when the archetype mount lands.
+
+### What shipped
+
+```rill
+export def roaches(rate: number = 60 (0..500), speed = 0.15 (0..5), spread = 0.35 (0..3)) =
+  rate | mul speed | mul spread
+
+describe roaches
+  "Cockroaches milling on a floor, scattering and regrouping."
+  rate   "how many rows are born each second"
+  speed  "metres per second along the spray's aim at birth"
+  spread "± metres per second of random jitter added at birth"
+```
+
+`port := name [":" type] ["=" literal] ["(" number ".." number ")"]`
+
+- A **default** makes the port optional at the call site. Omitted, the declared
+  literal is spliced in as an ordinary `.literal` Source — the same bytes a
+  written argument produces, so the resulting node is indistinguishable from
+  one built by hand and its knob path stays settable from outside (G7's claim,
+  unchanged, gated over a default).
+- A default must be a **literal** (a def closes over nothing, so it cannot be a
+  stream or a plane path) and must **match the port's declared type**, checked
+  at the definition rather than at the first call.
+- A **range** is stored and surfaced and **nothing enforces it**. That is the
+  Blade3D reading kept deliberately: a spawn position with min -10 does not
+  forbid spawning at 20. Enforcing it here would be trivial and free — the
+  numbers are already decoded at parse — and it is switched off on purpose,
+  recorded here so a later reader does not "fix" it. Nothing clamps.
+- **`export def`** marks a definition visible to the HOST. This is rill's first
+  visibility concept.
+- **`describe <name>`** opens a prose block: a leading bare string describes the
+  definition, every other line is `<port> "…"`.
+
+### `export`, and the spelling it replaced
+
+The first draft of this beat marked the public surface with the archetype
+sigil: `def ^roaches(…)`, called `^roaches`, on the reasoning that `^` was
+reserved everywhere, used in zero real paths across the six sibling repos, and
+matched the plane path a later beat will mount it at (`plane.drift.^roaches`).
+
+**Rejected, by Christian, mid-beat, and the reason is the useful part.** `^` was
+being asked to do two jobs at once. It is an ADDRESSING sigil — what a thing is
+called on the plane — and the draft was also making it carry VISIBILITY. Those
+are different questions, and conflating them in the name is the mistake.
+`export` says visibility and nothing else; `^` goes back to being purely how a
+mounted archetype is addressed in a path. His framing: *"maybe we could have
+export in a compiland to control visibility and enforce the fully described
+ruling?"*
+
+The consequence in the code is a deletion rather than an addition:
+`parseDef`'s blanket sigil refusal keeps **exactly** the shape it had, and
+`def $x` / `def @x` / `def #x` / `def ^x` are all still refused unchanged. The
+`^`-exception the first draft had written was reverted. `export` and `describe`
+join the reserved-word list for the reason everything on it is there: the
+parser recognises them at statement head before it ever asks `find`, so an
+operator named either would register cleanly and then be permanently
+unreachable.
+
+### What `export` actually DOES, which is the interesting part
+
+rill has no imports and no cross-file reference, so "exported" cannot mean
+visible to another rill file. It means **visible to the HOST**. No import
+mechanism was built and none should be inferred from this beat.
+
+But the parser's own header says *"def bodies are flattened at parse into the
+same arena with an instance-name prefix; the graph does not know defs exist."*
+If defs vanish at parse, `export` is inert. So an exported def now **survives
+the parse as something a host can enumerate**: `Program.exports`, one
+`DefExport { name, doc, ports }` per exported definition, each `DefPort`
+carrying name, type, default, min, max and doc. Defaults and range ends are
+struple-encoded literals — the same bytes a `.literal` slot holds — so a host
+reads them with `types.asNumber` exactly as it reads a slot value, and no new
+wire form was invented for them. A local def is copied nowhere and still
+vanishes.
+
+It is **not serialized**, for the same reason `warnings` is not: it describes
+the SOURCE, and a dump is of a mounted graph in which no def survives. That is
+also why G2's frozen hash did not move this beat.
+
+Names considered for the surface: `DefSig` / `Signature` (rejected — a
+signature is half of it; the pack carries prose too), `Archetype` (rejected —
+that is the later beat's word and using it here would prejudge the mount).
+
+### The range spelling, and the two spellings that lost
+
+**`in 0..500`** read best and is **rejected**: it would reserve `in` for the
+whole language in order to spell a range in one place, which is precisely the
+trade `namespaces.md` §C refuses for dotted operator names (*"would give that
+up for the whole language to scope one family"*). `namespaces.md` gained a
+second postscript saying so, because that document's argument is what decided
+it.
+
+**`[0..500]`** (brackets) is rejected on a subtler ground than a collision:
+`[` has been an array-literal token since tier-2 beat 2, and inside a signature
+there is no array, so it would not actually have collided. It loses because the
+manual's §12 argument notation already spells OPTIONAL with square brackets
+(`[<x>]`), and a range in brackets beside a default that already means optional
+would be an active false friend.
+
+**Bare `60 0..500`**, no delimiter, is rejected because `rate = 60 0..500`
+reads as two values and gives the eye nothing to bracket the pair with.
+
+**Shipped: `(0..500)` after the default** — contextual, reserving nothing.
+Inside a def signature a `(` can only ever open a range, so the parser needs no
+lookahead and the language needs no new word. A range with no default
+(`speed (0..5)`) is legal too: the two declarations are orthogonal.
+
+The `..` cost one lexer change, and it is worth naming because it is the sort
+of thing that bites later. `0..500` was already lexing as ONE `.number` token
+whose text no `parseFloat` accepts — the number loop consumes `.` greedily — so
+the **number lexer is what had to yield**: it now stops short of a `..`. Only
+the number lexer could see both dots at once. The change is additive by
+construction: two adjacent dots were legal nowhere a token is read, dying
+either as "bad number" inside a number or as a projection with no field name
+outside one.
+
+### Descriptions in their own block — Christian's ruling, not relitigated
+
+Prose does **not** go inline in the signature. Three reasons, settled:
+
+1. A number does not clutter a signature; a sentence does. Defaults and ranges
+   are *behaviour* and stay inline where they cannot drift from what they
+   describe. Prose changes nothing at runtime and can live where it reads best.
+2. A `describe` block is a **safe surface for a local model to write**. He
+   plans to have Ollama/Gemma document things, and generated prose landing in a
+   describe block cannot break a definition — the worst it can do is describe
+   the wrong port, and the parity gate catches that by name.
+3. It can be added to existing code without touching the code.
+
+The block must **follow** the def it describes, like everything else in a
+language where parse order is topological order, and the refusal for a block
+written above its def says exactly that rather than "unknown name".
+
+### The parity gate, and why it runs both ways
+
+Christian: *"it puts the burden on whoever writes the function. Stops people
+being lazy."* One-directional parity catches orphans and lets everyone skip
+writing prose, which is the exact failure this exists to prevent. So:
+
+For an **exported** def, refused at parse:
+
+> `exported def 'roaches': port 'spread' has no description — add a line
+> `spread "…"` to `describe roaches``
+
+> `exported def 'roaches' has no `describe` block — an exported definition
+> documents itself (add `describe roaches` with one line per port: rate, speed)`
+
+> `exported def 'roaches': its `describe` block has no leading description —
+> the first line of the block is a bare string saying what 'roaches' does`
+
+For **any** def, exported or local:
+
+> `describe 'roaches': 'sped' is not a port of 'roaches' — it has: rate, speed`
+
+**Decisions the brief left open, made here.** (a) A block-less export is
+refused, not merely warned: catching only the undescribed-port case would make
+"leave the block out" the way to skip the gate. (b) The definition's OWN
+description is required too, not just the ports': it is the first line of a
+generated panel and the first thing an agent reads, and a pack that says what
+every knob does and never says what the thing IS has skipped the useful half.
+(c) An empty string is not a description — see the survivor below.
+
+### A required port may not follow a defaulted one
+
+rill already had this rule for registered operators, one level up, and it was
+found by reading `registry.zig` rather than by reasoning from scratch:
+`error.AmbiguousOptionals`, with the rule stated as **"a word marks an argument
+that could otherwise be mistaken for another"** and two adjacent wordless
+optionals as its mechanical form (`arm <in> <off> <on>`, where `arm
+gate_closed` bound `in` and nothing announced it).
+
+A def port has no word to be marked with — a call may name a port with the
+colon spelling (`roaches rate: 120`) but nothing requires it — and positional
+fill is strictly left-to-right. So `def f(a = 1, b)` called as `f 5` would put
+5 on the OPTIONAL port and leave `b` unbound, failing far away at the call with
+"port 'b' of 'f' is not bound". It is refused at the DEFINITION, where the fix
+is, naming both ports and both fixes.
+
+Note the pleasant asymmetry this buys: because defaults are forced to the tail,
+two ADJACENT defaults are safe here, where the registry has to refuse them.
+Nothing after them can shift.
+
+### The `using` interaction, decided both ways on purpose
+
+A **default and a range end may be supplied by a fold** — they are value
+positions like every other, `expandIfFold` runs there, and the previous beat's
+provenance chain pays for itself in a position that did not exist when it was
+built (`def f(x = :k)` where `:k` is a plane path refuses with *"must be a
+literal … expanded from :k, bound at line 1"*).
+
+A **describe block splices nothing**. It is prose, read verbatim, and it is the
+one surface the design intends a local model to write into: a fold in the
+port-NAME position could rename what the parity gate then checks, and a fold in
+the string position buys indirection where the whole point is that the sentence
+sits where a reader finds it. A `:name` there is refused by name.
+
+One boundary discovered while gating this, and left where it was on purpose:
+`(0..:ceiling)` does NOT lex the fold, because `colonOpensFold`'s adjacency
+whitelist (whitespace, start, `( [ { , |`) does not include `.`, and `..` is
+therefore not an opener. Widening that whitelist would trade a carefully
+argued, gated rule from the previous beat for one marginal spelling. Instead
+the refusal **points**: *"a fold reference needs a space before its colon here
+— write ': ceiling' as ' :ceiling'"*, and `(:floor.. :ceiling)` works. Gated
+both ways.
+
+### One bug the gates caught before a human could
+
+The dedent that ends a def body is measured from the statement head token.
+Measured from `def`, every `export def` anchors at column 8, and a body
+indented two spaces reads as a dedent — the definition parses as EMPTY. Caught
+by writing the first exported def with a two-line body; the gate that holds it
+is "an exported def's indented body is its body", and the mutation that bites
+is `const def_tok = kw_tok`.
+
+### Two keywords, one door
+
+`export` and `describe` are reserved, so `reg.find` can never answer for them,
+and any position that is not the top of a program reaches the op-lookup miss.
+A pointer lives there beside `set` → `write` and `use` → `using`: *"'describe'
+is a statement keyword and stands at the top level of a program — it cannot
+appear in a chain or inside a def body."* **One door only** — the previous beat
+proved by mutation that the copies in `parseProgram`'s dispatch and in
+`parseExpr` are dead code, so none was written here.
+
+Writing that gate found a false premise worth recording: `def f(x) = x | mul 2`
+is a SINGLE-LINE body, so the next line is top level whatever its indentation.
+The first draft of the gate indented an `export def` under a one-line def and
+watched it parse as an ordinary export — the gate was asserting nothing until
+the outer def's body was made two lines.
+
+### Gates and mutations
+
+Sixteen gates, **thirty-two mutations, all bitten** — after two rounds of
+fixing, and the survivors are the useful part of this table.
+
+| gate | mutation that bites it |
+|---|---|
+| a default fills an omitted argument; a written one overrides | delete the `if (pd.default)` arm in `instantiate` |
+| a default is an ordinary literal — the instance knob is settable | same arm; the gate's second half pins the knob path over it |
+| an exported def survives the parse with its pack intact | `publishExports` does nothing; or the range parens are never read; or min/max are stored as null; or the `..` token is deleted |
+| a LOCAL def is not enumerable | drop `if (!tmpl.exported) continue` in `publishExports` |
+| the range spelling disturbs no existing signature | drop the `..` break from the number lexer (`0..500` dies as "bad number") |
+| the range is advice — nothing clamps | clamp the default into the range at parse, or refuse an out-of-range argument |
+| an exported def with an undescribed port is refused | drop the `pd.doc.len > 0` sweep in `checkExportsDescribed` |
+| a describe line naming an unknown port is refused, listing the real ones | replace that lookup's `else` with `continue` |
+| a LOCAL def needs no describe block, and a wrong one is still refused | make `checkExportsDescribed` ignore `tmpl.exported`; or move the unknown-port check into the exported-only sweep |
+| an exported def with no block at all is refused | drop the `!tmpl.described` arm; drop the `tmpl.doc.len == 0` arm |
+| `export` marks visibility; every sigil is still refused on a def | let `^` through the def-name sigil refusal; unreserve `export`/`describe`; accept `export` with no `def`; delete the keyword pointer at the op-lookup door |
+| an exported def's indented body is its body | `const def_tok = kw_tok` |
+| a required port may not follow a defaulted one | delete the check |
+| a default must be a literal, and must match the port's type | delete the literal check; delete the `types.accepts` check; accept non-number range ends; accept a backwards range; accept a missing `..` |
+| a describe block must follow a def that exists, once | make the unknown-def refusal a silent `return`; allow a second block; allow an empty block; allow a port described twice; **allow an empty description string** |
+| a fold supplies a default; a describe block splices nothing | drop `expandIfFold` before the default; drop the `.fold` refusal in `parseDescribe`; drop the glued-colon pointer |
+
+**Survivor 1 — the empty description.** `describe f` with `x ""` satisfied the
+parity gate. The check was in the code and **nothing asserted it**: removing it
+left the suite green. That is the worst version of this bug, not a cosmetic
+one, because it is the single spelling that beats the gate while looking like
+compliance — and the refusal for a missing description would then have said
+"port 'x' has no description" about a line visibly sitting right there. Both
+guards (port line and leading string) are now asserted.
+
+**Survivor 2 — two mutations that did not compile.** The first attempt at
+"min/max are never stored" was `_ = lo; _ = hi;`, which Zig refuses as a
+pointless discard because both are used two lines down. Per the house rule — *a
+mutation that does not compile is not a mutation* — it was rewritten as
+`decl.min = null; decl.max = null;`, which compiles and bites (the gate panics
+on `.?`, the way the previous beat's splice-one-token-short mutation did).
+
+### Docs in the same commit
+
+`rill-spec.md` §3.9 gains "The parameter pack" (the grammar line, the five
+rules, and the both-ways parity statement); `rill-manual.md` §10 gains "The
+parameter pack" and "`export` and `describe`" with two fenced examples the
+manual-parse gate now compiles (51 → 53 blocks); `rill-for-agents.md` §2's
+grammar grows `defstmt` / `describestmt` and one fenced example (4 → 6);
+`rill-agents.md`'s ABI list gains the export-table bullet and its §8 residue
+paragraph gains the sentence about accreting vocabulary *with its meaning
+attached*; `namespaces.md` gains postscript 2, because §C's argument is what
+rejected `in`.
+
+### What this beat deliberately did NOT build
+
+No archetype room on the plane, no `^` mount, no instantiation semantics. Every
+other def semantic is exactly as it was. One interaction was checked and left
+alone: an exported def is still held to "a def must produce an output", which
+is not awkward today and is the later beat's business if the mount ever wants a
+def that only has effects.

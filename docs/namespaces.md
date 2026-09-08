@@ -171,3 +171,21 @@ live.
 It is also the reason D's second stated cost — "a two-word name cannot be a
 `def`" — matters less than it did: a `def` cannot abbreviate a family, but a
 fold can, and unlike a def it can stand in argument position.
+
+## Postscript 2: the range spelling paid this document's rent
+
+*2026-09-08, the parameter pack.* A def port grew an advisory range, and the
+spelling that read best was `rate in 0..500`. It was **rejected on this
+document's own argument**, one section up: reserving `in` for the whole
+language to spell a range in one place is exactly the trade §C refuses —
+*"Dotted operator names would give that up for the whole language to scope one
+family."* A reserved word is a permanent narrowing of every name any host can
+ever register, and rill's reserved list is short on purpose — `plane row slate
+use using def export describe as also true false` — each entry earning its
+place by being a statement keyword or a path head.
+
+The shipped spelling is **contextual and reserves nothing**: `rate = 60
+(0..500)`, where a `(` inside a def signature can only ever open a range. The
+two words that DID join the list this beat — `export` and `describe` — are
+statement keywords in the same sense `def` is, which is the bar. "It would read
+nicely" is not.

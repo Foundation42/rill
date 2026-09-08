@@ -1081,6 +1081,67 @@ defs close over nothing: a `plane.…` path inside a def body is a parse
 error — pass streams in through ports. That is what keeps a def
 reusable across worlds.
 
+### The parameter pack
+
+A port can carry a **default** and a **range**, and the two together are
+what turn a row of unlabelled numbers into something a person or a HUD
+can read:
+
+```rill
+def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5)) = rate | mul speed
+scatter | write plane.drift.rate
+scatter 120 | write plane.drift.fast
+```
+
+A port with a default is **optional at the call site** — omitted, the
+literal goes in exactly as if you had typed it, knob path and all. A
+required port may not follow a defaulted one, and that is refused at the
+definition: positional arguments fill left to right, so one argument
+would land on the optional port and leave the required one unbound.
+
+The range in parentheses is **advice, not a constraint** — a sane range
+for a slider and for a reader. Nothing clamps and nothing refuses; a
+spawn position whose minimum is -10 does not forbid spawning at 20.
+
+### `export` and `describe`
+
+`export def` marks a definition **visible to the host**. rill has no
+imports, so that is the whole of what visibility means here: an exported
+definition's pack survives the parse that flattens its body away, and a
+host can enumerate it — name, ports, types, defaults, ranges, prose. A
+plain `def` is a private helper and vanishes as it always did.
+
+An exported definition **must describe itself**, and descriptions live
+in their own block:
+
+```rill
+export def roaches(rate: number = 60 (0..500), spread = 0.35 (0..3)) =
+  rate | mul spread
+
+describe roaches
+  "Cockroaches milling on a floor, scattering and regrouping."
+  rate   "how many rows are born each second"
+  spread "± metres per second of random jitter added at birth"
+
+roaches | write plane.drift.roaches
+```
+
+The leading bare string describes the definition; every other line is a
+port and its sentence. Prose lives apart from the signature because a
+number does not clutter a signature and a sentence does — and because a
+describe block can be added to code you would rather not touch, and is a
+safe thing for a model to write.
+
+The check runs **both ways**. An exported definition with an undescribed
+port is refused, naming the port and saying where to put the line. A
+describe block that names a port the definition does not have is refused
+too — that one for local definitions as well, because a block that lies
+is wrong whoever wrote it. One-directional parity would catch orphans
+and let everybody skip the prose, which is the failure this exists to
+prevent.
+
+### `using`
+
 `using` binds a **fold**: the tokens between `using` and the trailing
 `as` are captured verbatim, and `:name` splices them back wherever a
 token may appear. The name wears its sigil at both ends, so the binding

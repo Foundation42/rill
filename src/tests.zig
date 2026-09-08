@@ -1066,6 +1066,504 @@ test "use: the retired keyword points at `using`" {
     , "`use` became `using`");
 }
 
+// ---------------------------------------------------------------------------
+// The parameter pack — `export def`, defaults, ranges and `describe`
+// (§3.9, 2026-09-08). Blade3D's `[OperatorParameter]`, transposed: one
+// declaration is the call signature, the widget's range, the documentation and
+// the validation. Christian spent a morning unable to work out what a particle
+// demo's positional numbers meant; this is the fix, and the parity gate is the
+// point of it — it puts the burden on whoever writes the definition.
+//
+// Every gate below names the mutation that had to bite before it was believed.
+// ---------------------------------------------------------------------------
+
+test "pack: a default fills an omitted argument, and a written one overrides it" {
+    // The feature's whole first claim. Mutation that bites: delete the
+    // `if (pd.default) |bytes|` arm in `instantiate` — every call that omits
+    // an argument dies as "port 'k' of 'scale' is not bound".
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def scale(x: number, k: number = 3) =
+        \\  x | mul k
+        \\
+        \\plane.v | scale | write plane.defaulted
+        \\plane.v | scale 10 | write plane.overridden
+    , .{.{ "plane.v", @as(i64, 7) }});
+    defer fx.deinit();
+    var got_default: ?f64 = null;
+    var got_override: ?f64 = null;
+    for (fx.mock.writes.items) |w| {
+        if (std.mem.eql(u8, w.path, "plane.defaulted")) got_default = types.asNumber(w.value);
+        if (std.mem.eql(u8, w.path, "plane.overridden")) got_override = types.asNumber(w.value);
+    }
+    try testing.expectEqual(@as(f64, 21), got_default.?);
+    try testing.expectEqual(@as(f64, 70), got_override.?);
+}
+
+test "pack: a default is an ordinary literal — the knob under the instance is settable" {
+    // The default must not be a second kind of thing. It is spliced as the
+    // same `.literal` Source a written argument produces, so G7's claim (a
+    // def's internals are addressable from outside) holds over it unchanged.
+    // Mutation that bites: give the default its own Source case — `setInput`
+    // then has no slot to write and the second tick still reads 21.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def scale(x: number, k: number = 3) =
+        \\  x | mul k
+        \\
+        \\plane.v | scale | write plane.out
+    , .{.{ "plane.v", @as(i64, 7) }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 21), types.asNumber(fx.mock.writes.items[0].value).?);
+    const knob = "programs.p.scale1.mul1.in.b";
+    const five = try packOne(testing.allocator, @as(i64, 5));
+    defer testing.allocator.free(five);
+    try fx.rt.setInput(knob, five);
+    try fx.rt.tick(.{});
+    const last = fx.mock.writes.items[fx.mock.writes.items.len - 1];
+    try testing.expectEqual(@as(f64, 35), types.asNumber(last.value).?);
+}
+
+test "pack: an exported def survives the parse, with defaults, ranges and prose intact" {
+    // `def` bodies flatten and the graph does not know defs exist — so
+    // without a retained table `export` would be inert. This is the surface a
+    // host reads: `schema`'s source, the HUD's panel, the agent's answer to
+    // "what does `spread` mean". Mutations that bite: drop the `min`/`max`
+    // assignment in `parseDef` (both nulls); drop `publishExports` (no
+    // exports at all); copy the pack for local defs too (the sibling gate
+    // below).
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\export def roaches(rate: number = 60 (0..500), speed = 0.15 (0..5), spread = 0.35 (0..3)) =
+        \\  rate | mul speed | mul spread
+        \\
+        \\describe roaches
+        \\  "Cockroaches milling on a floor, scattering and regrouping."
+        \\  rate   "how many rows are born each second"
+        \\  speed  "metres per second along the spray's aim at birth"
+        \\  spread "± metres per second of random jitter added at birth"
+        \\
+        \\roaches | write plane.out
+    );
+    defer prog.deinit();
+
+    try testing.expectEqual(@as(usize, 1), prog.exports.items.len);
+    const e = prog.exported("roaches").?;
+    try testing.expectEqualStrings("Cockroaches milling on a floor, scattering and regrouping.", e.doc);
+    try testing.expectEqual(@as(usize, 3), e.ports.len);
+
+    try testing.expectEqualStrings("rate", e.ports[0].name);
+    try testing.expectEqual(types.Tag.number, e.ports[0].ty);
+    try testing.expectEqual(@as(f64, 60), types.asNumber(e.ports[0].default.?).?);
+    try testing.expectEqual(@as(f64, 0), types.asNumber(e.ports[0].min.?).?);
+    try testing.expectEqual(@as(f64, 500), types.asNumber(e.ports[0].max.?).?);
+    try testing.expectEqualStrings("how many rows are born each second", e.ports[0].doc);
+
+    // An untyped port keeps `any` and still carries its pack — the type
+    // annotation and the default are independent declarations.
+    try testing.expectEqualStrings("speed", e.ports[1].name);
+    try testing.expectEqual(types.Tag.any, e.ports[1].ty);
+    try testing.expectEqual(@as(f64, 0.15), types.asNumber(e.ports[1].default.?).?);
+    try testing.expectEqual(@as(f64, 5), types.asNumber(e.ports[1].max.?).?);
+    try testing.expectEqualStrings("spread", e.ports[2].name);
+    try testing.expectEqual(@as(f64, 3), types.asNumber(e.ports[2].max.?).?);
+    try testing.expectEqualStrings("± metres per second of random jitter added at birth", e.ports[2].doc);
+
+    try testing.expect(prog.nodeCount() > 0);
+}
+
+test "pack: a LOCAL def is not enumerable — it vanishes as it always did" {
+    // The other half of the visibility claim, and the reason it is a claim at
+    // all: if every def were published, `export` would say nothing. Mutation
+    // that bites: drop the `if (!tmpl.exported) continue;` in `publishExports`.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\def helper(x: number, k: number = 2) = x | mul k
+        \\plane.v | helper | write plane.out
+    );
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 0), prog.exports.items.len);
+    try testing.expect(prog.exported("helper") == null);
+}
+
+test "pack: the range spelling does not disturb any existing signature" {
+    // The contextual spelling reserves nothing, so nothing that parsed before
+    // may parse differently now. The typed-port colon is the one at real risk
+    // (`def f(x: number)` was the only punctuation in a signature until this
+    // beat), and the `..` token is the other — it made the NUMBER lexer yield.
+    // Mutation that bites: drop the `..` break from the number lexer — `0..500`
+    // lexes as one number token and dies as "bad number '0..500'".
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const cases = [_][]const u8{
+        // the old spellings, unchanged
+        "def a(x) = x | mul 2\nplane.v | a | tap t",
+        "def b(x: number) = x | mul 2\nplane.v | b | tap t",
+        "def c(x: number, y: number) = x | add y\nplane.v | c 1 | tap t",
+        // …and each new one beside it
+        "def d(x: number = 1) = x | mul 2\nd | tap t",
+        "def e(x: number = 1 (0..10)) = x | mul 2\ne | tap t",
+        "def f(x (0..10)) = x | mul 2\nplane.v | f | tap t",
+        // a float range, a negative floor, a range whose ends are the same
+        "def g(x = 0.5 (-1.5..1.5)) = x | mul 2\ng | tap t",
+        "def h(x = 0 (0..0)) = x | mul 2\nh | tap t",
+        // and a kwarg call site: `rate: 120` is the colon that glues LEFT
+        "def i(x = 1, rate = 2) = x | mul rate\ni rate: 120 | tap t",
+    };
+    for (cases) |src| {
+        var prog = parseOk(testing.allocator, &reg, src) catch |err| {
+            std.debug.print("signature no longer parses: {s}\n", .{src});
+            return err;
+        };
+        prog.deinit();
+    }
+    // `..` outside a range is still the loud error it always was — the token
+    // exists, it just has nowhere else to go.
+    try expectParseError("plane.a | tap t\nplane.b..c | tap u", "expected");
+}
+
+test "pack: the range is stored as advice — nothing clamps and nothing refuses" {
+    // Blade3D's reading, kept deliberately (a spawn position with min -10 does
+    // not forbid spawning at 20). Enforcing would be trivial here and is
+    // switched OFF: a range is for the reader and for the widget. Mutation
+    // that bites: clamp the default into [min, max] at parse, or refuse an
+    // out-of-range argument at the call — either kills one of the two
+    // assertions below.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\export def wide(rate = 900 (0..500)) = rate | mul 1
+        \\describe wide
+        \\  "a rate whose default sits outside its own advisory range"
+        \\  rate "rows per second"
+        \\
+        \\wide 4000 | write plane.out
+    );
+    defer prog.deinit();
+    const e = prog.exported("wide").?;
+    try testing.expectEqual(@as(f64, 900), types.asNumber(e.ports[0].default.?).?);
+    try testing.expectEqual(@as(f64, 500), types.asNumber(e.ports[0].max.?).?);
+    // and 4000 went in unmolested
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    try testing.expectEqual(@as(f64, 4000), types.asNumber(mock.writes.items[0].value).?);
+}
+
+test "pack: an exported def with an undescribed port is refused, naming the port" {
+    // Direction one of the parity gate. One-directional parity catches
+    // orphans and lets everybody skip writing prose, which is the exact
+    // failure the feature exists to prevent. Mutation that bites: drop the
+    // `pd.doc.len > 0` loop in `checkExportsDescribed` — the program parses
+    // green with `spread` undocumented.
+    try expectParseError(
+        \\export def roaches(rate = 60, speed = 0.15, spread = 0.35) =
+        \\  rate | mul speed | mul spread
+        \\
+        \\describe roaches
+        \\  "roaches on a floor"
+        \\  rate  "how many rows are born each second"
+        \\  speed "metres per second at birth"
+        \\
+        \\roaches | tap t
+    , "port 'spread' has no description");
+    // …and it says where to put it.
+    try expectParseError(
+        \\export def roaches(rate = 60, spread = 0.35) =
+        \\  rate | mul spread
+        \\
+        \\describe roaches
+        \\  "roaches on a floor"
+        \\  rate  "how many rows are born each second"
+        \\
+        \\roaches | tap t
+    , "add a line `spread \"…\"` to `describe roaches`");
+}
+
+test "pack: a describe line naming an unknown port is refused, and lists the real ones" {
+    // Direction two. Mutation that bites: replace the port lookup's `else`
+    // branch with a `continue` — the stray line is silently dropped and a
+    // typo'd parameter name documents nothing for ever.
+    try expectParseError(
+        \\export def roaches(rate = 60, speed = 0.15) =
+        \\  rate | mul speed
+        \\
+        \\describe roaches
+        \\  "roaches on a floor"
+        \\  rate  "born per second"
+        \\  speed "metres per second"
+        \\  sped  "a typo nobody would ever spot"
+        \\
+        \\roaches | tap t
+    , "'sped' is not a port of 'roaches' — it has: rate, speed");
+}
+
+test "pack: a LOCAL def needs no describe block, but a wrong one is still refused" {
+    // Christian's ruling, both halves. A `def` is also just a private helper,
+    // and taxing every two-line helper with a description block would be tax
+    // rather than discipline — but a describe block that lies is wrong
+    // whoever wrote it. Mutations that bite: make `checkExportsDescribed`
+    // ignore `tmpl.exported` (the first case is refused); move the
+    // unknown-port check out of `parseDescribe` into the exported-only sweep
+    // (the third case parses green).
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\def helper(x, k = 2) = x | mul k
+        \\plane.v | helper | write plane.out
+    );
+    prog.deinit();
+    // …and one WITH a block, still local, still fine — prose costs nothing.
+    var prog2 = try parseOk(testing.allocator, &reg,
+        \\def helper2(x, k = 2) = x | mul k
+        \\describe helper2
+        \\  k "the multiplier"
+        \\
+        \\plane.v | helper2 | write plane.out
+    );
+    prog2.deinit();
+    // …but a local block may not name a port that does not exist.
+    try expectParseError(
+        \\def helper3(x, k = 2) = x | mul k
+        \\describe helper3
+        \\  kk "the multiplier, misspelled"
+        \\
+        \\plane.v | helper3 | tap t
+    , "'kk' is not a port of 'helper3' — it has: x, k");
+}
+
+test "pack: an exported def with no describe block at all is refused" {
+    // The third refusal, decided rather than inherited: an export with no
+    // block is the same laziness as an export with an undescribed port, and
+    // catching only the second would make "leave the block out" the way to
+    // skip the gate. Mutation that bites: drop the `!tmpl.described` arm — a
+    // block-less export parses green and enumerates with empty docs.
+    try expectParseError(
+        \\export def roaches(rate = 60, speed = 0.15) =
+        \\  rate | mul speed
+        \\
+        \\roaches | tap t
+    , "has no `describe` block");
+    // A block that describes every port but never says what the THING is is
+    // the same gap one level up — it is the first line of a generated panel.
+    try expectParseError(
+        \\export def roaches(rate = 60) = rate | mul 1
+        \\describe roaches
+        \\  rate "born per second"
+        \\
+        \\roaches | tap t
+    , "no leading description");
+}
+
+test "pack: `export` marks visibility, and the sigils are all still refused on a def" {
+    // The spelling ruling of 2026-09-08. `def ^roaches` was the first draft
+    // and is REJECTED: `^` is an ADDRESSING sigil — what a mounted archetype
+    // is called on the plane — and making it carry visibility as well would
+    // conflate two different questions in one character. `export` says
+    // visibility and nothing else, so `parseDef`'s blanket sigil refusal keeps
+    // exactly the shape it had. Mutation that bites: allow `^` through that
+    // refusal — the fourth case below stops failing.
+    try expectParseError("def $x(a) = a | mul 2", "a sigil names a store row");
+    try expectParseError("def @x(a) = a | mul 2", "a sigil names a store row");
+    try expectParseError("def #x(a) = a | mul 2", "a sigil names a store row");
+    try expectParseError("def ^x(a) = a | mul 2", "a sigil names a store row");
+    // …and a port cannot wear one either, exported or not.
+    try expectParseError("export def x(^a) = ^a | mul 2", "a sigil names a store row");
+    // `export` alone is not a statement, and the refusal says what it marks.
+    try expectParseError("export plane.a", "`export` marks a DEFINITION");
+    // …and both keywords POINT anywhere they cannot stand, rather than dying
+    // as "unknown operator or name" at the op-lookup door, which is where a
+    // reserved word always lands. One door, the way `set` → `write` and
+    // `use` → `using` do — the previous beat proved the other two positions
+    // were dead code. Mutation that bites: delete the pointer beside them.
+    try expectParseError("plane.a | describe f", "is a statement keyword");
+    try expectParseError(
+        \\def f(x) =
+        \\  x | mul 2
+        \\  export def g(y) = y | mul 3
+    , "is a statement keyword");
+    // `export` and `describe` are reserved, so no host can register either
+    // name and then find it permanently shadowed by the grammar.
+    try testing.expect(rill.registry.isReservedWord("export"));
+    try testing.expect(rill.registry.isReservedWord("describe"));
+}
+
+test "pack: an exported def's indented body is its body" {
+    // The dedent that ends a def body is measured from the STATEMENT HEAD.
+    // Measured from `def`, every exported definition anchors at column 8 and a
+    // two-space-indented body reads as a dedent — the def parses as empty.
+    // Mutation that bites: `const def_tok = kw_tok;` — "def 'two' has an empty
+    // body".
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\export def two(x: number, k: number = 3) =
+        \\  x | mul k as scaled
+        \\  scaled | add 1
+        \\
+        \\describe two
+        \\  "scale and offset"
+        \\  x "the value"
+        \\  k "the multiplier"
+        \\
+        \\plane.v | two | write plane.out
+    , .{.{ "plane.v", @as(i64, 5) }});
+    defer fx.deinit();
+    try testing.expectEqual(@as(f64, 16), types.asNumber(fx.mock.writes.items[0].value).?);
+}
+
+test "pack: a required port may not follow a defaulted one" {
+    // rill's own `AmbiguousOptionals` rule (registry.zig), applied where a def
+    // port has no word to mark it with. Positional fill is strictly
+    // left-to-right, so `f 5` would land on the OPTIONAL port and leave the
+    // required one unbound — `arm gate_closed`, one level up. Mutation that
+    // bites: drop the check — the first case parses, and `f 5` then fails far
+    // away with "port 'b' of 'f' is not bound", pointing at the CALL.
+    try expectParseError("def f(a = 1, b) = a | add b\nf 5 | tap t", "has no default but follows 'a'");
+    try expectParseError("def f(a, b = 1, c) = a | add c\nplane.v | f | tap t", "has no default but follows 'b'");
+    // Refused at the DEFINITION, where the fix is, and the message says both.
+    try expectParseError("def f(a = 1, b) = a | add b\nf 5 | tap t", "declare it before 'a'");
+    // Two ADJACENT defaults are fine here, where the registry has to refuse
+    // them: forcing defaults to the tail means nothing after them can shift.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "def f(a = 1, b = 2) = a | add b\nf 5 | tap t");
+    prog.deinit();
+}
+
+test "pack: a default must be a literal, and must match the port's declared type" {
+    // A def closes over nothing, so a default cannot read a stream or a plane
+    // path — and a `number` port whose default is a string is a mistake worth
+    // catching where it is written, not at the first call. Mutations that
+    // bite: drop the literal check in `parseDefLiteral` (the plane path binds
+    // and the def silently closes over the world); drop the `types.accepts`
+    // check (the string default reaches `mul` at eval).
+    try expectParseError("def f(x = plane.k) = x | mul 2\nf | tap t", "must be a literal");
+    try expectParseError("def f(x: number = \"fast\") = x | mul 2\nf | tap t", "the default is string, but the port is declared number");
+    // A range is two NUMBERS — a slider cannot be drawn between anything else.
+    try expectParseError("def f(x = 1 (\"lo\"..\"hi\")) = x | mul 2\nf | tap t", "a range is two numbers");
+    // …written low to high, because backwards has exactly one reading.
+    try expectParseError("def f(x = 1 (10..0)) = x | mul 2\nf | tap t", "runs backwards");
+    // …and the `..` is not optional inside the parens.
+    try expectParseError("def f(x = 1 (0 10)) = x | mul 2\nf | tap t", "expected '..'");
+}
+
+test "pack: a describe block must follow a def that exists, once" {
+    // "Loud, never a guess": each of these is a specific mistake with a
+    // specific fix, and none of them may shrug. Mutation that bites: replace
+    // the `defs.get` refusal with a silent `return` — a describe block for a
+    // misspelled def documents nothing and says nothing.
+    try expectParseError("describe nobody\n  \"hi\"", "is not a def in this program");
+    // …including a describe block written ABOVE its def, which is the
+    // plausible mistake — parse order is definition order here.
+    try expectParseError(
+        \\describe early
+        \\  "written before its def"
+        \\
+        \\def early(x) = x | mul 2
+    , "a `describe` block follows the `def` it describes");
+    // …and an operator is not a def: its help lives in its registration.
+    try expectParseError("describe mul\n  \"multiply\"", "is a registered operator, not a def");
+    // One block per definition, so there is one place to read.
+    try expectParseError(
+        \\def f(x) = x | mul 2
+        \\describe f
+        \\  x "the value"
+        \\describe f
+        \\  "a second opinion"
+    , "already has a `describe` block");
+    // An empty block is a slip, not a statement.
+    try expectParseError("def f(x) = x | mul 2\ndescribe f\nplane.v | f | tap t", "says nothing");
+    // A port described twice has two answers and no way to pick.
+    try expectParseError(
+        \\def f(x) = x | mul 2
+        \\describe f
+        \\  x "the value"
+        \\  x "no, THIS value"
+    , "described twice");
+    // An EMPTY description is not a description. This one is here because the
+    // mutation SURVIVED the first draft of this gate: with the check removed
+    // the suite stayed green, and an exported def could satisfy the parity
+    // gate with `rate ""` — the one spelling that is worse than leaving the
+    // line out, because then the refusal would have said "port has no
+    // description" about a line visibly sitting right there. Mutations that
+    // bite: drop either `st.text.len == 0` or `t.text.len == 0` guard.
+    try expectParseError(
+        \\export def f(x = 1) = x | mul 2
+        \\describe f
+        \\  "a thing"
+        \\  x ""
+    , "port 'x' has an empty description");
+    try expectParseError(
+        \\def f(x) = x | mul 2
+        \\describe f
+        \\  ""
+        \\  x "the value"
+    , "the definition's description is empty");
+}
+
+test "pack: a fold supplies a default, and a describe block splices nothing" {
+    // The interaction with the previous beat (`using`, 2026-09-08). A default
+    // is a VALUE POSITION like every other, so `expandIfFold` runs there and
+    // the tokens are judged by the same rules — including the fold's
+    // provenance chain when they are wrong. A describe block is the opposite
+    // case on purpose: it is prose, read verbatim, and the one surface the
+    // design intends a local model to write into — a fold in the port-NAME
+    // position could rename what the parity gate then checks. Mutations that
+    // bite: drop `expandIfFold` before the default (`:fast` dies as "must be a
+    // literal"); drop the `.fold` refusal in `parseDescribe` (the block fails
+    // as "expected a port name" and says nothing about folds).
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg,
+        \\using 60 as :fast
+        \\using 0 as :floor
+        \\using 500 as :ceiling
+        \\export def roaches(rate = :fast (:floor.. :ceiling)) = rate | mul 1
+        \\describe roaches
+        \\  "roaches, whose default, floor and ceiling all came from folds"
+        \\  rate "born per second"
+        \\
+        \\roaches | write plane.out
+    );
+    defer prog.deinit();
+    const e = prog.exported("roaches").?;
+    try testing.expectEqual(@as(f64, 60), types.asNumber(e.ports[0].default.?).?);
+    try testing.expectEqual(@as(f64, 0), types.asNumber(e.ports[0].min.?).?);
+    try testing.expectEqual(@as(f64, 500), types.asNumber(e.ports[0].max.?).?);
+
+    // The space in `:floor.. :ceiling` is not decoration. A fold colon is
+    // decided by ADJACENCY (the previous beat), and `..` is not in its
+    // whitelist — so a glued `(0..:ceiling)` lexes the colon as the four
+    // -year-old `.colon` and would arrive as "must be a literal, got ':'".
+    // That rule stays untouched and the refusal POINTS instead. Mutation that
+    // bites: delete the pointing arm in `parseDefLiteral` — the author is told
+    // the wrong thing about a spelling that is one space from correct.
+    try expectParseError(
+        \\using 500 as :ceiling
+        \\def f(x = 1 (0..:ceiling)) = x | mul 2
+        \\f | tap t
+    , "needs a space before its colon");
+
+    // A fold that expands to something that is not a literal is refused where
+    // it was spliced, and the chain names the fold — the previous beat's
+    // provenance, paying for itself in a position that did not exist then.
+    try expectParseError(
+        \\using plane.k as :k
+        \\def f(x = :k) = x | mul 2
+        \\f | tap t
+    , "expanded from :k");
+    // A describe block splices nothing, and says so by name.
+    try expectParseError(
+        \\using rate as :p
+        \\def f(rate) = rate | mul 2
+        \\describe f
+        \\  :p "the rate"
+    , "read verbatim");
+}
+
 test "publish hook: freshened wires reach the host each tick, then go quiet" {
     var fx: Fixture = undefined;
     try mountFixture(testing.allocator, &fx,
@@ -3397,10 +3895,16 @@ test "the manuals parse: every printed example compiles" {
     // 50 → 51 (`using`, 2026-09-08): §10 gains the argument-position example,
     // which is the one thing a fold does that a `def` structurally cannot —
     // and the section's other two blocks moved from `use` to `using`.
-    try testing.expectEqual(@as(usize, 51), human);
+    // 51 → 53 (the parameter pack, 2026-09-08): §10 gains the defaults-and-
+    // range trio and the exported-and-described `roaches`. Both are fenced
+    // ```rill so this gate parses the claims rather than the reader trusting
+    // them — which matters more here than usual, since the second block is
+    // the whole parity gate written out.
+    try testing.expectEqual(@as(usize, 53), human);
     // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
     // ```rill fence so this gate reads it rather than the reader trusting it.
-    try testing.expectEqual(@as(usize, 5), agent);
+    // 5 → 6 (the parameter pack, same day): §2 gains `export def roaches`.
+    try testing.expectEqual(@as(usize, 6), agent);
 }
 
 // ---------------------------------------------------------------------------

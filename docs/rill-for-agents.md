@@ -103,7 +103,10 @@ actual spelling *is* the design.
 
 ```
 program   := statement*
-statement := chain | "def" … | "using" token+ "as" ":"name
+statement := chain | defstmt | describestmt | "using" token+ "as" ":"name
+defstmt   := ["export"] "def" name "(" port ("," port)* ")" "=" body
+port      := name [":" type] ["=" literal] ["(" number ".." number ")"]
+describestmt := "describe" name NEWLINE INDENT (string | portname string)+
 chain     := expr block* ( "|" (opcall | "also" "{" branch* "}") )* ( "as" name ("," name)* )?
 branch    := opcall ( "|" opcall | alsoblock )*        // head MUST be an operator
 expr      := opcall | plane-path | literal | record | name | ":"name
@@ -141,6 +144,41 @@ spliced tokens names the fold it came from and the line it was bound on.
 
 `use plane.x as p` is gone (it was a path prefix and nothing else); `use`
 now points at `using`.
+
+**The parameter pack.** A def port may carry a default and an advisory
+range, and `export def` marks a definition visible to the HOST — rill has
+no imports, so that is all visibility can mean. An exported definition's
+pack survives the parse that flattens its body away, on
+`Program.exports`; a local def is not enumerable and vanishes as before.
+
+```rill
+export def roaches(rate: number = 60 (0..500), spread = 0.35 (0..3)) =
+  rate | mul spread
+
+describe roaches
+  "Cockroaches milling on a floor, scattering and regrouping."
+  rate   "how many rows are born each second"
+  spread "± metres per second of random jitter added at birth"
+
+roaches | write plane.drift.roaches
+```
+
+A default makes the port optional at the call site (the literal is
+spliced in as if typed, knob path and all); it must be a literal, and
+must match the port's declared type. **A required port may not follow a
+defaulted one** — refused at the definition, because positional fill is
+left-to-right and an argument would land on the optional port. **A range
+is advice, not a constraint**: it is for the reader and for a generated
+widget, and nothing clamps or refuses on it.
+
+Descriptions live in a `describe` block, never inline — a number does
+not clutter a signature, a sentence does, and a block is a safe surface
+for a model to write and can be added without touching the code. The
+leading bare string describes the definition; every other line is a port.
+**The parity check runs both ways:** an exported def with an undescribed
+port (or no block, or no leading string) is refused naming the gap, and a
+describe line naming a port that does not exist is refused — for local
+defs too — listing the ports that do.
 
 Word rules: `_` and alphanumerics are name characters; `/` and `-` are
 name-interior when they **join two name characters**

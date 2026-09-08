@@ -108,6 +108,52 @@ pub const Warning = struct {
     msg: []const u8,
 };
 
+/// One port of an EXPORTED def, with everything a generated UI or a reading
+/// agent needs to say what it means (2026-09-08, the parameter pack). The
+/// model is Blade3D's `[OperatorParameter]`: one declaration is at once the
+/// call signature, the slider's range, the documentation and the validation.
+///
+/// `default`, `min` and `max` are struple-encoded literals — the same bytes a
+/// `.literal` Source carries — so a host reads them with `types.asNumber` /
+/// `types.asString` exactly as it reads a slot. `null` means "not declared",
+/// which is not the same as zero: a port with no default is REQUIRED, and a
+/// port with no range simply has no advice to give.
+///
+/// The range is **advice, not a constraint** — the Blade3D reading, kept
+/// deliberately (a spawn position with min -10 does not forbid spawning at
+/// 20). Nothing in rill clamps or refuses on it; it is for the reader and for
+/// the widget.
+pub const DefPort = struct {
+    name: []const u8,
+    ty: types.TypeId,
+    default: ?[]const u8 = null,
+    min: ?[]const u8 = null,
+    max: ?[]const u8 = null,
+    /// The line from the `describe` block. Mandatory for an exported def —
+    /// the parser refuses the program without it, in both directions.
+    doc: []const u8 = "",
+};
+
+/// An EXPORTED def, surviving the parse that flattens its body away.
+///
+/// `def` bodies are flattened per instance and the graph does not know defs
+/// exist — which would make `export` inert if the parse kept nothing. This
+/// table is what it keeps: the name, the pack, the prose. It is what `schema`
+/// will emit, what a HUD generates a panel from, and what an agent reads to
+/// learn what a knob means. A LOCAL def appears here not at all, and still
+/// vanishes exactly as it always did.
+///
+/// Not serialized, for the same reason `warnings` is not: it describes the
+/// SOURCE, and a dump is of a mounted graph in which no def survives. (That
+/// is also why G2's frozen hash does not move for this beat.)
+pub const DefExport = struct {
+    name: []const u8,
+    /// The leading bare string of the `describe` block — the definition's own
+    /// description, Blade3D's `[Operator(Description = …)]`.
+    doc: []const u8 = "",
+    ports: []const DefPort = &.{},
+};
+
 /// A parsed program: pure structure, no live values (those belong to the
 /// Runtime that mounts it). Everything inside is owned by one arena; deinit
 /// is a single arena teardown.
@@ -126,6 +172,9 @@ pub const Program = struct {
     casts: std.ArrayListUnmanaged(CastTarget) = .empty,
     /// Non-fatal parse diagnostics, in source order. Arena-owned like the rest.
     warnings: std.ArrayListUnmanaged(Warning) = .empty,
+    /// `export def`s, in source order — the one thing that survives the parse
+    /// that flattens defs away. See `DefExport`.
+    exports: std.ArrayListUnmanaged(DefExport) = .empty,
     /// The LAST top-level statement's value, if it has one — what a one-shot
     /// echoes (rillbook §2). Broader than `resultSlot` on purpose: a bare
     /// `plane.x` line has no node, a bare `0.1` has no node AND no
@@ -182,6 +231,15 @@ pub const Program = struct {
             i -= 1;
             const n = self.nodes.items[i];
             if (n.outputs.len > 0) return n.outputs[0];
+        }
+        return null;
+    }
+
+    /// The exported def called `name`, or null. The host's door onto the
+    /// parameter pack: `prog.exported("roaches").?.ports[0].default`.
+    pub fn exported(self: *const Program, name: []const u8) ?*const DefExport {
+        for (self.exports.items) |*e| {
+            if (std.mem.eql(u8, e.name, name)) return e;
         }
         return null;
     }

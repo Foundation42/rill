@@ -274,6 +274,17 @@ notification that there will be no more.
   (op name + port shapes) it was compiled against; mount refuses on mismatch
   with the diff named. Port changes to shipped operators are additions-only
   (new optional ports), never mutations.
+- **`export def` is the source-level half of that surface** (2026-09-08). An
+  exported definition's parameter pack — ports, types, defaults, advisory
+  ranges and one sentence per port — survives the parse that flattens its
+  body away, on `Program.exports`. It is what a schema call emits, what a
+  generated panel is built from, and what an agent reads to learn what a knob
+  means; an exported definition that leaves a port undescribed does not
+  parse. Descriptions are mandatory for the exported surface and optional for
+  a local helper: the tax lands where laziness costs somebody else. Note what
+  this does NOT do — `export` is visibility only. rill has no imports and no
+  cross-file reference, so "exported" means visible to the host, and the
+  qualified-identity question below is untouched by it.
 - **Qualified operator identity (noted, not designed):** when two packs both
   ship a `rivet`, the registry needs world-qualified operator names —
   `org.foundation42.mesh/rivet` — with short names resolved per-program via
@@ -305,8 +316,11 @@ music when I'm in danger" is not a task an agent performs — it is a rill the
 agent writes, mounts, and walks away from. The agent's output is standing
 behaviour: inspectable in the graph view, editable afterwards, shippable in
 a pack. Because defs are archetypes, an agent's good ideas accrete into the
-operator vocabulary. The agent verifies its own work by reading back the
-wires it created — enumerable registry, observable slots, reversible writes.
+operator vocabulary — and since 2026-09-08 an `export def` accretes with its
+*meaning* attached: the parity gate will not let a definition reach the
+public surface with a parameter nobody explained. The agent verifies its own
+work by reading back the wires it created — enumerable registry, observable
+slots, reversible writes.
 *(§5.3's contract + capabilities.)*
 
 **The proposal loop.** An agent watching the perf plane *proposes* a

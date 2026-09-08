@@ -60,6 +60,11 @@ pub const registerCore = ops.registerCore;
 /// `docs/namespaces.md` for why families of words register apart.
 pub const registerRbf = ops_rbf.register;
 pub const Program = graph.Program;
+/// The parameter pack of an `export def` — name, ports, defaults, ranges and
+/// prose, read off a parsed Program (`prog.exported("roaches")`). What
+/// `schema` will emit, what a HUD builds a panel from, what an agent reads.
+pub const DefExport = graph.DefExport;
+pub const DefPort = graph.DefPort;
 pub const parse = parser.parse;
 pub const parseKernel = parser.parseKernel;
 pub const Diag = parser.Diag;
