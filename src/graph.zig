@@ -222,9 +222,13 @@ pub const Program = struct {
     /// one. A one-shot host uses this to echo the value of a line whose final
     /// statement is an expression rather than a sink — "what does this print"
     /// having no answer is a console defect, not a language property. Null when
-    /// nothing in the program produces a value (every effect op — `set`, and
-    /// every seeded console verb — declares no outputs, so a pure effect line
-    /// echoes nothing and its acknowledgement stands alone).
+    /// nothing in the program produces a value.
+    ///
+    /// Since 2026-09-08 a CORE effect always produces one — it returns its
+    /// input — so an effect line echoes what flowed into its sink rather than
+    /// nothing. A host verb that declares no outputs still echoes nothing, and
+    /// its acknowledgement still stands alone; that was the original case and
+    /// it is unchanged.
     pub fn resultSlot(self: *const Program) ?SlotId {
         var i = self.nodes.items.len;
         while (i > 0) {

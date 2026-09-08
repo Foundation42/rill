@@ -73,6 +73,11 @@ struple type. This dissolves the mute-console finding rather than patching it â€
 "what does this print" now has a pane to print into. Engine-side: the one-shot
 runner returns the last node's out-slot when no reply was set.
 
+Since 2026-09-08 a **core sink also replies**, with the value that flowed into
+it: an effect returns its input, so `plane.a | add 1 | write plane.out` echoes
+the 5 it wrote rather than nothing, beside its acknowledgement. A HOST verb
+that declares no outputs still echoes nothing.
+
 ## 3. Result panes
 
 Under each cell, fed by the machinery that already exists:

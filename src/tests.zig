@@ -607,7 +607,28 @@ test "G2: frozen reference — the canonical dump hashes to a committed value" {
     // Hash moved 2026-08-29: `set` became `write` (write-verbs beat 1), and
     // the op NAME rides the canonical dump. Structural, not a value drift —
     // the same class of move as the slot-type test beside this one.
-    try testing.expectEqualStrings("193bb6768a28bda6862db0045be9c8138c4b60f56c8c618ef1c460bcb297c84b", &hex);
+    //
+    // Hash moved 2026-09-08, deliberate: an effect returns its input, so the
+    // fixture's one `write` node gained an output PORT and therefore an
+    // output slot. The move was not accepted on that sentence — both dumps
+    // were decoded (struple's Python port) and diffed field by field before
+    // this constant was touched. The WHOLE difference, exhaustively:
+    //
+    //   · `write1`'s "out" array: `[]` → `[14]`
+    //   · one new slot, id 14: dir=out, node=4, port 0, pname "out",
+    //     ty "any", kind value, src `.none`, val 0.9 — the value it wrote
+    //   · every later slot id shifts by one (14…25 → 15…26), and the three
+    //     places that reference one shift with it (`names.tint` 20→21, and
+    //     the two `.wire` sources 17→18 and 23→24)
+    //
+    // Nothing else. `nodes` is still nine entries; `counts` (the per-node
+    // eval counters) is byte-identical, which is the receipt that scheduling
+    // did not move — the new slot has no downstream, so it is stored and
+    // rouses nobody. `state`, `errs`, `tick`, `now` and `wheel` are identical
+    // too, and `div1.out` still holds the same 0.9 it always did. A
+    // structural move with no semantic one, exactly like the 2026-08-24
+    // entry above — and the gate below pins the cause directly.
+    try testing.expectEqualStrings("649b964914a83edadb22179128431479a14982183b5a7b2f4f89cf3cfd7a258e", &hex);
 }
 
 test "G2's hash moved because the slot TYPE moved, not because a value did" {
@@ -637,6 +658,46 @@ test "G2's hash moved because the slot TYPE moved, not because a value did" {
     try testing.expectEqual(@as(f64, 0), slotNum(&fx, "programs.p.mul1.out.out").?);
     try testing.expectEqual(@as(usize, 1), fx.mock.writes.items.len);
     try testing.expectEqual(@as(f64, 0.8), types.asNumber(fx.mock.writes.items[0].value).?);
+}
+
+test "G2's hash moved AGAIN because the sink gained an output slot, not because a value did" {
+    // The receipt for the 2026-09-08 re-freeze, in the same two-claim shape
+    // as the gate above: the cause (all six effect ops declare one output)
+    // and the non-cause (the fixture computes and writes exactly what it
+    // always did). The diff behind the hash is spelled out beside the
+    // constant in the G2 gate itself.
+    //
+    // Mutations that bite: drop `.outputs` from any one of the six (the sweep
+    // names it); make `evalSink` return `Emit.none` again (the new slot is
+    // there but empty, and the last assert goes down).
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    for ([_][]const u8{ "write", "notify", "inc", "cast", "tag", "untag" }) |name| {
+        const def = reg.get(reg.find(name).?);
+        if (def.outputs.len != 1 or def.outputs[0].ty != types.Tag.any) {
+            std.debug.print("'{s}' does not declare one `any` output — an effect returns its input\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, g2_source, .{
+        .{ "plane.player.health", @as(i64, 80) },
+        .{ "plane.player.stamina", @as(i64, 50) },
+        .{ "plane.player.underwater", false },
+    });
+    defer fx.deinit();
+    // Unmoved: the same 0.8 through the same nodes, and the same single write.
+    try testing.expectEqual(@as(f64, 0.8), slotNum(&fx, "programs.p.div1.out.out").?);
+    try testing.expectEqual(@as(usize, 1), fx.mock.writes.items.len);
+    try testing.expectEqual(@as(f64, 0.8), types.asNumber(fx.mock.writes.items[0].value).?);
+    // Moved: the sink's own out slot now exists, and holds what it wrote.
+    const passed = slotNum(&fx, "programs.p.write1.out.out") orelse {
+        std.debug.print("the sink's out slot holds nothing — the effect emitted no value\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(f64, 0.8), passed);
 }
 
 // ---------------------------------------------------------------------------
@@ -1854,6 +1915,21 @@ fn slotNum(fx: *Fixture, path: []const u8) ?f64 {
     return types.asNumber(v);
 }
 
+/// What the mock plane holds at `path`, as a number — failing with words
+/// rather than a null-unwrap panic. A panic aborts the whole test BINARY, so
+/// a gate that panics under a mutation hides every gate after it; that is a
+/// bad property for a suite whose job is to say WHICH gates a mutation bit.
+fn planeNum(fx: *Fixture, path: []const u8) !f64 {
+    const bytes = fx.mock.store.get(path) orelse {
+        std.debug.print("nothing reached '{s}'\n", .{path});
+        return error.TestUnexpectedResult;
+    };
+    return types.asNumber(bytes) orelse {
+        std.debug.print("'{s}' holds something that is not a number\n", .{path});
+        return error.TestUnexpectedResult;
+    };
+}
+
 test "durations: literals encode lane and count canonically" {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
@@ -2248,9 +2324,11 @@ test "OpClass: a reads op with a path static is not a writer; effect is" {
 
 // ---------------------------------------------------------------------------
 // The program's result slot — what a one-shot console line echoes when its
-// last statement is an expression rather than a sink (rillbook §2). An effect
-// line has no result: every effect op declares no outputs, so its
-// acknowledgement stands alone rather than echoing a fabricated value.
+// last statement is an expression rather than a sink (rillbook §2). A core
+// effect line echoes the value that flowed into its sink, since 2026-09-08 —
+// see "a sink-terminated line now HAS a result" at the end of this file. A
+// HOST verb that declares no outputs still echoes nothing, and its
+// acknowledgement stands alone rather than a fabricated value.
 // ---------------------------------------------------------------------------
 
 test "resultSlot: an expression line has a value; an effect line has none" {
@@ -3452,8 +3530,14 @@ test "write and notify share the sink PORT shape; the mode statics are write's a
         try testing.expectEqual(a.optional, b.optional);
     }
     try testing.expectEqual(wr.class, notify.class);
-    try testing.expectEqual(@as(usize, 0), wr.outputs.len);
-    // This is the slot the G2 hash moved for: unbound, but present.
+    // The OUT side is shared too, and has been since 2026-09-08: an effect
+    // returns its input, so both declare exactly one `any` output. It was
+    // `0` here until that beat, and the change is the second reason G2's
+    // frozen hash has moved for this pair of ops.
+    try testing.expectEqual(@as(usize, 1), wr.outputs.len);
+    try testing.expectEqual(wr.outputs.len, notify.outputs.len);
+    try testing.expectEqual(types.Tag.any, wr.outputs[0].ty);
+    // This is the slot the G2 hash moved for in 2026-08-24: unbound, present.
     try testing.expect(wr.inputs[1].optional);
     // The statics split: path + five mode flags vs path alone.
     try testing.expectEqual(@as(usize, 6), wr.statics.len);
@@ -3900,7 +3984,10 @@ test "the manuals parse: every printed example compiles" {
     // ```rill so this gate parses the claims rather than the reader trusting
     // them — which matters more here than usual, since the second block is
     // the whole parity gate written out.
-    try testing.expectEqual(@as(usize, 53), human);
+    // 53 → 54 (an effect returns its input, 2026-09-08): §4 gains the
+    // mid-chain tap, which is the whole ruling in one line and the only place
+    // the manual shows a chain continuing past a sink.
+    try testing.expectEqual(@as(usize, 54), human);
     // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
     // ```rill fence so this gate reads it rather than the reader trusting it.
     // 5 → 6 (the parameter pack, same day): §2 gains `export def roaches`.
@@ -11261,5 +11348,425 @@ test "rbf: every refusal lands on the node that refused, naming the port and the
         });
         defer fx.deinit();
         try expectRefusalNames(&.{ "rbf through", "finite" });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// An effect returns its input (2026-09-08).
+//
+// The six effect ops — `write`, `notify`, `inc`, `cast`, `tag`, `untag` — now
+// each emit their `in` port, so a chain continues through one:
+//
+//     x | write plane.debug | mul 2 | write plane.out
+//
+// What the effect DOES is untouched: same write, same value, same mode, same
+// timing. The motivating discovery was elsewhere — `parseDef` refuses a def
+// whose last statement has no value, and a def that WRITES does something
+// useful and yielded nothing, so the rule misfired on a legitimate definition.
+// The rule is not wrong; `write` being a dead end is what made it misfire, and
+// the fix belongs at the source rather than in an exception carved into `def`
+// (Christian's framing, and his ruling). Hence all six and never a subset: if
+// `write` composed and `cast` did not, a reader would have to memorise which
+// effects are dead ends.
+//
+// Pass-through is the LINEAR spelling; `also { … }` is the branching one. Both
+// stay — see the fan-out gate at the end of this block.
+// ---------------------------------------------------------------------------
+
+/// Feed a NUMBER as an occurrence — the shape `inc`/`tag`/`untag` want, since
+/// their port 0 is a rousing that carries a payload nothing reads. The value
+/// is what the pass-through must hand on, so it has to be distinguishable
+/// from every payload in the table below.
+fn feedNumOcc(rt: *rill.Runtime, gpa: std.mem.Allocator, path: []const u8, v: f64) !void {
+    const enc = try packOne(gpa, v);
+    defer gpa.free(enc);
+    try rt.feed(.{ .path = path, .value = enc, .kind = .occurrence });
+}
+
+test "effect: each of the six emits its INPUT — never its payload" {
+    // Gate 1. One rule for all six, and the payloads are deliberately
+    // different from the rousing so "returns its input" is separable from
+    // "returns what it landed": the rousing is 99, every payload is 5 or 7,
+    // and the answer must be 99 six times.
+    //
+    // Mutations that bite: `passThru` returns `Emit.none` (all six go quiet);
+    // `passThru` splices `raw(ctx, 1)` instead of `raw(ctx, 0)` (write,
+    // notify, inc and cast hand on their payload); dropping `.outputs` from
+    // any one registration (that op's slot does not exist and readSlot
+    // answers null).
+    const Case = struct { src: []const u8, node: []const u8 };
+    const cases = [_]Case{
+        .{ .src = "plane.x | write plane.a 5", .node = "write1" },
+        .{ .src = "plane.x | notify plane.a 5", .node = "notify1" },
+        .{ .src = "plane.x | inc plane.a 7", .node = "inc1" },
+        .{ .src = "plane.x | cast $c 5 radius 3 at plane.origin", .node = "cast1" },
+        .{ .src = "plane.x | tag @tom #garrison", .node = "tag1" },
+        .{ .src = "plane.x | untag @tom #garrison", .node = "untag1" },
+    };
+    for (cases) |case| {
+        var fx: Fixture = undefined;
+        try mountFixture(testing.allocator, &fx, case.src, .{.{ "plane.origin", @as(i64, 0) }});
+        defer fx.deinit();
+        try feedNumOcc(&fx.rt, testing.allocator, "plane.x", 99);
+        try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+        var buf: [64]u8 = undefined;
+        const path = try std.fmt.bufPrint(&buf, "programs.p.{s}.out.out", .{case.node});
+        const got = slotNum(&fx, path) orelse {
+            std.debug.print("'{s}': the effect emitted nothing\n", .{case.src});
+            return error.TestUnexpectedResult;
+        };
+        if (got != 99) {
+            std.debug.print("'{s}': emitted {d}, wanted the rousing (99)\n", .{ case.src, got });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "effect: the write still lands — every mode, every value, mid-chain" {
+    // Gate 2. The whole point of the beat is that nothing about what reaches
+    // the plane may change, so all five modes plus the bare replace run in
+    // ONE chain, each one now carrying the value on to the next. `clear`
+    // takes no value and still returns its input, which is what lets it sit
+    // in the middle of the chain at all.
+    //
+    // Mutations that bite: land every write as `.base` (the mode column goes
+    // flat); delete the `mode == .clear` early return (clear lands a value it
+    // must not have); write `try raw(ctx, 0)` instead of the payload
+    // preference (the payload row goes wrong).
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.x
+        \\  | write plane.a hold
+        \\  | write plane.b add
+        \\  | write plane.c mul
+        \\  | write plane.d stops
+        \\  | write plane.e clear
+        \\  | write plane.f 5
+        \\  | write plane.g
+    , .{});
+    defer fx.deinit();
+    try feedValue(&fx.rt, testing.allocator, "plane.x", @as(i64, 42));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+
+    const Want = struct { path: []const u8, mode: rill.WriteMode, value: ?f64 };
+    const wants = [_]Want{
+        .{ .path = "plane.a", .mode = .hold, .value = 42 },
+        .{ .path = "plane.b", .mode = .add, .value = 42 },
+        .{ .path = "plane.c", .mode = .mul, .value = 42 },
+        .{ .path = "plane.d", .mode = .stops, .value = 42 },
+        .{ .path = "plane.e", .mode = .clear, .value = null }, // a withdrawal carries nothing
+        .{ .path = "plane.f", .mode = .base, .value = 5 }, // the payload, not the rousing
+        .{ .path = "plane.g", .mode = .base, .value = 42 },
+    };
+    try testing.expectEqual(wants.len, fx.mock.writes.items.len);
+    for (wants, fx.mock.writes.items) |want, got| {
+        try testing.expectEqualStrings(want.path, got.path);
+        try testing.expectEqual(want.mode, got.mode);
+        if (want.value) |v| {
+            try testing.expectEqual(v, types.asNumber(got.value).?);
+        } else {
+            try testing.expectEqual(@as(usize, 0), got.value.len);
+        }
+    }
+}
+
+test "effect: chained writes both land, with the same value" {
+    // Gate 3. The shape from the ruling: `x | write plane.a | write plane.b`.
+    // Mutation that bites: `passThru` returns `Emit.none` — the second sink
+    // never receives an input, so it never evaluates and only one write
+    // reaches the plane.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "plane.x | write plane.a | write plane.b", .{});
+    defer fx.deinit();
+    try feedValue(&fx.rt, testing.allocator, "plane.x", @as(i64, 8));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 2), fx.mock.writes.items.len);
+    try testing.expectEqualStrings("plane.a", fx.mock.writes.items[0].path);
+    try testing.expectEqualStrings("plane.b", fx.mock.writes.items[1].path);
+    try testing.expectEqual(@as(f64, 8), types.asNumber(fx.mock.writes.items[0].value).?);
+    try testing.expectEqual(@as(f64, 8), types.asNumber(fx.mock.writes.items[1].value).?);
+}
+
+test "effect: a mid-chain tap sees x while the tail sees 2x" {
+    // Gate 4. The motivating spelling — a debug tap that costs no branch —
+    // and the second statement pins that a tap with its OWN payload still
+    // hands the ROUSING down: `plane.tapped` gets 100 and `plane.out2` gets
+    // 2 × 6, never 200.
+    //
+    // Mutation that bites: splice `ctx.in[1] orelse try raw(ctx, 0)` — the
+    // landed value rather than the input. The first statement cannot see it
+    // (no payload, so the two are the same value), which is exactly why the
+    // second one is here.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.x | write plane.dbg | mul 2 | write plane.out
+        \\plane.x | write plane.tapped 100 | mul 2 | write plane.out2
+    , .{});
+    defer fx.deinit();
+    try feedValue(&fx.rt, testing.allocator, "plane.x", @as(i64, 6));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(f64, 6), try planeNum(&fx, "plane.dbg"));
+    try testing.expectEqual(@as(f64, 12), try planeNum(&fx, "plane.out"));
+    try testing.expectEqual(@as(f64, 100), try planeNum(&fx, "plane.tapped"));
+    try testing.expectEqual(@as(f64, 12), try planeNum(&fx, "plane.out2"));
+}
+
+test "effect: a def whose last statement is an effect is legal, with parseDef untouched" {
+    // Gate 5, and the reason the beat exists. `parseDef` refuses a def whose
+    // last statement has no value — a rule that was misfiring on a def that
+    // does something useful and yielded nothing. Not one line of `parseDef`
+    // moved: the effect grew an output and the existing rule started
+    // answering correctly. Both of these were `def 'f' produces no output`
+    // before this beat, verified by running the gate against the old
+    // evaluators.
+    //
+    // NOT `write` — see the gate below. `cast` and `tag`/`untag` are the
+    // effects a def body can hold, because their targets are a `$channel`,
+    // an `@subject` and a `#tag` rather than a plane path.
+    //
+    // Mutation that bites: drop `.outputs` from `cast`'s (or `tag`'s)
+    // registration — the parse fails with "produces no output", which is the
+    // exact misfire.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\def spark(x, pos) =
+        \\  x | cast $glow 1 radius 3 at pos
+        \\
+        \\def enlist(x) =
+        \\  x | tag @tom #garrison
+        \\
+        \\plane.v | spark pos: plane.origin | enlist | write plane.out
+    , .{.{ "plane.origin", @as(i64, 0) }});
+    defer fx.deinit();
+    try feedNumOcc(&fx.rt, testing.allocator, "plane.v", 3);
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    // Both effects happened AND the value came out the far end: each def's
+    // output is its last statement's pass-through.
+    try testing.expectEqual(@as(usize, 1), fx.mock.casts.items.len);
+    try testing.expectEqual(@as(usize, 1), fx.mock.tag_writes.items.len);
+    try testing.expectEqual(@as(f64, 3), try planeNum(&fx, "plane.out"));
+}
+
+test "effect: `write` in a def body is still refused — by the OTHER rule" {
+    // The boundary this beat did NOT move, pinned so a later reader does not
+    // mistake it for an oversight. `parseDef`'s "produces no output" was one
+    // of two rules standing between a def and a sink; the other is **defs
+    // close over nothing** (parser.zig's header: "a `plane.…` path, read or
+    // write, inside a def body is a parse error"), which predates this beat,
+    // has its own gate, and refuses the WRITE TARGET rather than the missing
+    // value. `write`, `notify` and `inc` all take a `.path` static, and a
+    // path is plane-headed by construction — so those three remain unsayable
+    // inside a def for a reason that has nothing to do with their outputs.
+    //
+    // Widening that is a separate ruling and a separate beat. What matters
+    // here is that the refusal is the CLOSE-OVER one, in those words: if this
+    // beat had regressed, the message would be "produces no output".
+    //
+    // Mutation that bites: let a template through `parsePlaneRef` — the def
+    // parses, and this gate goes down naming the wrong refusal.
+    try expectParseError(
+        \\def stamp(x) =
+        \\  x | write plane.log
+        \\
+        \\plane.v | stamp | write plane.out
+    , "close over nothing");
+}
+
+test "effect: the def rule still refuses a def that genuinely yields nothing" {
+    // The negative control for the gate above. Fixing the misfire must not
+    // disarm the rule — a HOST effect verb may still declare no outputs, and
+    // a def ending in one is still the thing the rule was written for.
+    //
+    // Mutation that bites: delete the `else` arm in `parseDef` that raises
+    // "produces no output" (which is the shortcut this beat refused to take).
+    const nop = struct {
+        fn f(_: *rill.EvalCtx) registry.EvalError!registry.Emit {
+            return registry.Emit.none;
+        }
+    }.f;
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    const in_num = [_]registry.Port{.{ .name = "v", .ty = types.Tag.number }};
+    _ = try reg.register(.{ .name = "poke", .inputs = &in_num, .help = "stub", .class = .effect, .routes = .anywhere, .eval = nop });
+    var diag = rill.Diag{};
+    const result = rill.parse(testing.allocator, &reg, "p",
+        \\def bad(x) =
+        \\  x | poke
+        \\
+        \\plane.v | bad | write plane.out
+    , &diag);
+    try testing.expectError(error.Parse, result);
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "produces no output") != null);
+}
+
+test "effect: an export def may end in an effect, describe block and pack intact" {
+    // Gate 6. The parameter pack's beat left this open on purpose — "an
+    // exported def is still held to 'a def must produce an output', which is
+    // the later beat's business if the mount ever wants a def that only has
+    // effects." This is that beat, and the answer is that it needed no
+    // exception: the effect yields, so the export is ordinary and every
+    // export rule (the describe block, the port parity, the pack on
+    // `Program.exports`) applies to it unchanged.
+    //
+    // Mutations that bite: drop `.outputs` from `cast` (the parse fails with
+    // "produces no output"); `publishExports` does nothing (the pack is
+    // gone); drop the `pd.doc.len > 0` sweep (the undescribed-port refusal
+    // stops firing, which the second half of this gate catches).
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\export def spark(x, pos, amp: number = 4 (0..10)) =
+        \\  x | cast $glow amp radius 3 at pos
+        \\
+        \\describe spark
+        \\  "Deposits amp into the glow field and hands x on."
+        \\  x   "the rousing"
+        \\  pos "where the deposit lands"
+        \\  amp "how much goes in"
+        \\
+        \\plane.v | spark pos: plane.origin | write plane.out
+    , .{.{ "plane.origin", @as(i64, 0) }});
+    defer fx.deinit();
+    const e = fx.prog.exported("spark") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("Deposits amp into the glow field and hands x on.", e.doc);
+    try testing.expectEqual(@as(usize, 3), e.ports.len);
+    try testing.expectEqualStrings("amp", e.ports[2].name);
+    try testing.expectEqualStrings("how much goes in", e.ports[2].doc);
+    try testing.expectEqual(@as(f64, 4), types.asNumber(e.ports[2].default.?).?);
+    try testing.expectEqual(@as(f64, 10), types.asNumber(e.ports[2].max.?).?);
+    try feedNumOcc(&fx.rt, testing.allocator, "plane.v", 3);
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(usize, 1), fx.mock.casts.items.len);
+    try testing.expectEqual(@as(f64, 4), fx.mock.casts.items[0].amplitude);
+    try testing.expectEqual(@as(f64, 3), try planeNum(&fx, "plane.out"));
+
+    // The parity gate still holds over an effect-terminated export: leaving a
+    // port undescribed is refused by name, exactly as for any other export.
+    try expectParseError(
+        \\export def spark(x, pos) =
+        \\  x | cast $glow 1 radius 3 at pos
+        \\
+        \\describe spark
+        \\  "Deposits into the glow field."
+        \\  x "the rousing"
+        \\
+        \\plane.v | spark pos: plane.origin | write plane.out
+    , "port 'pos' has no description");
+}
+
+test "effect: the cycle check is unmoved — a write of a path it reads still refuses" {
+    // Gate 8. `findCycle` walks write paths against subscription paths and
+    // has nothing to do with ports, so pass-through cannot loosen it — which
+    // is a claim, and this is the executed version of it. The chained form is
+    // the one worth pinning: the cycle now sits at the END of a chain that
+    // passes through an innocent sink, and it is refused just the same.
+    //
+    // Mutation that bites: `findCycle` returns null (both refusals go away);
+    // or skip a write whose node has outputs, which is the plausible wrong
+    // "fix" this beat invites.
+    try expectParseError("plane.a | write plane.a", "cycle");
+    try expectParseError("plane.a | write plane.b | write plane.a", "cycle");
+    try expectParseError("plane.a | write plane.b | notify plane.a", "cycle");
+    // …and a chain that writes two paths it does not read is still fine.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseOk(testing.allocator, &reg, "plane.a | write plane.b | write plane.c");
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 2), prog.writes.items.len);
+}
+
+test "effect: `also` and the head block are unchanged — two spellings, both live" {
+    // Gate 9. Pass-through is the LINEAR spelling and `also { … }` is the
+    // BRANCHING one; the branch is still the only way to send the same value
+    // two different ways. The second claim is the one the beat could have
+    // broken quietly: `parseAlsoBlock` warns when a branch ends holding a
+    // value, and exempts a branch that ends in a writer — an exemption that
+    // was previously indistinguishable from "a sink has no outputs" and now
+    // has to do real work.
+    //
+    // Mutation that bites: drop the `class.writes()` guard in
+    // `parseAlsoBlock` — every `also { write … }` in every program in the
+    // sibling repos starts warning.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx,
+        \\plane.x | also { write plane.side } | mul 2 | write plane.main
+        \\every 1f { write plane.tick }
+    , .{});
+    defer fx.deinit();
+    try testing.expectEqual(@as(usize, 0), fx.prog.warnings.items.len);
+    try feedValue(&fx.rt, testing.allocator, "plane.x", @as(i64, 7));
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try testing.expectEqual(@as(f64, 7), try planeNum(&fx, "plane.side"));
+    try testing.expectEqual(@as(f64, 14), try planeNum(&fx, "plane.main"));
+    // The branch really is a branch: the main wire carries 7 past it, not 7
+    // and then whatever the branch made of it.
+    try testing.expect(fx.mock.store.get("plane.tick") != null);
+}
+
+test "effect: a sink-terminated line now HAS a result, and it is the input" {
+    // The one visible consequence outside the graph: `Program.result` is what
+    // a one-shot console line echoes, and a sink statement used to set it
+    // null on the reasoning that "effects echo nothing". A sink now has an
+    // output, so the line has a value — the one that flowed in — and
+    // `resultSlot` (which reads the last node that produces one) and
+    // `result` finally agree instead of disagreeing by a node.
+    //
+    // Recorded as a deliberate change rather than discovered later: the
+    // mutation that bites is restoring `Emit.none` in `evalSink`.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "plane.a | add 1 | write plane.out", .{.{ "plane.a", @as(i64, 4) }});
+    defer fx.deinit();
+    const src = fx.prog.result orelse return error.TestUnexpectedResult;
+    const wire = switch (src) {
+        .wire => |sid| sid,
+        else => return error.TestUnexpectedResult,
+    };
+    const sink = fx.prog.node(nodeIdOf(&fx.prog, "write1") orelse return error.TestUnexpectedResult);
+    if (sink.outputs.len == 0) return error.TestUnexpectedResult;
+    try testing.expectEqual(sink.outputs[0], wire);
+    const echoed = fx.rt.readSlotId(wire) orelse {
+        std.debug.print("the sink's out slot holds nothing — an effect line would echo nothing\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqual(@as(f64, 5), types.asNumber(echoed).?);
+    // `resultSlot` answers the same slot now, where it used to answer `add1`.
+    try testing.expectEqual(wire, fx.prog.resultSlot() orelse return error.TestUnexpectedResult);
+}
+
+test "effect: a rousing's KIND survives the pass-through — two occurrences are two" {
+    // The wrinkle a mutation found, not reasoning: an emission lands in the
+    // sink's out slot through `emitSlot`, which suppresses identical bytes on
+    // a VALUE slot ("20 → 20 is silence"). With the pass-through declared as a
+    // value port, `plane.horn | tag @tom #g | inc plane.n 1` tagged twice and
+    // counted ONCE — the second rousing dying silently one node downstream of
+    // the effect that did fire for it.
+    //
+    // The fix is one rule and no special case: an effect's out port carries
+    // the KIND its port 0 declares. `inc`/`tag`/`untag` take an occurrence, so
+    // they emit one; `write`/`notify`/`cast` take a value, so they emit one.
+    //
+    // Mutation that bites: `p.occ("out", …)` → `p.val("out", …)` on any of
+    // the three — the second rousing is swallowed and the count is 1.
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, "plane.horn | tag @tom #g | inc plane.n 1", .{});
+    defer fx.deinit();
+    try feedNumOcc(&fx.rt, testing.allocator, "plane.horn", 1);
+    try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
+    try feedNumOcc(&fx.rt, testing.allocator, "plane.horn", 1); // the SAME bytes
+    try fx.rt.tick(.{ .frame = 2, .time_ns = 2 });
+    try testing.expectEqual(@as(usize, 2), fx.mock.tag_writes.items.len);
+    try testing.expectEqual(@as(f64, 2), try planeNum(&fx, "plane.n"));
+
+    // The declaration itself, so the rule is readable without running a
+    // program: the out kind mirrors the in kind, op by op.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    for ([_][]const u8{ "write", "notify", "inc", "cast", "tag", "untag" }) |name| {
+        const def = reg.get(reg.find(name).?);
+        if (def.outputs[0].kind != def.inputs[0].kind) {
+            std.debug.print("'{s}': in is .{s} and out is .{s} — an effect returns its input, kind included\n", .{ name, @tagName(def.inputs[0].kind), @tagName(def.outputs[0].kind) });
+            return error.TestUnexpectedResult;
+        }
     }
 }

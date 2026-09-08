@@ -274,6 +274,21 @@ notification that there will be no more.
   (op name + port shapes) it was compiled against; mount refuses on mismatch
   with the diff named. Port changes to shipped operators are additions-only
   (new optional ports), never mutations.
+- **A port addition is additive for SOURCE and structural for DUMPS**
+  (recorded 2026-09-08, when the six effect ops each gained an `out` port so
+  an effect could return its input). A `.rill` file that parsed before parses
+  identically after; a mounted graph gains a slot, so the canonical dump
+  changes shape and its hash moves. A dump written before such an addition
+  restores nodes with the OLD port counts, and an evaluator written after it
+  reads ports the restored node does not have — a class of hazard that dates
+  from `set` gaining its optional `value` port (2026-08-24), not from this
+  beat, and that this beat widened to the row column. The dump has no
+  per-node arity check today; `loadProgram` takes the node's `in`/`out`
+  arrays from the bytes and never asks the registry whether they match.
+  **Recorded, not built, and the trigger is a host that keeps dumps across a
+  rill upgrade:** a load-time arity check against the registered OpDef,
+  refusing loudly and naming the op and both counts. Until then, treat a dump
+  as valid only for the rill that wrote it.
 - **`export def` is the source-level half of that surface** (2026-09-08). An
   exported definition's parameter pack — ports, types, defaults, advisory
   ranges and one sentence per port — survives the parse that flattens its

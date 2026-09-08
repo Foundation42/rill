@@ -1449,6 +1449,18 @@ pub const kernels = struct {
 
     /// The sink. Piped, the input is the rousing and `value` is what gets
     /// written; on a row every tick is a rousing.
+    ///
+    /// It returns its input, exactly as the plane-side `evalSink` does
+    /// (2026-09-08) — one rule for both evaluation paths, or a kernel author
+    /// would have to remember which column `write` composes in. The write is
+    /// untouched: `near 0.16 | write row.u3` queues exactly the value it
+    /// always did, and a statement that ends there simply leaves the emission
+    /// in a slot nothing reads.
+    ///
+    /// Port 0 and never the payload, and the assignment carries the OPTIONAL
+    /// straight through: where there is no input there is nothing to pass on
+    /// and `out[0]` stays null, which the sweep reads as "quiet" — the same
+    /// answer it gave before.
     pub fn write(ctx: *Ctx) Error!void {
         const ref = ctx.write_ref orelse return ctx.refuse("{s}: no row target resolved", .{ctx.op.name});
         const v = ctx.in[1] orelse try ctx.val(0);
@@ -1457,6 +1469,7 @@ pub const kernels = struct {
             return ctx.refuse("{s}: an axis takes a number", .{ctx.op.name});
         }
         try ctx.write(ref.ref, ref.mode, v);
+        ctx.out[0] = ctx.in[0];
     }
 };
 
@@ -2287,4 +2300,55 @@ test "row: `over` refuses a zero span rather than inventing an end to the curve"
     // The flow that refused wrote nothing; the sibling flow still ran.
     try std.testing.expectEqual(ONE, rows.size[0]); // untouched default
     try std.testing.expectEqual(ONE + HALF, rows.u[0][1]);
+}
+
+test "row: an effect returns its input here too — and the terminal shape is untouched" {
+    // The row half of "an effect returns its input" (2026-09-08). `write` is
+    // the only effect with a row kernel, and `near 0.16 | write row.u3` — a
+    // sink at the END of a statement — is the overwhelmingly common shape in
+    // spindrift's real kernels, so both halves are gated in one program:
+    //
+    //   · statement 1 chains THROUGH the sink: `row.vel.x | write row.size |
+    //     mul 2 | write row.u0` writes vel.x to size and 2·vel.x to u0.
+    //   · statement 2 gives the sink a PAYLOAD, which separates "returns its
+    //     input" from "returns what it landed": u1 takes 5, u2 takes 2·vel.x.
+    //   · statement 3 is the terminal shape, unchanged: one node, one queued
+    //     write, an emission nothing reads.
+    //
+    // The write count is asserted because that is the thing an extra output
+    // could plausibly have disturbed: the queue holds one write per NODE, and
+    // a sink that emitted into its own write path would double-count.
+    //
+    // Mutations that bite: delete `ctx.out[0] = ctx.in[0]` (the `mul 2` nodes
+    // never become ready, so u0 and u2 keep their zeros); assign the payload
+    // `ctx.in[1] orelse ctx.in[0]` instead, which statement 2 catches and
+    // statement 1 could not.
+    const gpa = std.testing.allocator;
+    var reg = try registry.Registry.init(gpa);
+    defer reg.deinit();
+    try ops.registerCore(&reg);
+    var rows = TestRows{};
+    rows.vel[0] = .{ 3 * ONE, 0, 0 };
+    var prog: graph.Program = undefined;
+    var diag = registry.Detail{};
+    var rt = try mountText(gpa, &reg, &rows,
+        \\row.vel.x | write row.size | mul 2 | write row.u0
+        \\row.vel.x | write row.u1 5 | mul 2 | write row.u2
+        \\row.age | add 1 | write row.u3
+    , &prog, &diag);
+    defer prog.deinit();
+    defer rt.deinit();
+    var sc = try rt.newScratch(gpa);
+    defer sc.deinit();
+    rt.evalRow(&sc, 0, ONE, null);
+    try std.testing.expectEqual(@as(u64, 0), sc.refusals);
+    try std.testing.expectEqual(3 * ONE, rows.size[0]);
+    try std.testing.expectEqual(6 * ONE, rows.u[0][0]);
+    // The payload landed; the ROUSING carried on.
+    try std.testing.expectEqual(5 * ONE, rows.u[0][1]);
+    try std.testing.expectEqual(6 * ONE, rows.u[0][2]);
+    // The terminal statement is unmoved, and five sinks queued five writes —
+    // one per node, exactly as before the sink had an output.
+    try std.testing.expectEqual(ONE, rows.u[0][3]);
+    try std.testing.expectEqual(@as(usize, 5), sc.n_writes);
 }

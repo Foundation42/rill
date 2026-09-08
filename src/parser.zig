@@ -1347,8 +1347,12 @@ const Parser = struct {
         }
         // The program's RESULT: the last top-level statement's value, whatever
         // its shape — a wire, a bare path, a bare literal (`0.1` echoes 0.1,
-        // rillbook's third drive). A sink statement has no outputs and sets
-        // null: effects echo nothing.
+        // rillbook's third drive). A statement with no value at all sets null.
+        // Since a core effect returns its input (2026-09-08) a sink-terminated
+        // line HAS a value — the one that flowed into the sink — so it echoes
+        // that, and `result` and `resultSlot` finally agree instead of
+        // disagreeing by one node. A host effect verb that declares no outputs
+        // still sets null.
         if (target.template == null) {
             self.prog.result = if (current.outputs.len > 0) current.outputs[0] else null;
         }
@@ -1517,10 +1521,15 @@ const Parser = struct {
         }
 
         // A branch whose last node still holds a value has computed something
-        // nobody will ever read: every sink (`set`, `notify`, and every host
-        // effect verb) declares no outputs, so "ends with a sink" and "ends
-        // with no outputs" are the same sentence. Not fatal — `also { tap x }`
-        // is legal and occasionally meant — so it warns and parses on.
+        // nobody will ever read. Not fatal — `also { tap x }` is legal and
+        // occasionally meant — so it warns and parses on.
+        //
+        // The `writes` test below used to be belt-and-braces: every sink
+        // declared no outputs, so "ends with a sink" and "ends with no
+        // outputs" were the same sentence. Since an effect returns its input
+        // (2026-09-08) they are two sentences and this line is the only thing
+        // keeping `also { write plane.x }` quiet — a mutation deleting it now
+        // warns on five existing gates' programs.
         if (current.outputs.len > 0) {
             const writes = if (current.node) |n| self.reg.get(target.nodes.items[n].op).class.writes() else false;
             if (!writes) try self.warn(head, "block discards a value; end with a sink or drop the tail", .{});

@@ -81,14 +81,18 @@ early, because readers will not notice they are assuming otherwise:
    `condition -> do_thing`; there is no `->`. Effects are sinks
    (`set`, `notify`, `tag`, `cast`) reached by flow, and side
    branches ride `also { }` — never the main stream.
-5. **Effects don't ride the stream.** A `tag`, `set`, `notify`, or
-   `cast` is a sink — a wave ends there; nothing flows onward
-   through an effect. A pipeline that "does something and
-   continues" (`... | untag #off-duty | tag #active | follow ...`)
-   is imperative sequencing wearing pipes. The branch to an effect
-   rides `also { }`; the main stream carries values only. This
-   survived two rounds of probe correction before earning its
-   number — readers will write effect-pipelines until told in bold.
+5. ~~**Effects don't ride the stream.**~~ **Reversed 2026-09-08.**
+   This note read: *a `tag`, `set`, `notify` or `cast` is a sink — a
+   wave ends there; nothing flows onward through an effect*, and
+   `... | untag #off-duty | tag #active | follow ...` was refused as
+   imperative sequencing wearing pipes. It had survived two rounds of
+   probe correction, on the strength of readers writing effect
+   pipelines until told in bold — which is worth keeping as a record
+   of how confidently a wrong rule can be defended. Every effect now
+   **returns its input**, so that line parses and means what its
+   author meant. What remains true is the half this note was really
+   about: an effect emits the ROUSING, never what it landed, and
+   `also { }` is still how one value goes two divergent ways.
 6. **A block is a fan-out, not a body** (added 2026-08-25, note §5).
    `every 1f { … }` is the most loop-shaped thing rill has, and
    readers will put ordered steps in it. Statements in a block are

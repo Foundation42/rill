@@ -3307,3 +3307,229 @@ other def semantic is exactly as it was. One interaction was checked and left
 alone: an exported def is still held to "a def must produce an output", which
 is not awkward today and is the later beat's business if the mount ever wants a
 def that only has effects.
+
+
+## An effect returns its input, 2026-09-08
+
+**What was decided.** All six effect operators — `write`, `notify`, `inc`,
+`cast`, `tag`, `untag` (`class = .effect`) — now emit their `in` port, so a
+chain continues through one:
+
+```rill
+x | write plane.debug | mul 2 | write plane.out
+lfo sine 7s | mul 0.05 | sub 0.03 | write plane.a.b | write plane.hud.scare
+```
+
+The effect itself is untouched: same write, same value, same mode, same
+timing. Nothing about what lands on the plane changed, and the gate that says
+so runs all five write modes plus the bare replace in one chain.
+
+**Why, in Christian's framing, which is the part to carry forward.** The
+motivating discovery was elsewhere: `parseDef` refuses a def whose last
+statement has no value — *"def 'x' produces no output"*. That rule exists to
+catch a def that does nothing useful. But a def that **writes** does something
+useful and yielded nothing, so the rule misfired on a legitimate definition.
+His reading, and the one implemented: **the rule is not wrong; `write` being a
+dead end is what made it misfire.** Fixing the effect ops fixes it at the
+source, instead of carving an exception into `def`.
+
+**All six, never a subset.** If `write` composed and `cast` did not, a reader
+would have to memorise which effects are dead ends. One rule: an effect
+returns its input.
+
+**What is emitted is the ROUSING, never the payload.** `write p 1` lands 1 on
+the path and hands what flowed in down the pipe; `write … clear`, which lands
+nothing at all, still passes its input on. The pipe carries what was flowing,
+not what was landed — two different questions, two different answers. Gated
+with a payload deliberately different from the rousing (99 in, 5 or 7 landed)
+so the two claims are separable, and again on the row.
+
+**Two spellings now exist, and that is fine.** Pass-through is the LINEAR
+spelling; `also { … }` is the BRANCHING one. A branch is still the only way to
+send one value two DIVERGENT ways — where the branch computes something of its
+own — and the pipe is right where they do not. The manuals say exactly that
+rather than presenting them as alternatives.
+
+### The consequence that had to be verified, not assumed — and was half wrong
+
+The brief asked for a gate that `def f(x) = x | write plane.a` parses with no
+change to `parseDef`. **It does not parse, and the reason has nothing to do
+with this beat.** `write`, `notify` and `inc` all take a `.path` static, a path
+is plane-headed by construction, and **defs close over nothing** —
+`parsePlaneRef` refuses ANY `plane.`/`row.`/`slate.` path inside a def body,
+read or write, and has since the language's first week (parser.zig's own
+header states it). Two independent rules stood between a def and a sink; this
+beat removed one of them.
+
+What DOES now parse, and did not before, is a def ending in `cast`, `tag` or
+`untag` — the effects whose targets are a `$channel`, an `@subject` and a
+`#tag` rather than a path:
+
+```rill
+def spark(x, pos) =
+  x | cast $glow 1 radius 3 at pos
+```
+
+Verified both ways, not reasoned: the gate was run against the pre-beat
+evaluators and refused with *"def 'spark' produces no output"* — the exact
+misfire — and passes after. The `write`-in-a-def case is gated too, as a
+refusal, asserting the CLOSE-OVER wording: if this beat ever regresses, that
+gate's message becomes "produces no output" and it goes down.
+
+Widening the close-over rule to admit a write TARGET is a separate ruling and
+was not taken. It is a real question — a def that writes is exactly what a
+mounted archetype will want — and it belongs to whoever rules on the package
+format.
+
+The negative control is gated beside it: a def ending in a HOST effect verb
+that declares no outputs is still refused. Fixing the misfire must not disarm
+the rule, and the mutation that deletes `parseDef`'s arm bites that gate alone.
+
+### The wrinkle a mutation found: the out port's KIND
+
+An emission lands in the sink's out slot through `emitSlot`, which suppresses
+identical bytes on a **value** slot ("20 → 20 is silence"). With the new port
+declared a value port,
+
+```rill
+plane.horn | tag @tom #g | inc plane.n 1
+```
+
+tagged twice and counted **once** — the second rousing dying silently one node
+downstream of the effect that had just fired for it. Found while probing for a
+surviving mutation, not by reasoning.
+
+The fix is one rule and no special case: **an effect's out port carries the
+kind its port 0 declares.** `inc`, `tag` and `untag` declare port 0 an
+occurrence — the rousing is the whole input — so they emit occurrences;
+`write`, `notify` and `cast` declare a value port, so they emit values. The
+gate asserts both the behaviour (two rousings, two counts) and the declaration
+(out kind equals in kind, op by op).
+
+What that leaves open is unchanged and already ruled on: a PLANE
+subscription's kind is decided per delta by the host, which no static slot can
+know. `Program.carryKinds` says so about elementwise operators and defers it;
+an effect is in exactly the same position, and this beat did not guess.
+
+### G2 — the frozen hash moved, and why that was allowed
+
+`193bb676…` → `649b9649…`. It was **not** re-baselined on the sentence "we
+added a port". Both dumps were written to disk and decoded with struple's
+Python port, and the JSON diffed field by field. The whole difference:
+
+- `write1`'s `"out"` array: `[]` → `[14]`
+- one new slot, id 14 — dir=out, node=4, port 0, pname `"out"`, ty `"any"`,
+  kind value, src `.none`, val `0.9`, which is the value it wrote
+- every later slot id shifts by one (14…25 → 15…26), and the three references
+  to one shift with it (`names.tint` 20→21, two `.wire` sources 17→18, 23→24)
+
+Nothing else. `nodes` is still nine entries. **`counts` — the per-node eval
+counters — is byte-identical**, which is the receipt that scheduling did not
+move: the new slot has no downstream, so it is stored and rouses nobody.
+`state`, `errs`, `tick`, `now` and `wheel` are identical, and `div1.out` still
+holds the same 0.9. A structural move with no semantic one, the same class as
+the 2026-08-24 entry (`set` gaining its optional `value` port). The diff is
+written out in the comment beside the constant, and a companion gate pins the
+cause — all six ops declare one output — beside the non-cause, exactly as the
+2026-08-25 re-freeze's receipt does.
+
+### One visible consequence outside the graph
+
+`Program.result` is what a one-shot console line echoes, and a sink statement
+used to set it null on the reasoning that "effects echo nothing". A sink now
+has an output, so an effect line echoes the value that flowed into it — and
+`result` and `resultSlot` finally agree instead of disagreeing by one node
+(`resultSlot` already answered the `add` upstream of the write). Recorded as a
+deliberate change with its own gate rather than discovered later by a console
+user. A HOST verb that declares no outputs still echoes nothing, which was the
+original case and is untouched.
+
+### Both evaluation paths, one rule
+
+`write` has a row kernel as well as a plane evaluator, and spindrift's kernels
+use it heavily (`near 0.16 | write row.u3`). The row kernel assigns
+`ctx.out[0] = ctx.in[0]` — the optional straight through, so where there is no
+input there is nothing to pass on and the slot stays null, which the sweep
+already reads as "quiet". Gated on the row with all three shapes in one
+program: a chain through the sink, a sink with a payload (which is what
+separates "returns its input" from "returns what it landed" there), and the
+terminal shape with its write count asserted, because one write per NODE is
+the row queue's contract and an extra output is exactly the kind of thing that
+could have disturbed it.
+
+### Gates and mutations
+
+Fourteen gates, **seventeen mutations, all bitten.** No survivors, which is
+worth stating plainly rather than dressing up: this beat's change was small and
+its consequences were MAPPED BEFORE the gates were written — the dump was
+diffed, the def rule was run against the old evaluators — so there was less
+guessing to catch. The one thing a mutation did find is the out-port kind
+above, and it found it by being the seventeenth mutation tried after the first
+sixteen all bit.
+
+| gate | mutation that bites it |
+|---|---|
+| each of the six emits its INPUT, never its payload | `passThru` returns `Emit.none`; `evalSink` splices the payload; `evalInc` splices `by`; `evalCast`/`evalMembership` return `Emit.none`; drop `.outputs` from any registration |
+| the write still lands — every mode, mid-chain | land every write as `.base`; delete the `mode == .clear` early return |
+| chained writes both land, same value | `passThru` returns `Emit.none` (the second sink never receives an input, so only one write reaches the plane) |
+| a mid-chain tap sees x while the tail sees 2x | splice `ctx.in[1] orelse raw(ctx, 0)` — the landed value; the FIRST statement cannot see that, which is why the gate carries a second one with a payload |
+| a def ending in an effect is legal, `parseDef` untouched | drop `.outputs` from `cast` or `tag` — "produces no output", the original misfire |
+| `write` in a def body is refused by the OTHER rule | let a template through `parsePlaneRef` |
+| the def rule still refuses a def that yields nothing | delete `parseDef`'s "produces no output" arm |
+| an export def may end in an effect, pack intact | drop `.outputs` from `cast`; `publishExports` does nothing; drop the describe parity sweep |
+| the cycle check is unmoved | `findCycle` skips a writer whose node has outputs — the plausible wrong "fix" this beat invites (it bites nine gates) |
+| `also` and the head block are unchanged | drop the `class.writes()` guard in `parseAlsoBlock` — five existing gates' programs start warning |
+| a rousing's KIND survives the pass-through | `p.occ("out", …)` → `p.val("out", …)` on `inc`/`tag`/`untag` |
+| a sink-terminated line now HAS a result | `evalSink` returns `Emit.none` |
+| G2's hash moved because the sink gained an output slot | drop `.outputs` from any of the six; `evalSink` returns `Emit.none` |
+| row: an effect returns its input here too | delete `ctx.out[0] = ctx.in[0]`; assign the payload instead |
+
+One harness note worth keeping. Six of the first mutations ABORTED the test
+binary rather than failing a test — a null unwrap panics, and a panic takes
+every gate after it with it, so the mutation table read "1 failing test" when
+the truth was nine. The gates in this beat now fail with words
+(`planeNum`, an explicit `orelse return error.…`) instead of `.?`, and the
+mutation harness grew a loop that skips a panicking gate and runs again until
+the whole list is visible. mutcheck's polarity rule catches a mutant that does
+not COMPILE; it cannot catch one that aborts halfway.
+
+### What this beat deliberately did NOT build, and one hazard it widened
+
+No package format, no `^` archetype mount, no plane-side driver mounting. The
+close-over rule was left exactly as it was (see above).
+
+**The hazard, recorded because this beat made it worse.** A dump carries each
+node's `in`/`out` id arrays, and `loadProgram` takes them from the bytes
+without ever asking the registry whether they match the op it just looked up.
+A dump written before a port addition therefore restores nodes with the OLD
+port counts, and an evaluator written after it reads ports the restored node
+does not have. This dates from `set` gaining its optional `value` port on
+2026-08-24 — `evalSink` has read `ctx.in[1]` unguarded ever since — and this
+beat extends it to the row column, where `kernels.write` now assigns
+`ctx.out[0]`. In Debug that is a panic; in the ReleaseFast builds downstream it
+is worse. No guard was added, on purpose: a guard would silently paper over a
+restored graph that disagrees with its registry, which is the opposite of what
+this repo does with a mismatch. **Recorded, not built, with its trigger named:
+a load-time arity check in `loadProgram`, refusing loudly and naming the op and
+both counts, the first time a host needs to keep dumps across a rill upgrade.**
+`rill-agents.md` §7 carries it beside the OpDef-ABI rule, which is where a
+reader of the format-versioning section will look.
+
+### Docs in the same commit
+
+`rill-spec.md` §3.8 opens with the rule and the two examples, §3.9 gains the
+consequence for defs (and names the close-over rule as the other half), §3.14's
+warning bullet stops claiming the two sentences are one, and the core-set
+table's plane row says it. `rill-manual.md` §4 is rewritten around the rule and
+gains the mid-chain tap as a fenced block (the manual-parse gate: 53 → 54), §5
+gains the "reach for `also` when the paths diverge" bullet, §6a's table row for
+"do A, then continue to B" now teaches the pipe, and §12's six index rows say
+what they emit. `rill-for-agents.md`'s unlearn #5 is REVERSED in place, saying
+so and dated, its sinks row carries the kind arrows (`o→o`, `v→v`), and two
+wrong-spelling rows are replaced — the old `x | write plane.a | tap t` row now
+teaches the payload trap instead. `rill-casts.md`'s note 5 is struck through
+rather than deleted, because "this survived two rounds of probe correction"
+is a useful record of how confidently a wrong rule can be defended.
+`rill-agents.md` §7 gains the dump-arity hazard. `rillbook-spec.md` §2's
+bare-expression echo gains the sink case. The `help` strings of all six ops say
+they emit their input.

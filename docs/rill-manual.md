@@ -35,7 +35,8 @@ Three things to notice:
   any position subscribes; there is no special subscribe form.
 - `|` feeds the left value into the right operator's first port —
   exactly like a shell pipe, and it is deliberately the 90% case.
-- `write` is a **sink**: the wave of change ends there, in the world.
+- `write` is a **sink**: the wave of change lands there, in the world.
+  (It also hands its input on, so a chain can carry past it — §4.)
 
 Mounting and unmounting belong to the host (in Matryoshka:
 `rill mount healthbar <the text>`, `rill unmount healthbar`,
@@ -127,9 +128,28 @@ paths in one stroke.
 
 ## 4. Sinks — how a program touches the world
 
-Every effect is a **sink**: the wave ends there. Nothing flows onward
-through a `write` — a pipeline that "does something and continues" is
-imperative thinking wearing pipes (see §5 for the honest spelling).
+Every effect is a **sink**: what the effect does lands in the world, and
+that is where the wave of *consequence* ends.
+
+**An effect returns its input.** All six — `write`, `notify`, `inc`,
+`cast`, `tag`, `untag` — hand the value that roused them straight on,
+so a chain continues through one:
+
+```rill
+plane.x | write plane.debug | mul 2 | write plane.out
+```
+
+`plane.debug` gets whatever `plane.x` holds and `plane.out` gets twice
+it, so a debug tap costs a word rather than a branch. What is passed on
+is the **rousing**, never the payload: `write p 1` lands 1 on the path
+and hands the in-flowing value down the pipe.
+Nothing about the write changes — same value, same mode, same timing.
+
+One rule for all six, so there is nothing to memorise about which
+effects are dead ends. Pass-through is the *linear* spelling and
+`also { … }` (§5) is the *branching* one; a branch is still the only
+way to send one value two different ways, and it is what you want when
+the two ways diverge rather than continue.
 
 All sinks share one shape: **`<verb> <path> [value]`**, where port 0 is
 always the *rousing* — it decides **when** — and the optional bound
@@ -209,6 +229,10 @@ find you:
   does not mean the main stream may never carry one — a chain of
   side-branches whose tail just hangs has over-learned the lesson.
   Branch the extras; end the stream in its sink.
+- Since an effect returns its input (§4), a side effect that simply
+  *continues* wants no block at all: `X | write plane.dbg | B`. Reach
+  for `also` when the two paths diverge — when the branch computes
+  something of its own — and for the pipe when they do not.
 
 The same block can hang off a **statement head** — the source feeds
 every branch:
@@ -244,7 +268,7 @@ in steps.
 | "when X, and Y holds" | the conjunction idiom, below | name the condition as a stream, gate with `where`; a block can't open a source |
 | "is it dark?" vs "did it get dark?" | `< 0.25` vs `dropped_below 0.25` | a comparator is a state; a crossing is an event, fired once on the way through |
 | "on when it gets dark, off when it gets light — and no flicker" | `\| below 0.2 0.3`, `\| above 20 15` | one comparator chatters when the reading sits on the line; hysteresis is two numbers, and the FIRST is the one that trips |
-| "do A, then continue to B" | `X \| also { A } \| B` | side effects branch; the last effect is the main sink |
+| "do A, then continue to B" | `X \| A \| B` if A is an effect; else `X \| also { A } \| B` | an effect returns its input, so it composes in a line; branch when the two paths diverge |
 | "do A then B" (ordered) | one pipeline, or two branches if independent | a block is fan-out; sequence is a pipe |
 | "count how many times" | `X \| inc plane.n 1` | a blind delta reads nothing, so it's the one write that can't cycle |
 | "remember that X happened" | subscribe to the occurrence that says so | a flag is lingering state standing in for an event; if the state is real, its owner publishes it |
@@ -1348,7 +1372,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `arm` | `arm [<in>] [off <off>] [on <on>]` | Latch gate, initially **open**: `off` closes it, `on` re-opens (`on` wins a tie). Both controls carry their word — either may be given alone. |
 | `atan2` | `atan2 <y> <x>` | Angle of (x, y) in radians; `y` is the piped one — `dy \| atan2 dx`. |
 | `below` | `below <in> <on> <off>` | Boolean with hysteresis, falling: below `on`, until above `off`. Emits its level at mount. §6f |
-| `cast` | `cast <in> [<value>] at <at> [decay <decay>] <$channel> radius <radius> [to <#to>]` | Deposit into a field channel. `to` couples delivery to a tag's members. §7 |
+| `cast` | `cast <in> [<value>] at <at> [decay <decay>] <$channel> radius <radius> [to <#to>]` | Deposit into a field channel. `to` couples delivery to a tag's members. Emits its input (the rousing), so a chain continues through it. §7 |
 | `ceil` | `ceil <in>` | Round toward +inf. Broadcasts over a record or an array. |
 | `changed` | `changed <in>` | An occurrence whenever the value actually changes. |
 | `choose` | `choose <i> <of>` | `nth` with the index piped — `plane.time.band \| choose [0.2, 1, 0.6]`. §6c |
@@ -1376,7 +1400,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `fract` | `fract <in>` | Fractional part, always in 0..1 — `fract -0.25` is 0.75. Broadcasts over a record or an array. |
 | `frame` | `frame` | Fed frame count since mount, as a value. Source. §6b |
 | `hold` | `hold <in> <for>` | Take a value, then ignore changes for `for`. §6b |
-| `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. `inc` changes the number; `write … add` leans on it. §4 |
+| `inc` | `inc <in> <by> <path>` | Add `by` to a plane path on each rousing — a blind delta, no read. `inc` changes the number; `write … add` leans on it. Emits the rousing (never `by`), as an occurrence. §4 |
 | `inside` | `inside <p> <min> <max>` | Is p inside the axis-aligned box from min to max? Bounds inclusive; an inverted box is empty and answers false. §6f |
 | `integrate` | `integrate <in> max <max>` | Running sum over fed time, clamped to ±max. The clamp is required. §6b |
 | `keep` | `keep <in> (…)` | The elements a predicate says true for. Filters **elements**; `where` gates the stream. §6d |
@@ -1397,7 +1421,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `nearest` | `nearest <p> <knots> [loop]` | Where p is on the curve through the knots, as t in 0..1 — the inverse of `along`, `loop` included. §6f |
 | `noise` | `noise <period> [octaves <octaves>] [seed <seed>]` | Smooth noise in 0..1 over fed time. Stateless, seeded, bit-identical across machines. §6f |
 | `not` | `not <a>` | Boolean not. Broadcasts over a record or an array. |
-| `notify` | `notify <in> [<value>] <path>` | Write an occurrence to a plane path — the same sink shape as `write`, stating the intent; no modes, because an occurrence has no lane to join. §4 |
+| `notify` | `notify <in> [<value>] <path>` | Write an occurrence to a plane path — the same sink shape as `write`, stating the intent; no modes, because an occurrence has no lane to join. Emits its input, so a chain continues through it. §4 |
 | `nth` | `nth <in> <i>` | The i-th element, 0-based. Out of range is an **error**, never a clamp. §6c |
 | `once` | `once <in>` | The first value, then deaf until remount. §6f |
 | `or` | `or <a> <b>` | Boolean or. Broadcasts over a record or an array. |
@@ -1424,7 +1448,7 @@ and it is listed after the ports here so the arity reads at a glance.
 | `stats` | `stats <in>` | `{max, mean, min, n, stddev}` over a numeric array. §6c |
 | `step` | `step <in> <of> [seed <seed>] [max <max>] [loop] [bounce] [reverse] [random] [shuffle]` | Step sequencer: each rousing emits the next element. Runs once unless told otherwise. §6c |
 | `sub` | `sub <a> <b>` | a − b. Broadcasts over a record or an array. |
-| `tag` | `tag <in> <@subject> <#tag>` | Add a subject to a tag. Idempotent; one tag per call. §7 |
+| `tag` | `tag <in> <@subject> <#tag>` | Add a subject to a tag. Idempotent; one tag per call. Emits the rousing, as an occurrence. §7 |
 | `take` | `take <in> <n> [from <from>]` | At most `n` elements. A short array is **forgiven** — `nth` past the end is not. §6d |
 | `tally` | `tally <in>` | Running count of arrivals, as a value. Emits 0 at mount. §6f |
 | `tan` | `tan <in>` | Tangent, radians. Broadcasts over a record or an array. |
@@ -1433,12 +1457,12 @@ and it is listed after the ports here so the arity reads at a glance.
 | `throttle` | `throttle <in> <window>` | First occurrence passes, the rest are eaten for the window. §6 |
 | `toggle` | `toggle <in>` | Flip a boolean on each arrival. Emits its initial `false` at mount. §6f |
 | `transpose` | `transpose <in>` | Record-of-arrays ↔ array-of-records, self-inverse. Ragged input refuses. §6d |
-| `untag` | `untag <in> <@subject> <#tag>` | Remove a subject from a tag. Idempotent; one tag per call. §7 |
+| `untag` | `untag <in> <@subject> <#tag>` | Remove a subject from a tag. Idempotent; one tag per call. Emits the rousing, as an occurrence. §7 |
 | `wave` | `wave <t> <shape> <period>` | Shape piped time into 0..1 — `clock \| wave sine 4s`. Pure. §6b |
 | `where` | `where <in> <pred>` | Pass arrivals while the predicate is true; otherwise silence. §6a |
 | `window` | `window <in> <span>` | Rolling buffer over fed time, emitted as an array. §6c |
 | `within` | `within <a> <b> <r>` | Is a within r of b? Both `record{x, y, z}`. §6f |
-| `write` | `write <in> [<value>] <path> [hold] [add] [mul] [stops] [clear]` | Write to a plane path. Bare is the durable replace (the old `set`); `hold` is the seat (retracts on unmount), `add`/`mul`/`stops` are lane levels (likewise), `clear` withdraws this writer's contributions and takes no value. Piped, the input is the rousing and `value` is what is written. §4 |
+| `write` | `write <in> [<value>] <path> [hold] [add] [mul] [stops] [clear]` | Write to a plane path. Bare is the durable replace (the old `set`); `hold` is the seat (retracts on unmount), `add`/`mul`/`stops` are lane levels (likewise), `clear` withdraws this writer's contributions and takes no value. Piped, the input is the rousing and `value` is what is written. Emits its input — the rousing, never the payload — so a chain continues through it. §4 |
 
 Two operators are registered and are not in this list, because you never
 write them: `array` is what `[a, b, c]` builds, and `project` is what

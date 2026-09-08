@@ -288,6 +288,31 @@ the main-thread drain, so rill writes are ordered with everything else and appea
 command log / undo machinery like any other authored change, subject to the host's
 mutating/affects_output classification).
 
+**An effect returns its input** (v0.4, ruled 2026-09-08). All six — `write`, `notify`,
+`inc`, `cast`, `tag`, `untag` — emit their `in` port, so a chain continues through one:
+
+```
+x | write plane.debug | mul 2 | write plane.out
+lfo sine 7s | mul 0.05 | sub 0.03 | write plane.a.b | write plane.hud.scare
+```
+
+The effect itself is unchanged — same write, same value, same mode, same timing. What is
+emitted is the **rousing**, never the payload: `write p 1` lands 1 on the path and hands
+what flowed in down the pipe, and a `clear`, which lands nothing at all, still passes its
+input on. The out port carries the KIND its port 0 declares, so `inc`, `tag` and `untag`
+emit occurrences (two pulls of a trigger stay two pulls downstream) and `write`, `notify`
+and `cast` emit values.
+
+One rule for all six, deliberately: if `write` composed and `cast` did not, a reader would
+have to memorise which effects are dead ends. Pass-through is the **linear** spelling; the
+`also { … }` branch (§3.14) is the **branching** one, and both stay — a branch is still the
+only way to send one value two different ways.
+
+The consequence that motivated it: §3.9's "a def must produce an output" refuses a def whose
+last statement has no value, and a def that *writes* does something useful and yielded
+nothing, so the rule misfired on a legitimate definition. The rule is not wrong; the sink
+being a dead end is what made it misfire.
+
 **The sink shape is `<verb> <path> [value]`** (v0.2, ratified 2026-08-24), shared by `set`
 and `notify`. Port 0 is always the **rousing** — it decides *when* — and the optional `value`
 port, when bound, decides *what*:
@@ -379,7 +404,11 @@ def rivet(m: mesh, n: int) =
 - Ports in, streams out; a def **closes over nothing** — no reaching into ambient scene state.
   This keeps defs reusable across Projects and keeps dirty-propagation tractable.
 - The last statement's value is the (primary) output; multi-output defs name outputs with a
-  final `as`.
+  final `as`. A def whose last statement has no value at all is refused — and since an
+  effect returns its input (§3.8), a def whose last statement is a `cast`, a `tag` or an
+  `untag` is an ordinary def with an ordinary output. `write`, `notify` and `inc` remain
+  unsayable inside a def body, but for the OTHER rule: their target is a plane path, and a
+  def closes over nothing.
 - A def registers an operator through the exact same registry path as built-ins and host
   operators, and gets the same graph box, the same `help`, the same tab-complete.
 - **defs are archetypes.** Instances are flattened into the graph with a name prefix; internal
@@ -732,9 +761,11 @@ Rules, all parse-time:
   cycle check (§4.4) and any future capability union see straight through it.
 - **Multi-branch blocks are more branches off the same slot**, newline-separated.
 - **A branch that ends still holding a value warns** — "also-block discards a value; end
-  with a sink or drop the tail". Not fatal: every sink declares no outputs, so "ends with a
-  sink" and "ends with no outputs" are the same sentence, and an effect that hands a value
-  back has discarded nothing. This is rill's first non-fatal diagnostic (`Program.warnings`).
+  with a sink or drop the tail". Not fatal, and an effect that hands a value back has
+  discarded nothing. Until 2026-09-08 "ends with a sink" and "ends with no outputs" were the
+  same sentence; since an effect returns its input (§3.8) they are two, and the exemption is
+  read off the operator's CLASS — `also { write plane.x }` is a branch that ends in a writer
+  and warns about nothing. This is rill's first non-fatal diagnostic (`Program.warnings`).
 - **A tail operator (§3.11) takes the rest of the line, brace included** — so inside a
   one-line block it eats the block's own `}`, and says so with the fix named. Give it its
   own line.
@@ -1093,7 +1124,7 @@ pub fn register(reg: *Registry, def: OpDef) !void;
 | events & levels | `pulse` (value source), `once`, `toggle`, `tally`, `above <on> <off>` / `below <on> <off>` (hysteresis) — tier 2 beat 4a; `below` 2026-08-26 |
 | noise & space | `noise <period> [octaves] [seed]`, `rand [seed]`, `distance`, `within` — tier 2 beat 4b |
 | contracts | `match <shape> [exact]` (every value), `expect <shape> [exact]` (once, at mount, and refuses it) — §3.6b, tier 2 beat 2b |
-| plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks), path read (implicit source) |
+| plane | `set <path>`, `notify <path>`, `inc <path> <by>` (sinks — each returns its input, §3.8), path read (implicit source) |
 | field | `cast <$chan> [value] radius <r> at <pos> [decay <d>]` (sink — the fourth write, into the caster's owned space; rill-casts.md) |
 | util | `const`, `tap` (debug passthrough → log bus) |
 

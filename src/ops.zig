@@ -3361,6 +3361,35 @@ fn evalMerge(ctx: *EvalCtx) EvalError!Emit {
 // Plane / util
 // ---------------------------------------------------------------------------
 
+/// **An effect returns its input.** One rule for all six (`write`, `notify`,
+/// `inc`, `cast`, `tag`, `untag`), ruled 2026-09-08.
+///
+/// The effect is unchanged — same write, same value, same mode, same timing.
+/// It additionally emits port 0, the rousing, so a chain can continue through
+/// it:
+///
+///     x | write plane.debug | mul 2 | write plane.out
+///
+/// The motivating discovery was elsewhere: `parseDef` refuses a def whose last
+/// statement has no value, and a def that *writes* does something useful and
+/// yielded nothing, so that rule misfired on a legitimate definition. The rule
+/// is not wrong — `write` being a dead end is what made it misfire, and this
+/// is the fix at the source rather than an exception carved into `def`.
+///
+/// All six, never a subset: if `write` composed and `cast` did not, a reader
+/// would have to memorise which effects are dead ends.
+///
+/// Port 0 and never the payload. `write p 1` writes 1 and passes the rousing
+/// along, because the pipe carries what was flowing, not what was landed —
+/// and a `clear`, which lands nothing at all, still has an input to hand on.
+///
+/// Called only after the effect has actually happened, so the emission and the
+/// write cannot disagree about whether this tick was a rousing.
+fn passThru(ctx: *EvalCtx) EvalError!Emit {
+    try splice(ctx, 0, try raw(ctx, 0));
+    return Emit.first;
+}
+
 /// The sink shape, shared by `set` and `notify`: `<verb> <path> [value]`.
 ///
 /// **Piped value: write what's flowing. Bound value: write this, because
@@ -3380,6 +3409,11 @@ fn evalMerge(ctx: *EvalCtx) EvalError!Emit {
 /// `x | write p` is unchanged. A change in `value` alone is not a write: the
 /// payload says what, the rousing says when — the same rule `inc` applies to
 /// `by`, for the same reason.
+///
+/// **It returns its input** (2026-09-08). Every effect does — see `passThru`.
+/// What is written is unchanged: `write p 1` still lands 1 on the path and
+/// hands `in` (the rousing) down the pipe, never the payload. Two different
+/// questions, two different answers.
 fn evalSink(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none;
     // Statics 1..5 are the mode flags — a CLOSED set of bare words, at most
@@ -3406,10 +3440,10 @@ fn evalSink(ctx: *EvalCtx) EvalError!Emit {
         // binding one silently would let "clear 0.5" read as writing a half.
         if (ctx.in[1] != null) return ctx.refuse("write … clear takes no value — it withdraws this writer's contributions, it does not write", .{});
         try ctx.write(ctx.statics[0].path, &.{}, .clear);
-        return Emit.none;
+        return passThru(ctx);
     }
     try ctx.write(ctx.statics[0].path, ctx.in[1] orelse try raw(ctx, 0), mode);
-    return Emit.none;
+    return passThru(ctx);
 }
 
 /// `inc` is a SINK WITH NO PAYLOAD: port 0 is the rousing, not the amount.
@@ -3424,7 +3458,7 @@ fn evalInc(ctx: *EvalCtx) EvalError!Emit {
     if (!ctx.in_fresh[0]) return Emit.none; // a change in `by` alone is not a rousing
     _ = try num(ctx, 1); // numeric slots only — the gate, stated once
     try ctx.writeDelta(ctx.statics[0].path, try raw(ctx, 1));
-    return Emit.none;
+    return passThru(ctx); // the rousing, not `by` — an effect returns its input
 }
 
 /// `cast <$channel> [value] radius <r> at <pos> [decay <d>]` — the field
@@ -3459,7 +3493,7 @@ fn evalCast(ctx: *EvalCtx) EvalError!Emit {
         // perception host-side; posts hear everything regardless.
         .to = ctx.statics[2].condition,
     });
-    return Emit.none;
+    return passThru(ctx);
 }
 
 /// `tag <@subject> <#tag>` / `untag <@subject> <#tag>` — the membership
@@ -3489,7 +3523,7 @@ fn evalMembership(ctx: *EvalCtx, adding: bool) EvalError!Emit {
         .tag = ctx.statics[1].condition,
         .adding = adding,
     });
-    return Emit.none;
+    return passThru(ctx);
 }
 
 fn evalConst(ctx: *EvalCtx) EvalError!Emit {
@@ -3714,8 +3748,11 @@ const CORE = [_]registry.OpDef{
             .{ .name = "stops", .kind = .word, .flag = true, .optional = true },
             .{ .name = "clear", .kind = .word, .flag = true, .optional = true },
         },
+        // An effect returns its input (2026-09-08) — the rousing, not the
+        // payload. `x | write plane.dbg | mul 2 | write plane.out`.
+        .outputs = &.{p.val("out", Tag.any)},
         .routes = .anywhere,
-        .help = "Write to a plane path — `write <path> [value] [mode]`. Bare is the durable replace (the old `set`); `hold` is the seat (retracts on unmount), `add`/`mul`/`stops` are lane levels (likewise), `clear` withdraws this writer's contributions and takes no value. Piped, the input is the rousing and `value` is what gets written.",
+        .help = "Write to a plane path — `write <path> [value] [mode]`. Bare is the durable replace (the old `set`); `hold` is the seat (retracts on unmount), `add`/`mul`/`stops` are lane levels (likewise), `clear` withdraws this writer's contributions and takes no value. Piped, the input is the rousing and `value` is what gets written. Emits its input unchanged, so a chain continues through it.",
         .class = .effect,
         .eval = evalSink,
     },
@@ -3731,25 +3768,40 @@ const CORE = [_]registry.OpDef{
     // write to a mailbox path already follows the mailbox's policy (append,
     // count, deliver every one), so `notify defense/alerts` says "this is a
     // sighting" where `set` would read as "this is the state".
-    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Write an occurrence to a plane path — `notify <path> [value]`; same write as `set`, states the intent.", .class = .effect, .eval = evalSink },
+    .{ .name = "notify", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any) }, .statics = &.{.{ .name = "path", .kind = .path }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Write an occurrence to a plane path — `notify <path> [value]`; same write as `set`, states the intent. Emits its input unchanged, so a chain continues through it.", .class = .effect, .eval = evalSink },
     // The third write kind. `plane.x | add 1 | write plane.x` reads a path it
     // writes, so the cycle check rightly refuses it — which leaves counters
     // inexpressible. A blind delta reads nothing and passes legitimately.
-    .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .routes = .anywhere, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent.", .class = .effect, .eval = evalInc },
+    //
+    // **The out port's KIND matches port 0's, and that is one rule, not a
+    // special case** (2026-09-08). `inc`, `tag` and `untag` declare port 0 an
+    // OCCURRENCE — the rousing is the whole input — so their `out` is an
+    // occurrence too. It has to be: an occurrence slot never suppresses, and
+    // a value slot suppresses identical bytes, so with `.value` here
+    // `plane.horn | tag @tom #g | inc plane.n 1` tagged twice and counted
+    // ONCE. Two pulls of a trigger are two pulls, all the way down the chain.
+    // Found by mutation while gating this beat, not by reasoning.
+    //
+    // `write`, `notify` and `cast` declare port 0 a VALUE port, so their out
+    // is a value. What that leaves open is unchanged and already ruled on: a
+    // PLANE subscription's kind is decided per delta by the host, which no
+    // static slot can know — `Program.carryKinds` says so about elementwise
+    // operators and defers it, and an effect is in exactly the same position.
+    .{ .name = "inc", .inputs = &.{ p.occ("in", Tag.any), p.in("by", Tag.number) }, .statics = &.{.{ .name = "path", .kind = .path }}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Add `by` to a plane path each time the input rouses — a blind delta: no read, commutative, order-independent. Emits the rousing (never `by`), so a chain continues through it.", .class = .effect, .eval = evalInc },
     // The field sink. `channel` is a `.channel` static, not a `.path`, so a
     // cast never enters the write list — correctly: fields have no read side
     // inside rill (readings come from a standpoint, §9), so there is no loop
     // for the cycle check to miss. `at`/`decay` are keyword ports: the word
     // disambiguates what a positional grammar cannot (`cast $alarm 30` —
     // payload or radius?).
-    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true }, .{ .name = "to", .kind = .condition, .kw = true, .optional = true } }, .routes = .main, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>] [to <#tag>]`; piped, the input is the rousing; `to` couples delivery to a tag's members (posts hear everything).", .class = .effect, .eval = evalCast },
+    .{ .name = "cast", .inputs = &.{ p.in("in", Tag.any), p.opt("value", Tag.any), p.kwIn("at", Tag.any), p.kwOpt("decay", Tag.duration) }, .statics = &.{ .{ .name = "channel", .kind = .channel }, .{ .name = "radius", .kind = .literal, .kw = true }, .{ .name = "to", .kind = .condition, .kw = true, .optional = true } }, .outputs = &.{p.val("out", Tag.any)}, .routes = .main, .help = "Deposit into a field channel — `cast $chan [value] radius <r> at <pos> [decay <d>] [to <#tag>]`; piped, the input is the rousing; `to` couples delivery to a tag's members (posts hear everything). Emits its input unchanged, so a chain continues through it.", .class = .effect, .eval = evalCast },
     // The membership sinks share `inc`'s port shape — the rousing carries no
     // payload (a set operation takes nothing from the stream) — and compose
     // their one write-list entry from the subject/condition pair
     // (`Program.registerWrites`), which is how the cycle check refuses a
     // set-subscription while `joined`/`count` reads stay siblings.
-    .{ .name = "tag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .routes = .main, .help = "Add `@subject` to a tag — `tag @tom #garrison`; idempotent (twice is once), one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalTag },
-    .{ .name = "untag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .routes = .main, .help = "Remove `@subject` from a tag — `untag @tom #garrison`; idempotent, one tag per call. Piped, the input is the rousing; unpiped it fires once at mount.", .class = .effect, .eval = evalUntag },
+    .{ .name = "tag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .main, .help = "Add `@subject` to a tag — `tag @tom #garrison`; idempotent (twice is once), one tag per call. Piped, the input is the rousing; unpiped it fires once at mount. Emits its input unchanged, so a chain continues through it.", .class = .effect, .eval = evalTag },
+    .{ .name = "untag", .inputs = &.{p.occ("in", Tag.any)}, .statics = &.{ .{ .name = "subject", .kind = .subject }, .{ .name = "tag", .kind = .condition } }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .main, .help = "Remove `@subject` from a tag — `untag @tom #garrison`; idempotent, one tag per call. Piped, the input is the rousing; unpiped it fires once at mount. Emits its input unchanged, so a chain continues through it.", .class = .effect, .eval = evalUntag },
     .{ .name = "const", .statics = &.{.{ .name = "value", .kind = .literal }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Emit a constant once at mount.", .eval = evalConst },
     .{ .name = "tap", .inputs = &.{p.in("in", Tag.any)}, .statics = &.{.{ .name = "label", .kind = .word }}, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Debug passthrough: log the value to the host's log bus.", .class = .reads, .eval = evalTap },
 };

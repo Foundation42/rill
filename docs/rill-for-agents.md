@@ -48,12 +48,18 @@ two lines; refer back to them.
 4. **No arrows.** There is no `->`, no `=>`, no trigger-fires-command.
    A threshold is a value that flows onward. Effects are sinks reached
    by flow.
-5. **Effects don't ride the stream.** A `write`/`notify`/`inc`/`cast` is
-   a sink: the wave ends there, nothing flows through it.
-   `x | write p | tap t` does not parse. Side effects branch off with
-   `also { … }`; the main stream carries values only — and **the last
-   effect is the main stream's sink**: a chain of side-branches whose
-   tail just hangs has over-learned this lesson.
+5. **An effect returns its input, and it is the ROUSING it returns.**
+   Changed 2026-09-08; earlier versions of this document said an effect
+   ended the wave, and `x | write p | tap t` did not parse. It does now:
+   all six of `write`/`notify`/`inc`/`cast`/`tag`/`untag` do their work
+   and then emit the value that roused them, so
+   `x | write plane.dbg | mul 2 | write plane.out` gives `dbg` x and
+   `out` 2x. What an effect never emits is what it *landed* —
+   `write p 1` writes 1 and passes x on. Reach for `also { … }` when the
+   two paths DIVERGE (the branch computes something of its own) and for
+   the pipe when they do not; **the last effect is still the main
+   stream's sink**, and a chain of side-branches whose tail just hangs
+   has over-learned the old lesson.
 
 <!-- candidate unlearn #7 (recorded, not promoted — awaits the
      re-probe): a block has no sources of its own. A branch cannot
@@ -288,13 +294,16 @@ where they bite.
 | events & levels | `pulse <period> [width <width>]` →v — a VALUE, 1/0 (`every` is the occurrence source; width defaults to period/10) · `once <in>` o→o (first value, then deaf; unpiped `once 1` fires at tick 0 by §3.8) · `toggle <in>` o→v · `tally <in>` o→v · `above <in> <on> <off>` / `below <in> <on> <off>` v→v (HYSTERESIS; the FIRST number trips and the second releases for both words — `above 0.3 0.2`, `below 0.2 0.3` — and each REFUSES the other's order at mount, naming both numbers). **Levels emit at tick 0** — `above`/`below` their level, `toggle` false, `tally` 0 — while crossings (`dropped_below`/`rose_above`/`edge`) baseline SILENTLY |
 | noise & space | `noise <period> [octaves <octaves>] [seed <seed>]` →v → 0..1 smooth, STATELESS, f32 inside · `rand <in> [seed <seed>]` o→v → 0..1 per rousing. Seeds default to 0, offset the LATTICE as well as the gradients (smooth noise is zero at its lattice points for every seed, so seeds sharing a period would otherwise coincide at each boundary), and are the decorrelator; `rand` and `shuffle` share one generator, `noise` is a lattice hash · `distance <a> <b>` · `within <a> <b> <r>` · `dot <a> <b>` — all need `record{x, y, z}` on BOTH sides, and a missing axis is named. `dot` is the scalar product: how much of a lies along b, so with a unit b it is 1 dead ahead, 0 side on, −1 behind · `nearest <p> <knots> [loop]` v→v → t in 0..1 — the INVERSE of `along`, same uniform Catmull-Rom, same `loop` (say it on BOTH words; seam included, answers [0,1) with the seam at 0), and it emits the PARAMETER not the point (`| along` recovers the point; `| diff` says which way you are travelling). Fewer than two knots refuses · `angle <a> <b>` → RADIANS 0..π between two directions, never a degree (convert in words that exist); a zero-length vector REFUSES — no direction, no angle · `cross <a> <b>` → record{x, y, z}, RIGHT-handed (x × y = z), feeds straight back into `dot`/`angle`/`distance` · `inside <p> <min> <max>` → bool, the AABB sibling of `within`: min/max corner records, bounds INCLUSIVE (the wall counts, like `within`'s `d <= r` sphere); an inverted box is EMPTY and answers false, never a refusal |
 | contracts | `match <in> <shape>` (EVERY value; mismatch kills the wave) · `expect [<in>] <shape>` (ONCE, at mount; mismatch REFUSES THE MOUNT, and it never checks again — a later violation passes through). Shape literal: `{id: string, distance?: number}`, nested, `[number]`, words `number boolean string any`; open by default, `exact` closes every record in it |
-| sinks | `set <path> [<value>]` v→ · `notify <path> [<value>]` v→ · `inc <path> <by>` o→ · `cast <$channel> [<value>] radius <radius> at <pos> [decay <decay>] [to <#tag>]` v→ · `tag <@subject> <#tag>` o→ / `untag …` (ONE tag per call; unpiped = once at tick 0; membership is a SET — twice is once, only transitions speak) |
+| sinks | `set <path> [<value>]` v→v · `notify <path> [<value>]` v→v · `inc <path> <by>` o→o · `cast <$channel> [<value>] radius <radius> at <pos> [decay <decay>] [to <#tag>]` v→v · `tag <@subject> <#tag>` o→o / `untag …` (ONE tag per call; unpiped = once at tick 0; membership is a SET — twice is once, only transitions speak). Every one of them EMITS ITS INPUT (2026-09-08), so a chain continues through it; the out kind is the in kind, so an occurrence stays an occurrence and two rousings stay two |
 | util | `const <value>` · `tap <label>` (log passthrough) |
 
 The sink shape: **port 0 is the rousing** (when); a bound value is the
 payload (what). Piped = write what's flowing; bound = write this,
 because something flowed. A change in a non-rousing port alone is
-never a write. `inc`'s rousing carries no payload (`by` is required
+never a write. **What the sink emits is the rousing, never the
+payload** — the pipe carries what flowed in, not what was landed, and
+a `write … clear`, which lands nothing at all, still passes its input
+on. `inc`'s rousing carries no payload (`by` is required
 and is the amount). `cast`'s `at`/`decay` are **keyword ports** — the
 word introduces the value — and `radius` is a keyword static; none of
 the three bind positionally.
@@ -366,8 +375,8 @@ first, so `sound play` is one operator.
 |---|---|---|
 | `if plane.hp < 20 { … }` | no `if`; conditions flow | `plane.hp \| dropped_below 20 \| …` |
 | `plane.hp < 20 -> notify …` | no arrows | `plane.hp \| dropped_below 20 \| notify …` |
-| `x \| write plane.a \| tap t` | effects end waves | `x \| also { write plane.a } \| tap t` |
-| `x \| untag #a \| tag #b \| follow` | effect pipeline = imperative sequencing | one branch per effect, `also { }` each |
+| `x \| write plane.a 5 \| mul 2` expecting 10 | an effect emits the ROUSING, never what it landed | `5 \| write plane.a \| mul 2`, or read the path in a second program |
+| `x \| untag #a \| tag #b` expecting an ORDER between the writes | the two fire on one rousing in node order, which is the text's order — but a rill is a standing order, not a script; if the order is load-bearing, say why in a comment | fine as written since 2026-09-08 (it used to refuse) |
 | `every 1f { step1; step2 }` expecting order | a block is fan-out | pipeline the sequence, or accept parallel branches |
 | `plane.x \| add 1 \| write plane.x` | reads what it writes — cycle, refused | `<rousing> \| inc plane.x 1` |
 | one file, three commented "sections" | one file is ONE program; a section writing a path another subscribes to refuses the whole file | three programs (a program may not both write and subscribe to one path, even unconnected) |
