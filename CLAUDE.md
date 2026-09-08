@@ -24,9 +24,24 @@ change to a pure-rill internal does not.
 refuses a duplicate name, so a core word that collides with a host's word
 does not shadow it or lose a race — it fails that host's registry init
 outright, and every program in it. Hosts and their words, as of
-2026-09-02:
+2026-09-08 — spindrift is still the only host that registers OPERATORS:
 
-    spindrift  spawn · gravity · perish · hear · collide · ground · stick
+    spindrift, words.register       (11)
+        spawn · gravity · perish · relax · near · push ·
+        align · sync · infect · deposit · hear
+
+    spindrift, words.registerTracer  (4)
+        collide · ground · slide · stick
+
+Two doors, deliberately: a host with no world to trace calls `register`
+alone, and a kernel naming a tracer word on such a host is refused at
+mount rather than at parse. Both doors still take names out of the ONE
+namespace, so all fifteen are spoken for.
+
+This list has gone stale once already (it read seven words, dated
+2026-09-02, while there were fifteen). Refresh it rather than trust it:
+
+    grep -n '^        .name = ' ../spindrift/src/words.zig
 
 `over` landed in core on 2026-09-02 and collided with spindrift's, which
 had been its fifth word since beat 3; matryoshka registers both, so it
