@@ -3990,12 +3990,19 @@ test "the manuals parse: every printed example compiles" {
     // 54 → 55 (`@self` in a def body, 2026-09-08): §10 gains the def that
     // drives its own instance's knob. Fenced ```rill on purpose — that it
     // parses at all is the whole beat, so this gate reads the claim.
-    try testing.expectEqual(@as(usize, 55), human);
+    // 55 → 56 (the plane declaration, 2026-09-08): §10 gains "Which plane a
+    // def runs on" and its `on row` def. Fenced ```rill for the same reason
+    // the `@self` driver is: that a row def parses inside a WORLD program is
+    // half the ruling, and this gate parses with `rill.parse`.
+    try testing.expectEqual(@as(usize, 56), human);
     // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
     // ```rill fence so this gate reads it rather than the reader trusting it.
     // 5 → 6 (the parameter pack, same day): §2 gains `export def roaches`.
     // 6 → 7 (`@self` in a def body, same day): §2 gains the relative driver.
-    try testing.expectEqual(@as(usize, 7), agent);
+    // 7 → 8 (the plane declaration, 2026-09-08): §2 gains the exported row
+    // def. It parses under `rill.parse` — a row def inside a world program —
+    // which is itself half of what the beat ruled.
+    try testing.expectEqual(@as(usize, 8), agent);
 }
 
 // ---------------------------------------------------------------------------
@@ -12012,33 +12019,45 @@ test "@self: position is not checked, because rill cannot know it" {
     try testing.expect(subFor(&prog, "plane.drift.k.@self") != null);
 }
 
-test "@self: `row.` and `slate.` in a def body stay refused, with their own advice" {
-    // The exemption is the `plane` head's alone. `row` and `slate` are the
-    // MOUNT's own stores — relative already, with no entity room to name — so
-    // `@self` would be a spelling with no customer there. They keep the old
-    // refusal, and the message does NOT offer the `@self` remedy, because it
-    // does not work: the fix is a port.
+test "@self: `row.` and `slate.` in a WORLD def stay refused, and the advice now names the fix" {
+    // This gate belongs to the `@self` beat and was RE-AIMED by the plane
+    // beat the same day, which is the honest record: `row.` and `slate.` are
+    // still refused here, but the reason is no longer "the exemption is the
+    // `plane` head's alone" — it is that this def did not declare `on row`.
+    // The message therefore has to carry the fix, and asserting the fix is
+    // what stops the refusal decaying back into "no".
     //
-    // (This is also the boundary `docs/cc-recon-def-plane.md` was written
-    // about: a def that wants `row.pos` is asking to declare its PLANE, which
-    // is a different ruling and was not taken here.)
+    // (`docs/cc-recon-def-plane.md` is the recon that moved it: a def that
+    // wants `row.pos` is asking to declare its PLANE, and that ruling was
+    // taken.)
     //
-    // Mutation that bites: drop the head test in `checkDefReach` and judge
-    // every head by `reachOf` — `row.@self.pos` then parses, and the advice
-    // in the `row.age` refusal starts pointing at a spelling that mounts
-    // nowhere.
+    // Mutations that bite: drop the `target.plane == .row` early return in
+    // `checkDefReach` and this gate still passes but the row gates fall over
+    // — so the mutation aimed HERE is the inverse: make `checkDefReach`
+    // return unconditionally for a non-`plane` head (all three refusals
+    // vanish). Deleting the `on row` clause from the message bites the third
+    // assertion alone.
     try expectParseError(
         \\def bad(x: number) =
         \\  x | add row.age
         \\
         \\plane.v | bad | write plane.out
-    , "the mount's own store");
+    , "relative only on the row plane");
     try expectParseError(
         \\def bad(x: number) =
         \\  x | add slate.contact
         \\
         \\plane.v | bad | write plane.out
-    , "the mount's own store");
+    , "relative only on the row plane");
+    // The fix is IN the refusal, spelled out for this def by name.
+    try expectParseError(
+        \\def bad(x: number) =
+        \\  x | add row.age
+        \\
+        \\plane.v | bad | write plane.out
+    , "`def bad(…) on row = …`");
+    // A sigil does not buy a world def its way in either: the head test runs
+    // before `reachOf` ever sees the path.
     try expectParseError(
         \\def bad(x: number) =
         \\  x | add row.@self.age
@@ -12183,4 +12202,691 @@ test "@self: a def calling a def, where the INNER one names the relative path" {
     try feedValue(&fx.rt, testing.allocator, "plane.drift.@self.k.flock", @as(i64, 10));
     try fx.rt.tick(.{ .frame = 1, .time_ns = 1 });
     try testing.expectEqual(@as(f64, 41), try planeNum(&fx, "plane.out"));
+}
+
+// ---------------------------------------------------------------------------
+// A definition declares its plane (2026-09-08, `docs/cc-recon-def-plane.md`
+// Option A, ruled by Christian: *"take the recommendation"*).
+//
+// `def spin(x) on row = …` — contextual after the signature, reserving no
+// word, undeclared meaning the world plane. And the ruling it is coupled to,
+// without which it would buy almost nothing: **`row.…` and `slate.…` become
+// sayable inside a `row`-declared def**. That is not a new hole in the
+// close-over rule, it is the SAME rule — the `@self` beat allowed
+// `plane.drift.@self.k.flock` because `@self` is relative, and `row.age` is
+// relative in exactly that way: it resolves to whichever row is being swept,
+// so a def carrying one still travels. One principle, three relative stores.
+// ---------------------------------------------------------------------------
+
+/// Core plus one row-only host word with an output, so a def body can end in
+/// it. `hostRegistry` deliberately has no row word — every exhaustive audit in
+/// this file walks it — so the plane gates build their own.
+fn rowWordRegistry(gpa: std.mem.Allocator) !rill.Registry {
+    var reg = try rill.Registry.init(gpa);
+    errdefer reg.deinit();
+    try rill.registerCore(&reg);
+    const stub = struct {
+        fn f(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+            return rill.Emit.none;
+        }
+        fn k(_: *rill.row.Ctx) rill.row.Error!void {}
+    };
+    _ = try reg.register(.{
+        .name = "gravity_like",
+        .inputs = &.{.{ .name = "g", .ty = rill.Tag.number }},
+        .outputs = &.{.{ .name = "out", .ty = rill.Tag.any }},
+        .help = "stub row word",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .only = true, .eval = stub.k },
+        .eval = stub.f,
+    });
+    return reg;
+}
+
+fn parseKernelOk(gpa: std.mem.Allocator, reg: *rill.Registry, source: []const u8) !rill.Program {
+    var diag = rill.Diag{};
+    return rill.parseKernel(gpa, reg, "p", source, &diag) catch |err| {
+        if (err == error.Parse) std.debug.print("parseKernel: {s} (line {d}, col {d})\n", .{ diag.msg(), diag.line, diag.col });
+        return err;
+    };
+}
+
+/// A parse refusal against a registry that HAS a row word, either entry point.
+fn expectPlaneError(kernel: bool, source: []const u8, needle: []const u8) !void {
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    const result = if (kernel)
+        rill.parseKernel(testing.allocator, &reg, "p", source, &diag)
+    else
+        rill.parse(testing.allocator, &reg, "p", source, &diag);
+    try testing.expectError(error.Parse, result);
+    if (std.mem.indexOf(u8, diag.msg(), needle) == null) {
+        std.debug.print("diagnostic \"{s}\" does not mention \"{s}\"\n", .{ diag.msg(), needle });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn hasSub(prog: *const rill.Program, path: []const u8) bool {
+    for (prog.subs.items) |s| {
+        if (std.mem.eql(u8, s.path, path)) return true;
+    }
+    return false;
+}
+
+fn hasWrite(prog: *const rill.Program, path: []const u8) bool {
+    for (prog.writes.items) |w| {
+        if (std.mem.eql(u8, w.path, path)) return true;
+    }
+    return false;
+}
+
+test "plane: `on row` parses after the signature and composes with `export`, reserving no word" {
+    // The spelling, and the whole spelling argument: `on` is CONTEXTUAL — the
+    // parser is at a known point (after the `)`, before the `=`) — so nothing
+    // is reserved and an operator or a stream may still be called `on`. The
+    // plane words cost nothing either: `plane` and `row` were already
+    // reserved.
+    //
+    // Mutations that bite: delete the `on` arm in `parseDef` ("expected '='
+    // after def signature"); add "on" to `registry.isReservedWord` (the last
+    // two assertions).
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\def spin(x: number) on row =
+        \\  x | add row.age
+        \\
+        \\export def scuttle(rate = 60 (0..500)) on row =
+        \\  rate | mul 0.5 | add row.age
+        \\
+        \\describe scuttle
+        \\  "One row's scuttle."
+        \\  rate "rows per second"
+        \\
+        \\row.vel | spin | write row.pos
+        \\scuttle | write row.size
+    );
+    defer prog.deinit();
+    try testing.expect(hasSub(&prog, "row.age"));
+    try testing.expect(hasWrite(&prog, "row.pos"));
+    const pack = prog.exported("scuttle") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), pack.ports.len);
+    try testing.expectEqual(@as(f64, 60), types.asNumber(pack.ports[0].default.?).?);
+    try testing.expectEqual(@as(f64, 500), types.asNumber(pack.ports[0].max.?).?);
+
+    // `on` reserves nothing: it is still a legal operator name and a legal
+    // stream name, because the parser only looks for it in one position.
+    try testing.expect(!registry.isReservedWord("on"));
+    const noop = struct {
+        fn f(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+            return rill.Emit.none;
+        }
+    }.f;
+    var reg2 = try hostRegistry(testing.allocator);
+    defer reg2.deinit();
+    _ = try reg2.register(.{ .name = "on", .inputs = &.{.{ .name = "in", .ty = rill.Tag.number }}, .outputs = &.{.{ .name = "out", .ty = rill.Tag.any }}, .help = "stub", .routes = .anywhere, .eval = noop });
+    var p2 = try parseOk(testing.allocator, &reg2, "plane.v | on | write plane.out");
+    defer p2.deinit();
+
+    // `on plane` is sayable too — the world plane spells itself the way every
+    // path spells it. In a KERNEL file it is the declaration that MATTERS:
+    // the def is not a kernel, so its row word does not bind. (Mutation:
+    // delete the `"plane"` arm and `on plane` dies as "is not a plane".)
+    var pw = try parseKernelOk(testing.allocator, &reg,
+        \\def helper(x: number) on plane =
+        \\  x | mul 2
+        \\
+        \\row.vel | helper | write row.pos
+    );
+    defer pw.deinit();
+    try expectPlaneError(true,
+        \\def helper(x: number) on plane =
+        \\  x | gravity_like
+        \\
+        \\row.vel | helper | write row.pos
+    , "is a row word");
+}
+
+test "plane: an UNDECLARED def is a world def — in a kernel file too" {
+    // The default, gated as the ruling (recon §3, option (ii)). The two
+    // readings that lost: (i) INHERIT the caller's flag re-imports the ambient
+    // decision the declaration exists to remove; (iii) plane-AGNOSTIC is not a
+    // template, because both readers run while the body is parsed and a body
+    // is parsed once — that is what `using` already is.
+    //
+    // Mutation that bites: seed `parseDef`'s `plane` from
+    // `self.program_target.plane` instead of `.world` (option (i)) — the row
+    // word then binds inside the undeclared def and the first refusal below
+    // goes green.
+    try expectPlaneError(true,
+        \\def bad(x: number) =
+        \\  x | gravity_like
+        \\
+        \\row.vel | bad | write row.pos
+    , "is a row word");
+    // …and the refusal names THIS def's fix, not the file's.
+    try expectPlaneError(true,
+        \\def bad(x: number) =
+        \\  x | gravity_like
+        \\
+        \\row.vel | bad | write row.pos
+    , "`def bad(…) on row = …`");
+    // A `row.` path in an undeclared def, inside a kernel file, is refused for
+    // the same reason.
+    try expectPlaneError(true,
+        \\def bad(x: number) =
+        \\  x | add row.age
+        \\
+        \\row.vel | bad | write row.pos
+    , "relative only on the row plane");
+    // The negative control, in rill's own words: the TOP-LEVEL refusal is
+    // byte-for-byte the one it always was. spindrift's G2 asserts its leading
+    // clause on three programs (`plane.x | gravity`, `spawn`, `every 1s |
+    // also { perish }`), so a beat that reworded it there would break another
+    // repo's gates. Only the DEF case gained a second wording.
+    try expectPlaneError(false, "plane.x | gravity_like", "mount it in a kernel");
+    // The world default is what a plain helper gets, and a plain helper still
+    // works in a kernel exactly as it always has (recon §2 measured it).
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\def dbl(x: number) =
+        \\  x | mul 2
+        \\
+        \\row.vel | dbl | write row.pos
+    );
+    defer prog.deinit();
+    try testing.expect(hasSub(&prog, "row.vel"));
+    try testing.expect(hasWrite(&prog, "row.pos"));
+}
+
+test "plane: a `row` def reaches the row — `row.…` reads and writes, and the path survives the splice" {
+    // The coupled ruling. Before it, *"a row def was a def that cannot reach
+    // the row"* (recon §2) and the declaration would have bought almost
+    // nothing: a def could call `gravity` and read `@self` broadcasts and
+    // still not read `row.age`.
+    //
+    // Mutation that bites: drop the `target.plane == .row` early return in
+    // `checkDefReach` — the def refuses outright.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\def drift(k: number) on row =
+        \\  row.vel | mul k | add row.age | write row.pos
+        \\
+        \\0.5 | drift
+    );
+    defer prog.deinit();
+    // The paths survive the splice verbatim and land on the PROGRAM's
+    // subscription list, at real program slots — the same claim the `@self`
+    // gate makes, on the other relative store.
+    try testing.expect(hasSub(&prog, "row.vel"));
+    try testing.expect(hasSub(&prog, "row.age"));
+    try testing.expect(hasWrite(&prog, "row.pos"));
+    const sub = subFor(&prog, "row.vel") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), sub.targets.items.len);
+    try testing.expect(sub.targets.items[0] < prog.slots.items.len);
+    try testing.expectEqualStrings("drift1.mul1", prog.node(prog.slot(sub.targets.items[0]).node).name);
+    // Two instances are two node sets and one subscription with two targets.
+    var prog2 = try parseKernelOk(testing.allocator, &reg,
+        \\def drift(k: number) on row =
+        \\  row.vel | mul k
+        \\
+        \\0.5 | drift | write row.pos
+        \\2 | drift | write row.size
+    );
+    defer prog2.deinit();
+    const sub2 = subFor(&prog2, "row.vel") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 2), sub2.targets.items.len);
+}
+
+test "plane: `slate.…` is sayable in a row def — the deliberate half of the ruling" {
+    // Decided, not swept along. The slate lives ENTIRELY on the row plane
+    // (`row.zig`'s SLATE; the world evaluator has no slate at all), it is
+    // per-row and per-tick, and it pins a def to no Project — as relative as
+    // `row.` and `@self`. The one thing that could go wrong, a name nobody
+    // says or one said too late, is refused LOUDLY by name at mount
+    // (`error.SlateUnsaid` / `error.SlateOutOfOrder`, gated in `row.zig`), in
+    // the same place a mistyped row field dies. So the reasoning carries.
+    //
+    // Mutation that bites: restrict `checkDefReach`'s row-plane early return
+    // to the `row` head only — `slate.contact` refuses again.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\def settle(x: number) on row =
+        \\  x | add slate.contact | write row.pos
+        \\
+        \\row.vel | settle
+    );
+    defer prog.deinit();
+    try testing.expect(hasSub(&prog, "slate.contact"));
+    // And it is NOT sayable in a world def — with the same one message, since
+    // it is the same rule.
+    try expectPlaneError(false,
+        \\def bad(x: number) =
+        \\  x | add slate.contact
+        \\
+        \\plane.v | bad | write plane.out
+    , "relative only on the row plane");
+}
+
+test "plane: `@self` still works on BOTH planes — the ruling widened, it did not move" {
+    // The negative control for the previous beat: a relative `plane.` path is
+    // still legal in a world def (which the `@self` gates cover) and is still
+    // legal in a ROW def, which is the shape every real kernel wants — a
+    // driver reading its own instance's knob while sweeping rows.
+    //
+    // Mutation that bites: make `checkDefReach`'s row-plane early return
+    // swallow the `plane` head too (`if (target.plane == .row) return;` moved
+    // above the head test) — then the ABSOLUTE assertion below goes green,
+    // because a row def would close over one Project's plane.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\def drift(x: number) on row =
+        \\  x | mul plane.drift.@self.k.flock | add row.age | write row.pos
+        \\
+        \\row.vel | drift
+    );
+    defer prog.deinit();
+    try testing.expect(hasSub(&prog, "plane.drift.@self.k.flock"));
+    try testing.expect(hasSub(&prog, "row.age"));
+    // An ABSOLUTE plane path is refused in a row def exactly as in a world
+    // one: the plane declaration says which mount, never which Project.
+    try expectPlaneError(true,
+        \\def bad(x: number) on row =
+        \\  x | mul plane.defense.alerts | write row.pos
+        \\
+        \\row.vel | bad
+    , "defs close over nothing");
+    // …and a NAMED instance still dominates, on the row plane too.
+    try expectPlaneError(true,
+        \\def bad(x: number) on row =
+        \\  x | mul plane.drift.@roaches.k.flock | write row.pos
+        \\
+        \\row.vel | bad
+    , "names one specific instance");
+}
+
+test "plane: a row def called from a world statement is refused at the CALL SITE, naming both" {
+    // Recon §6's hazard, answered where it said it had to be. A row body may
+    // hold row words and `row.` paths; flattened into a world program they
+    // become nodes that are neither, and the plane runtime reaches a RUNTIME
+    // refusal — the exact leak `parseKernel` was invented to plug, because a
+    // node that never evaluates never refuses.
+    //
+    // Mutation that bites: delete the `tmpl.plane == .row and target.plane !=
+    // .row` arm at the head of `instantiate` — the row def splices into a
+    // world program and both refusals below go green.
+    try expectPlaneError(false,
+        \\def spin(x: number) on row =
+        \\  x | add row.age
+        \\
+        \\plane.v | spin | write plane.out
+    , "'spin' is declared `on row` and this is a world-plane statement");
+    // Nested: the caller is a world DEF, and the refusal names it rather than
+    // shrugging about "a statement".
+    try expectPlaneError(false,
+        \\def spin(x: number) on row =
+        \\  x | add row.age
+        \\
+        \\def outer(y: number) =
+        \\  y | spin
+        \\
+        \\plane.v | outer | write plane.out
+    , "this is def 'outer', which runs on the world plane");
+}
+
+test "plane: a WORLD def travels to the row — the asymmetry is the ruling" {
+    // The other direction is allowed, and deliberately. A world def closes
+    // over nothing but a relative `@self` path, which resolves at mount on
+    // either plane, so it TRAVELS — that is what closing over nothing buys
+    // it. Refusing it would make `on row` compulsory boilerplate on every
+    // kernel helper, and would buy no loudness: a world def holding something
+    // a kernel cannot run is refused BY NAME at `row.Runtime.mount`, in the
+    // same place the same op written inline would die.
+    //
+    // Mutation that bites: make the cross-plane check symmetric
+    // (`tmpl.plane != target.plane`) — the nested program below refuses.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\def dbl(x: number) =
+        \\  x | mul 2
+        \\
+        \\def spin(y: number) on row =
+        \\  y | dbl | add row.age | write row.pos
+        \\
+        \\row.vel | spin
+    );
+    defer prog.deinit();
+    try testing.expect(nodeIdOf(&prog, "spin1.dbl1.mul1") != null);
+    try testing.expect(hasSub(&prog, "row.age"));
+}
+
+test "plane: the caller's flag governs the TOP LEVEL only — one file, both planes" {
+    // Recon §3 point 4: `parseWith`'s flag stops meaning "the file's plane"
+    // and comes to mean "the plane of the top-level statements". A smaller
+    // and more honest claim, and the reason not one existing caller had to
+    // change. Gated in both directions in ONE file each.
+    //
+    // Mutation that bites: read the two plane-sensitive sites off the program
+    // target rather than the statement's target (`self.program_target.plane`
+    // in place of `target.plane` at the row-word bind) — the world def in the
+    // kernel file below stops refusing, and the row def in the world file
+    // below stops binding.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    // A kernel at top level, with a world def beside it. The def is NOT a
+    // kernel: its row word refuses.
+    var k = try parseKernelOk(testing.allocator, &reg,
+        \\def helper(x: number) =
+        \\  x | mul 2
+        \\
+        \\row.vel | gravity_like | helper | write row.pos
+    );
+    defer k.deinit();
+    try testing.expectEqual(graph.EvalPlane.row, k.plane);
+    // A world program at top level, with a ROW def beside it. The def parses
+    // — row word, row path and all — it simply cannot be called from here.
+    var w = try parseOk(testing.allocator, &reg,
+        \\def spin(x: number) on row =
+        \\  x | gravity_like | add row.age | write row.pos
+        \\
+        \\plane.v | mul 2 | write plane.out
+    );
+    defer w.deinit();
+    try testing.expectEqual(graph.EvalPlane.world, w.plane);
+    // The def flattened away with nothing to instantiate it, so the world
+    // program carries no row node at all — the mixed FILE is not a mixed
+    // GRAPH, which is the whole of recon §6's answer.
+    try testing.expect(!hasSub(&w, "row.age"));
+    try testing.expectEqual(@as(usize, 2), w.nodeCount());
+}
+
+test "plane: the `$chan at` desugar reads the DEF's plane, not the file's" {
+    // The second of the two sites the flag was ever read at (recon §1.2), and
+    // the one a per-def plane would otherwise have left behind: in a row
+    // context `$wind at row.pos` rewrites to the host's `hear`, and on the
+    // world plane the same tokens are the standpoint refusal.
+    //
+    // Mutation that bites: revert that site to a parser-wide flag — the first
+    // half then refuses (a world FILE) and the second half desugars (a kernel
+    // FILE), which is precisely backwards.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    const stub = struct {
+        fn f(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
+            return rill.Emit.none;
+        }
+        fn k(_: *rill.row.Ctx) rill.row.Error!void {}
+    };
+    _ = try reg.register(.{
+        .name = "hear",
+        .statics = &.{.{ .name = "channel", .kind = .channel }},
+        .inputs = &.{.{ .name = "at", .ty = rill.Tag.any, .kw = true }},
+        .outputs = &.{.{ .name = "out", .ty = rill.Tag.any }},
+        .help = "stub",
+        .routes = .anywhere,
+        .row = .{ .exact = true, .only = true, .eval = stub.k },
+        .eval = stub.f,
+    });
+    // A row def inside a WORLD file: the desugar fires.
+    var prog = try parseOk(testing.allocator, &reg,
+        \\def sniff() on row =
+        \\  $wind at row.pos | mul 2 | write row.vel
+        \\
+        \\plane.v | mul 2 | write plane.out
+    );
+    defer prog.deinit();
+    // Nothing instantiated it, so read the refusal-free parse as the claim
+    // and pin the desugar by instantiating it in a kernel instead.
+    var kern = try parseKernelOk(testing.allocator, &reg,
+        \\def sniff() on row =
+        \\  $wind at row.pos | mul 2 | write row.vel
+        \\
+        \\sniff
+    );
+    defer kern.deinit();
+    const hear_id = nodeIdOf(&kern, "sniff1.hear1") orelse {
+        std.debug.print("the `$wind at row.pos` desugar did not build a `hear` node\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqualStrings("$wind", kern.node(hear_id).statics[0].channel);
+    // A WORLD def inside a KERNEL file: the same tokens take the plane
+    // spelling of the refusal, because the def is not a kernel.
+    try expectPlaneError(true,
+        \\def sniff() =
+        \\  $wind at row.pos | mul 2
+        \\
+        \\row.vel | mul 2 | write row.pos
+    , "plane.sensors.<post>.$wind");
+}
+
+test "plane: a fold splicing `row.…` works in a row def and refuses in a world def, with provenance" {
+    // Christian's `using` ruling holds unchanged: `:name` gets NO rule of its
+    // own inside a def body — substitution happens and then the EXISTING
+    // checks run on the expanded tokens. This beat changes what those checks
+    // say, and the fold's provenance chain must still ride the refusal, on a
+    // rule that did not exist when the chain was built.
+    //
+    // Mutation that bites: drop `if (tok.fold != 0) self.noteProvenance(…)`
+    // from `fail` — the refusal names a `row.age` the author cannot find.
+    var reg = try rowWordRegistry(testing.allocator);
+    defer reg.deinit();
+    var prog = try parseKernelOk(testing.allocator, &reg,
+        \\using row.age as :age
+        \\
+        \\def spin(x: number) on row =
+        \\  x | add :age | write row.pos
+        \\
+        \\row.vel | spin
+    );
+    defer prog.deinit();
+    try testing.expect(hasSub(&prog, "row.age"));
+    try expectPlaneError(false,
+        \\using row.age as :age
+        \\
+        \\def bad(x: number) =
+        \\  x | add :age
+        \\
+        \\plane.v | bad | write plane.out
+    , "expanded from :age, bound at line 1");
+}
+
+test "plane: a plane word that is not a plane refuses, and so does a missing `on`" {
+    // Loud, never a guess, and the refusal lands on the thing that refused
+    // with the fix in it. `slate` gets its own message because someone who
+    // writes `on slate` has a real question — "where does `slate.x` live
+    // then?" — that deserves the real answer.
+    //
+    // Mutations that bite: replace the unknown-plane arm with a silent
+    // `plane = .world` (the first two assertions); delete the missing-`on`
+    // pointer (the last one falls back to "expected '='").
+    try expectPlaneError(false,
+        \\def spin(x: number) on spray =
+        \\  x | mul 2
+        \\
+        \\plane.v | spin | write plane.out
+    , "'spray' is not a plane");
+    try expectPlaneError(false,
+        \\def spin(x: number) on slate =
+        \\  x | mul 2
+        \\
+        \\plane.v | spin | write plane.out
+    , "`slate` is not a plane");
+    try expectPlaneError(false,
+        \\def spin(x: number) row =
+        \\  x | mul 2
+        \\
+        \\plane.v | spin | write plane.out
+    , "a plane declaration is introduced by `on`");
+}
+
+test "plane: the program's plane is recorded on the Program, and is NOT in the dump" {
+    // Recon D1, and the ruling on its open question: it does not serialize.
+    // A dump is of a MOUNTED graph, the plane is a property of the parse, and
+    // putting it on the wire would bump `fmt_version`, move G2's frozen hash
+    // and drag struple's Python reader in — for nothing a host cannot ask the
+    // parse for.
+    //
+    // Mutations that bite: default `Program.plane` to `.row` (the first two
+    // assertions); write the plane into `serialize.dump` (the third).
+    const src = "plane.a | mul 2 | write plane.b";
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var prog_w = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog_w.deinit();
+    var prog_r = try rill.parseKernel(testing.allocator, &reg, "p", src, &diag);
+    defer prog_r.deinit();
+    try testing.expectEqual(graph.EvalPlane.world, prog_w.plane);
+    try testing.expectEqual(graph.EvalPlane.row, prog_r.plane);
+    // …and the two spell themselves for a refusal that has to print one.
+    try testing.expectEqualStrings("plane", prog_w.plane.spelling());
+    try testing.expectEqualStrings("row", prog_r.plane.spelling());
+
+    // Two programs that differ ONLY in their plane dump byte-identically.
+    var mock_w = rill.MockPlane.init(testing.allocator);
+    defer mock_w.deinit();
+    try mock_w.putValue("plane.a", @as(i64, 3));
+    var rt_w = try rill.Runtime.mount(testing.allocator, &prog_w, mock_w.asPlane(), .{});
+    defer rt_w.deinit();
+    try rt_w.tick(.{});
+    const dump_w = try rill.dump(&rt_w, testing.allocator);
+    defer testing.allocator.free(dump_w);
+
+    var mock_r = rill.MockPlane.init(testing.allocator);
+    defer mock_r.deinit();
+    try mock_r.putValue("plane.a", @as(i64, 3));
+    var rt_r = try rill.Runtime.mount(testing.allocator, &prog_r, mock_r.asPlane(), .{});
+    defer rt_r.deinit();
+    try rt_r.tick(.{});
+    const dump_r = try rill.dump(&rt_r, testing.allocator);
+    defer testing.allocator.free(dump_r);
+
+    try testing.expectEqualSlices(u8, dump_w, dump_r);
+
+    // The honest consequence of not serializing it, gated so it is a decision
+    // and not a surprise: a RESTORED program cannot know what it was parsed
+    // as. `loadProgram` gives every dump the default, and a host that needs
+    // the plane after a restore has to remember it — which is the same thing
+    // it already does for `exports` and `warnings`.
+    var restored = try rill.loadProgram(testing.allocator, &reg, dump_r);
+    defer restored.deinit();
+    try testing.expectEqual(graph.EvalPlane.world, restored.plane);
+}
+
+// ---------------------------------------------------------------------------
+// THE NORTHSTAR — one `.rill` file as a self-contained package.
+//
+// This is what all five beats of the run were for, and it is the gate to read
+// first. Every piece landed in a different beat and this asserts they survive
+// TOGETHER, in one file, in one parse:
+//
+//   · `using … as :k`          — the fold (beat 1)
+//   · `export def` + defaults + ranges + `describe`  — the pack (beat 2)
+//   · a def ending in `write`  — the effect pass-through (beat 3)
+//   · `plane.…@self.…` in a def body — relative close-over (beat 4)
+//   · `on row` and `row.…`     — the plane declaration (this beat)
+//
+// It is deliberately NOT a working spindrift kernel: there is no `spawn` and
+// no row word, because those are HOST words and rill core does not have them.
+// What it proves is that the SHAPES compose. rill does not know what a kernel
+// is and this gate must not teach it.
+// ---------------------------------------------------------------------------
+
+const northstar_package =
+    \\using plane.drift.@self.k as :k
+    \\
+    \\export def roaches(rate = 60 (0..500), flock = -0.03 (-0.1..0.1)) =
+    \\    lfo sine 7s | mul 0.05 | sub 0.03 | write :k.flock
+    \\
+    \\describe roaches
+    \\  "Cockroaches milling on a floor, scattering and regrouping."
+    \\  rate  "how many rows are born each second"
+    \\  flock "cohesion: negative gathers, positive scatters"
+    \\
+    \\export def scuttle() on row =
+    \\    row.seed | mul 0.025 | add 0.03 | write row.size
+    \\
+    \\describe scuttle
+    \\  "Each row's size settles from the seed it was born with."
+    \\
+;
+
+test "NORTHSTAR: one file carries a fold, a described pack, an @self driver and a row def" {
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+
+    // --- it parses, as a WORLD program, and the pack survives whole --------
+    var prog = try parseOk(testing.allocator, &reg, northstar_package ++ "\nroaches\n");
+    defer prog.deinit();
+    try testing.expectEqual(graph.EvalPlane.world, prog.plane);
+    try testing.expectEqual(@as(usize, 2), prog.exports.items.len);
+
+    const r = prog.exported("roaches") orelse {
+        std.debug.print("'roaches' is not on Program.exports\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    try testing.expectEqualStrings("Cockroaches milling on a floor, scattering and regrouping.", r.doc);
+    try testing.expectEqual(@as(usize, 2), r.ports.len);
+    try testing.expectEqualStrings("rate", r.ports[0].name);
+    try testing.expectEqual(@as(f64, 60), types.asNumber(r.ports[0].default.?).?);
+    try testing.expectEqual(@as(f64, 0), types.asNumber(r.ports[0].min.?).?);
+    try testing.expectEqual(@as(f64, 500), types.asNumber(r.ports[0].max.?).?);
+    try testing.expectEqualStrings("how many rows are born each second", r.ports[0].doc);
+    try testing.expectEqualStrings("flock", r.ports[1].name);
+    try testing.expectEqual(@as(f64, -0.03), types.asNumber(r.ports[1].default.?).?);
+    try testing.expectEqual(@as(f64, -0.1), types.asNumber(r.ports[1].min.?).?);
+    try testing.expectEqualStrings("cohesion: negative gathers, positive scatters", r.ports[1].doc);
+
+    // --- the planes are recorded, and they are DISTINCT -------------------
+    const s = prog.exported("scuttle") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(graph.EvalPlane.world, r.plane);
+    try testing.expectEqual(graph.EvalPlane.row, s.plane);
+    try testing.expectEqual(@as(usize, 0), s.ports.len);
+    try testing.expectEqualStrings("Each row's size settles from the seed it was born with.", s.doc);
+
+    // --- the @self fold folded, and the world-plane driver drives ---------
+    // `:k` spliced `plane.drift.@self.k`, `.flock` continued it, and the
+    // whole path landed on `write`'s target static inside a def body — three
+    // beats' rules stacked on one line.
+    try testing.expect(hasWrite(&prog, "plane.drift.@self.k.flock"));
+    try testing.expect(nodeIdOf(&prog, "roaches1.write1") != null);
+
+    // --- and the row def reaches the row, when a row statement calls it ---
+    var kern = try parseKernelOk(testing.allocator, &reg, northstar_package ++ "\nscuttle\n");
+    defer kern.deinit();
+    try testing.expectEqual(graph.EvalPlane.row, kern.plane);
+    try testing.expect(hasSub(&kern, "row.seed"));
+    try testing.expect(hasWrite(&kern, "row.size"));
+    // (`mul2`, not `mul1`: the op counter is program-wide and `roaches`
+    // already spent `mul1` — which is itself the receipt that both defs were
+    // parsed out of one file.)
+    try testing.expect(nodeIdOf(&kern, "scuttle1.mul2") != null);
+    // The exports are the same two, whichever door the file came through.
+    try testing.expectEqual(@as(usize, 2), kern.exports.items.len);
+    try testing.expectEqual(graph.EvalPlane.row, (kern.exported("scuttle") orelse return error.TestUnexpectedResult).plane);
+
+    // --- the row def cannot be called from the world half of the file -----
+    var diag = rill.Diag{};
+    try testing.expectError(error.Parse, rill.parse(testing.allocator, &reg, "p", northstar_package ++ "\nscuttle\n", &diag));
+    try testing.expect(std.mem.indexOf(u8, diag.msg(), "declared `on row`") != null);
+
+    // --- and the parity gate is still armed over the pack -----------------
+    // An undescribed port is refused by name, `on row` or not — visibility is
+    // a different question from reach, and the plane declaration did not
+    // quietly disarm the burden the parameter-pack beat put on the author.
+    try expectParseError(
+        \\export def roaches(rate = 60 (0..500), flock = -0.03) on row =
+        \\  rate | mul flock | write row.size
+        \\
+        \\describe roaches
+        \\  "Cockroaches milling on a floor."
+        \\  rate "how many rows are born each second"
+    , "port 'flock' has no description");
 }

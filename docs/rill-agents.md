@@ -312,6 +312,23 @@ notification that there will be no more.
   exported definition may also **drive its own instance's knob**: a `@self`
   plane path is sayable in a def body, so one definition can declare a
   parameter, document it, and write it, without the host wiring anything.
+- **A definition declares its PLANE, and the pack carries it** (2026-09-08).
+  `def spin(x) on row = …`; undeclared means the world plane. Each
+  `Program.exports` entry carries the resolved plane, and `Program.plane`
+  carries the plane of the top-level statements, so a host enumerating a
+  one-file package can tell which exports it may mount on a spray from which
+  drive the world — instead of scanning subscriptions for a `row.` prefix.
+  **Neither is serialized**: a dump is of a mounted graph, the plane is a
+  property of the parse, and putting it on the wire would bump `fmt_version`
+  for something the parse already answers. A restored program therefore
+  reports the default plane, exactly as it reports no `exports` and no
+  `warnings` — a host that needs the plane after a restore remembers it.
+  Note the cost this ruling accepts rather than refutes: a host that keeps
+  its plane and row registries PARTITIONED (matryoshka does) gets that
+  separation for free today, and a one-file package holding both kinds of
+  definition needs one registry with both word sets — which makes every
+  core-vs-host name collision a live risk on a surface that has been safely
+  partitioned until now. Known, deferred, and not rill's to fix.
 - **Qualified operator identity (noted, not designed):** when two packs both
   ship a `rivet`, the registry needs world-qualified operator names —
   `org.foundation42.mesh/rivet` — with short names resolved per-program via

@@ -25,7 +25,18 @@
 //!   through ports — but a path whose entity segment is `@self` is allowed
 //!   (2026-09-08, `checkDefReach`). The rule is portability, not asceticism:
 //!   `@self` resolves at MOUNT, per instance, so a def carrying one still
-//!   moves between Projects. `row.…` and `slate.…` stay refused whole.
+//!   moves between Projects. `row.…` and `slate.…` are relative in exactly
+//!   the same way — whichever row is being swept — so a def that declares
+//!   `on row` may name them, and one that does not may not. One principle,
+//!   three relative stores; an absolute path and a named `@instance` are
+//!   still refused everywhere.
+//! - A definition declares its PLANE: `def spin(x) on row = …` (2026-09-08,
+//!   §3.9). Contextual after the signature, reserving nothing; undeclared
+//!   means the world plane. `parse`/`parseKernel`'s flag survives with a
+//!   smaller and more honest meaning — the plane of the TOP-LEVEL statements,
+//!   not of the file. A row def may only be instantiated from a row context;
+//!   a world def travels to either, because that is what closing over nothing
+//!   buys it.
 //! - A parenthesized opcall in argument position — `where (= 0)`,
 //!   `partition (< 20) hp` — is a predicate *section*: it becomes an ordinary
 //!   node whose primary input mirrors the consumer's primary input, and its
@@ -470,6 +481,16 @@ const Template = struct {
     described: bool = false,
     /// The name token, so the end-of-parse parity refusal has a caret.
     name_tok: Token,
+    /// The plane this definition declared with `on` (2026-09-08). Undeclared
+    /// is `.world`: loud, no ambiguity, and nothing in any corpus to break —
+    /// there was not one `def` in any `.rill` file when this shipped. The
+    /// alternative readings were both refused. INHERITING the caller's flag
+    /// would re-import the ambient decision the declaration exists to remove;
+    /// plane-AGNOSTIC (resolved per splice) is not a template at all, because
+    /// both readers run while the BODY is parsed and a body is parsed once —
+    /// a def would have to keep its tokens and re-parse per splice, which is
+    /// what `using` already is.
+    plane: graph.EvalPlane = .world,
 };
 
 // ---------------------------------------------------------------------------
@@ -485,6 +506,24 @@ const Target = struct {
     slots: *std.ArrayListUnmanaged(graph.Slot),
     names: std.StringArrayHashMapUnmanaged(Source) = .empty,
     template: ?*Template = null, // null = the program itself
+    /// Which evaluation plane the statements landing here run on (2026-09-08).
+    /// It lives on the TARGET rather than on the Parser because that is the
+    /// granularity the language now has: the program's target carries the
+    /// caller's flag (`parse` / `parseKernel`), and a def's template carries
+    /// what the def declared with `on`. Two readers, both of which already
+    /// held a `*Target` before the field existed:
+    ///
+    ///   · the `$chan at <pos>` desugar — in a row context `$wind at row.pos`
+    ///     rewrites to the host's `hear`;
+    ///   · the row-word bind — `OpDef.row.only` binds only in a row context,
+    ///     and refuses by name anywhere else.
+    ///
+    /// Structural rather than runtime, and that is load-bearing: `fails_mount`
+    /// only fires if the node evaluates at tick 0, and `plane.x | gravity`
+    /// with an unfed `plane.x` never does — it mounted cleanly (spindrift beat
+    /// 1, ledger). The parser is the place that knows what kind of program,
+    /// and now what kind of DEFINITION, it is reading.
+    plane: graph.EvalPlane = .world,
 };
 
 /// A bound fold: tokens, unparsed, plus where the binding was written so a
@@ -537,12 +576,18 @@ pub fn parse(
     source: []const u8,
     diag: *Diag,
 ) ParseError!Program {
-    return parseWith(gpa, reg, program_name, source, diag, false);
+    return parseWith(gpa, reg, program_name, source, diag, .world);
 }
 
 /// Parse a KERNEL — a rill mounted on a spray (spec §3.16). Same grammar,
 /// one difference: row words bind. A host mounts the result with
 /// `row.Runtime.mount`, which is where non-row-legal ops are refused.
+///
+/// Since 2026-09-08 this sets the plane of the TOP-LEVEL statements, not of
+/// the file: a `def … on row` inside a `parse`d program is a row def, and an
+/// undeclared def in here is still a world def. A smaller and more honest
+/// claim than "this file is a kernel", and the reason the declaration could
+/// be added without touching a single caller.
 pub fn parseKernel(
     gpa: std.mem.Allocator,
     reg: *registry.Registry,
@@ -550,7 +595,7 @@ pub fn parseKernel(
     source: []const u8,
     diag: *Diag,
 ) ParseError!Program {
-    return parseWith(gpa, reg, program_name, source, diag, true);
+    return parseWith(gpa, reg, program_name, source, diag, .row);
 }
 
 fn parseWith(
@@ -559,10 +604,11 @@ fn parseWith(
     program_name: []const u8,
     source: []const u8,
     diag: *Diag,
-    rows: bool,
+    top: graph.EvalPlane,
 ) ParseError!Program {
     var prog = try Program.init(gpa, reg, program_name);
     errdefer prog.deinit();
+    prog.plane = top;
 
     var p = Parser{
         .prog = &prog,
@@ -570,9 +616,8 @@ fn parseWith(
         .diag = diag,
         .src = source,
         .toks = try tokenize(prog.a(), source, diag),
-        .rows = rows,
     };
-    p.program_target = .{ .nodes = &prog.nodes, .slots = &prog.slots };
+    p.program_target = .{ .nodes = &prog.nodes, .slots = &prog.slots, .plane = top };
     try p.parseProgram();
 
     // Publish `as` names on the program (sources that are wires only — the
@@ -616,14 +661,6 @@ const Parser = struct {
     /// `}` closes an argument list only inside a block, and a tail port's
     /// end-of-line capture would otherwise swallow the block's own brace.
     block_depth: u32 = 0,
-    /// True when parsing a KERNEL — a rill mounted on a spray (spec §3.16).
-    /// The one thing it changes: a row word (`OpDef.row.only`) binds only
-    /// here, and refuses by name anywhere else. Structural rather than
-    /// runtime, because `fails_mount` only fires if the node evaluates at
-    /// tick 0, and `plane.x | gravity` with an unfed `plane.x` never does —
-    /// it mounted cleanly (spindrift beat 1, ledger). The parser is the
-    /// place that knows what kind of program it is reading.
-    rows: bool = false,
 
     fn a(self: *Parser) std.mem.Allocator {
         return self.prog.a();
@@ -833,6 +870,10 @@ const Parser = struct {
                 .name = tmpl.name,
                 .doc = tmpl.doc,
                 .ports = ports,
+                // The declared plane rides the pack (2026-09-08): a host
+                // enumerating a one-file package has to be able to tell which
+                // exports it may mount on a spray from which drive the world.
+                .plane = tmpl.plane,
             });
         }
     }
@@ -877,12 +918,17 @@ const Parser = struct {
         return out.items;
     }
 
-    /// defstmt := ["export"] "def" name "(" port* ")" "=" body
+    /// defstmt := ["export"] "def" name "(" port* ")" ["on" plane] "=" body
     /// port    := name [":" type] ["=" literal] ["(" literal ".." literal ")"]
+    /// plane   := "plane" | "row"
     ///
     /// The pack (2026-09-08) is Blade3D's, transposed: a default makes the
     /// port optional at the call site, and a range is a SANE RANGE for a
     /// generated widget and for a reader — advice, never a constraint.
+    ///
+    /// `on <plane>` (2026-09-08) is the definition's own evaluation plane.
+    /// Undeclared means the world. See `Template.plane` for the default's
+    /// argument and `checkDefReach` for what a row def may then reach.
     fn parseDef(self: *Parser, export_tok: ?Token) ParseError!void {
         const kw_tok = self.next(); // "def"
         // The dedent that ends the body is measured from the STATEMENT HEAD,
@@ -981,8 +1027,50 @@ const Parser = struct {
                 return self.fail(sep, "expected ',' or ')' in def signature", .{});
             }
         }
+        // `on <plane>` — the definition declares which evaluation plane it is
+        // for (2026-09-08). CONTEXTUAL, and that is the whole spelling
+        // argument: the parser is at a known point (after the `)`, before the
+        // `=`), so `on` reserves nothing globally — the same trade the
+        // parameter pack took for `(0..500)`, and the trade `namespaces.md`
+        // §C refuses for a globally reserved `in`. The plane words cost
+        // nothing either: `plane` and `row` are already reserved.
+        //
+        // Rejected: `row def spin(x) = …`, a prefix like `export`. Cheaper
+        // still, and it loses on COMPOSITION — `export row def` and
+        // `row export def` are two orders for one thing, and `export` was
+        // already ruled to sit at the statement head.
+        // Rejected: `def row.spin(x) = …` — `namespaces.md` §C refuses dotted
+        // operator names outright, and that is one.
+        // Rejected: `def spin(x): row = …` — the colon has four meanings
+        // already and the port-type one lives inside those very parens.
+        var plane: graph.EvalPlane = .world;
+        if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "on")) {
+            _ = self.next();
+            const pl = self.next();
+            if (pl.kind == .name and std.mem.eql(u8, pl.text, "row")) {
+                plane = .row;
+            } else if (pl.kind == .name and std.mem.eql(u8, pl.text, "plane")) {
+                plane = .world;
+            } else if (pl.kind == .name and std.mem.eql(u8, pl.text, "slate")) {
+                // The third path head is not a third plane, and someone who
+                // writes this has a real question ("where does `slate.x` live
+                // then?") that deserves the real answer.
+                return self.fail(pl, "def '{s}': `slate` is not a plane — it is a row's own register file, said and read within one row of one tick. A def that reads `slate.…` is a row def: write `on row`", .{name_tok.text});
+            } else {
+                return self.fail(pl, "def '{s}': '{s}' is not a plane — rill has two, `on plane` (the world: a store of paths, one value per path per tick) and `on row` (once per row of a population)", .{ name_tok.text, pl.text });
+            }
+        }
+
         const eq = self.next();
-        if (eq.kind != .sym or !std.mem.eql(u8, eq.text, "=")) return self.fail(eq, "expected '=' after def signature", .{});
+        if (eq.kind != .sym or !std.mem.eql(u8, eq.text, "=")) {
+            // The near miss is worth pointing at: the plane word without its
+            // `on` is the one slip this grammar invites, and "expected '='"
+            // would send the author looking for a typo that is not there.
+            if (eq.kind == .name and (std.mem.eql(u8, eq.text, "row") or std.mem.eql(u8, eq.text, "plane") or std.mem.eql(u8, eq.text, "slate"))) {
+                return self.fail(eq, "def '{s}': a plane declaration is introduced by `on` — write `def {s}(…) on {s} = …`", .{ name_tok.text, name_tok.text, eq.text });
+            }
+            return self.fail(eq, "expected '=' after def signature", .{});
+        }
 
         const tmpl = try self.a().create(Template);
         tmpl.* = .{
@@ -990,9 +1078,10 @@ const Parser = struct {
             .ports = ports.items,
             .exported = exported,
             .name_tok = name_tok,
+            .plane = plane,
         };
 
-        var target = Target{ .nodes = &tmpl.nodes, .slots = &tmpl.slots, .template = tmpl };
+        var target = Target{ .nodes = &tmpl.nodes, .slots = &tmpl.slots, .template = tmpl, .plane = plane };
         for (tmpl.ports, 0..) |pd, i| {
             try target.names.put(self.a(), pd.name, .{ .port = @intCast(i) });
         }
@@ -1620,7 +1709,12 @@ const Parser = struct {
                     // static exactly as it binds to `cast`'s. A BARE `$chan`
                     // in a kernel stays the same refusal with the kernel's
                     // own spelling in the message.
-                    if (self.rows) {
+                    //
+                    // Read off the TARGET since 2026-09-08, not off the
+                    // parser: a `def … on row` body is a row context inside a
+                    // `parse`d program, and an undeclared def inside a kernel
+                    // is not one.
+                    if (target.plane == .row) {
                         const after = if (self.pos + 1 < self.toks.len) self.toks[self.pos + 1] else t;
                         const reads = after.kind == .name and (std.mem.eql(u8, after.text, "at") or std.mem.eql(u8, after.text, "grad"));
                         if (reads) {
@@ -1823,11 +1917,31 @@ const Parser = struct {
     /// entitled to have an opinion about. It permits the spelling; resolution
     /// stays the mount's business.
     ///
-    /// The exemption belongs to the `plane` head alone. `row` and `slate` are
-    /// the MOUNT's own stores: relative already, with no entity room to name,
-    /// so an `@` segment there would be a spelling rill had to keep working
-    /// for no customer. They keep the old refusal, whose advice — pass it in
-    /// through a port — is the one that works there.
+    /// **One principle, two relative stores** (2026-09-08, the plane beat).
+    /// `row.age` and `slate.contact` are relative in EXACTLY the sense
+    /// `@self` is: `@self` resolves to whichever instance mounts the def,
+    /// `row.…` resolves to whichever row is being swept, and `slate.…` to
+    /// whichever row of whichever tick. None of the three names one Project's
+    /// plane, so none of them stops a def travelling — which is the whole and
+    /// only thing the close-over ban protects. This is therefore not a second
+    /// exemption; it is the same rule applied to the other two relative
+    /// stores.
+    ///
+    /// What makes it SAFE is the declaration, and only the declaration. Until
+    /// a def could say `on row`, `row.age` in one would have meant something
+    /// at some call sites and nothing at others — which is why the `@self`
+    /// beat left it refused, and said so in the refusal's own words. So the
+    /// gate is the def's plane: a `row` def may name `row.` and `slate.`, a
+    /// world def may not, and the refusal names the fix (`on row`) rather
+    /// than only the rule.
+    ///
+    /// `slate` was ruled deliberately rather than swept along. It lives
+    /// entirely on the row plane (`row.zig`'s `SLATE`; the world evaluator
+    /// has no slate at all), it is per-row and per-tick and pinned to
+    /// nothing, and the one thing that could go wrong — a name nobody says,
+    /// or one said too late — is refused LOUDLY by name at mount
+    /// (`error.SlateUnsaid`, `error.SlateOutOfOrder`), in the same place a
+    /// mistyped row field dies. The reasoning carries, so it is allowed.
     ///
     /// Called from `parsePlaneRef` and nowhere else: one door, one message. A
     /// fold reaches it too, and then `fail` names the fold — Christian's
@@ -1837,7 +1951,8 @@ const Parser = struct {
     fn checkDefReach(self: *Parser, target: *Target, head: Token, path: []const u8) ParseError!void {
         const tmpl = target.template orelse return;
         if (!std.mem.eql(u8, head.text, "plane")) {
-            return self.fail(head, "'{s}': defs close over nothing — pass it in through a port of '{s}'. `@self` relativises a `plane.` path; `{s}` is the mount's own store and has no entity segment to relativise", .{ path, tmpl.name, head.text });
+            if (target.plane == .row) return;
+            return self.fail(head, "'{s}': defs close over nothing, except relatively — and `{s}` is relative only on the row plane, which def '{s}' does not run on. Declare it `def {s}(…) on row = …`, or pass the value in through a port", .{ path, head.text, tmpl.name, tmpl.name });
         }
         switch (reachOf(path)) {
             .relative => {},
@@ -2149,7 +2264,18 @@ const Parser = struct {
             return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
         };
         const def = self.reg.get(op_id);
-        if (def.row.only and !self.rows) {
+        // Read off the TARGET since 2026-09-08: a row word binds inside a
+        // `def … on row` body wherever that def is written, and does NOT bind
+        // inside an undeclared def in a kernel file.
+        if (def.row.only and target.plane != .row) {
+            // The FIX depends on where the word was written, so the refusal
+            // says which one. Inside a world def the answer is a declaration
+            // one line up; at the top level it is still the mount. The leading
+            // clause is identical in both because spindrift's three
+            // plane-parse refusals assert it (`tests.zig`, G2).
+            if (target.template) |tmpl| {
+                return self.fail(op_tok, "'{s}' is a row word — it means something on a spray, not on the plane; def '{s}' runs on the world plane, so declare it `def {s}(…) on row = …`", .{ def.name, tmpl.name, tmpl.name });
+            }
             return self.fail(op_tok, "'{s}' is a row word — it means something on a spray, not on the plane; mount it in a kernel", .{def.name});
         }
         if (def.variadic) return self.fail(op_tok, "'{s}' cannot be called directly", .{op_name});
@@ -3035,6 +3161,32 @@ const Parser = struct {
     /// with the caller's bindings. Internal `as` names become addressable
     /// slot paths under the instance for free.
     fn instantiate(self: *Parser, target: *Target, tmpl: *Template, op_tok: Token, primary: ?Source) ParseError!OpResult {
+        // A ROW def may only be spliced into a row context, and the refusal
+        // is here — at the call site, at PARSE — because it has to be. A row
+        // body may hold row words and `row.…` paths; flattened into a world
+        // program they become nodes that are neither, which the plane runtime
+        // will try to evaluate and reach a RUNTIME refusal. That is precisely
+        // the leak `parseKernel` was invented to plug (a `fails_mount` word
+        // that never evaluates never refuses — spindrift beat 1, found by a
+        // gate in another repo).
+        //
+        // The other direction is ALLOWED, and the asymmetry is the ruling
+        // rather than an oversight. A world def closes over nothing but a
+        // relative `@self` path, which resolves at mount on either plane, so
+        // it TRAVELS — which is what the close-over rule's portability is
+        // for. `def dbl(x) = x | mul 2` called from a row statement has
+        // always worked and still does; a world def holding something a
+        // kernel cannot run is refused by name at `row.Runtime.mount`, in the
+        // same place the same op written inline would die. Refusing it here
+        // would make `on row` compulsory boilerplate on every kernel helper
+        // and would buy no loudness that does not already exist.
+        if (tmpl.plane == .row and target.plane != .row) {
+            const where = if (target.template) |outer|
+                try std.fmt.allocPrint(self.a(), "def '{s}', which runs on the world plane", .{outer.name})
+            else
+                "a world-plane statement";
+            return self.fail(op_tok, "'{s}' is declared `on row` and this is {s} — a row def reaches the row being swept, and the world has no row. Call it from a kernel, or declare the caller `on row` too", .{ tmpl.name, where });
+        }
         var args = std.ArrayListUnmanaged(Arg).empty;
         try self.parseArgs(target, &args);
 

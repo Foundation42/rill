@@ -3790,3 +3790,297 @@ about rill and not about the recon:
   words, there are fifteen (`spindrift/src/words.zig:41`, the `rowOnly`
   helper). Recorded and NOT changed: that file is instructions to agents, and
   it gets changed on purpose by its owner, not as a side effect of a beat.
+
+
+## A definition declares its plane, and reaches the row, 2026-09-08
+
+**What was decided.** A definition says which of rill's two evaluation planes
+it runs on, between the signature and the `=`:
+
+```rill
+def spin(x) on row = x | mul row.age | write row.size
+export def roaches(rate = 60 (0..500)) on row = …
+def helper(x)      = x | mul 2            // undeclared: the world plane
+```
+
+`defstmt := ["export"] "def" name "(" port* ")" ["on" plane] "=" body`, with
+`plane := "plane" | "row"`. Christian read `docs/cc-recon-def-plane.md` — the
+recon written in the previous beat, with its own strongest counter-argument at
+§9 — and ruled **take the recommendation**, with the framing that decided the
+scope: *"We should aim to get it going so it is working and in front of us.
+Once we have that we'll need to check how it feels."*
+
+### The coupled ruling, which is the half that matters
+
+The recon's §2 measured the thing that makes the declaration worth having: **a
+def in a kernel could not touch a single `row.…` field**, because the
+close-over rule refused it. *"A row def is currently a def that cannot reach
+the row."* A declared plane on its own would have bought a `row` def the right
+to call `gravity` and read `@self` broadcasts and still not read `row.age`.
+
+So `row.…` and `slate.…` are now sayable inside a `row`-declared def. **And
+this is the EXISTING rule, not a new exemption.** The previous beat allowed
+`plane.drift.@self.k.flock` in a def body because `@self` is *relative* — it
+resolves to whichever instance mounts the def, so the def travels intact.
+`row.age` is relative in exactly the same way: it resolves to whichever row is
+being swept. Neither names one Project's plane, which is the only thing the ban
+was ever protecting. **One principle, three relative stores.** An absolute
+`plane.defense.alerts` and a named `@roaches` stay refused everywhere,
+including inside a row def — gated, because "the exemption widened" and "the
+exemption moved" are different claims.
+
+What makes it SAFE is the declaration and only the declaration. Until a def
+could say `on row`, `row.age` in one would have meant something at some call
+sites and nothing at others — which is precisely why the `@self` beat left it
+refused, and said so in the refusal's own words. A world def therefore still
+refuses it, and the refusal carries the fix:
+
+> `'row.age': defs close over nothing, except relatively — and `row` is
+> relative only on the row plane, which def 'bad' does not run on. Declare it
+> `def bad(…) on row = …`, or pass the value in through a port`
+
+### `slate` was decided, not swept along
+
+The brief asked for a deliberate answer either way. **Allowed, in a row def.**
+The slate lives entirely on the row plane (`row.zig`'s `SLATE`; the world
+evaluator has no slate at all), it is per-row and per-tick, and it pins a def
+to nothing — as relative as `row.` and as `@self`. The one thing that could go
+wrong, a name nobody says or one said too late, is refused **loudly by name at
+mount** (`error.SlateUnsaid`, `error.SlateOutOfOrder`), in the same place a
+mistyped row field dies. The reasoning carries, so it carries. In a world def
+it keeps the refusal, with the same one message, because it is the same rule.
+
+### The spelling, and the three that lost
+
+`on` is **contextual**: the parser looks for it at exactly one point, after the
+`)` and before the `=`, so it reserves nothing globally — the same trade the
+parameter pack took for `(0..500)`, and the trade `namespaces.md` §C refuses
+for a globally reserved word. A gate registers an operator *called* `on` and
+pipes into it, so "reserves nothing" is executed rather than asserted. The two
+plane words cost nothing either: `plane` and `row` were already reserved as
+path heads. **The reserved list did not move this beat.**
+
+- **`row def spin(x) = …`**, a prefix like `export`. Rejected. Cheaper — no new
+  position to parse at all — and it loses on COMPOSITION: `export row def` and
+  `row export def` are two orders for one thing, and the parameter-pack beat
+  already ruled that `export` sits at the statement head.
+- **`def row.spin(x) = …`**. Rejected: `namespaces.md` §C refuses dotted
+  operator names outright, and that is one.
+- **`def spin(x): row = …`**. Rejected: the colon has four meanings already,
+  the `using` beat's adjacency rule exists to keep them apart, and the
+  port-type colon lives inside those very parens.
+
+**The world plane is spelled `plane`, not `world`.** `plane.…` is how the world
+store is written in every path in the language, and a third name for it would
+have been a word with one customer. The Zig tag stays `.world` so that
+`prog.plane == .world` reads as a sentence, and `EvalPlane.spelling()` is the
+one place the two meet — every refusal prints through it.
+
+**The type is `EvalPlane`, and `Plane` was the rejected name.** `rill.Plane` has
+been the host STORE's vtable since the first week — the thing a Runtime reads
+and writes — and two things called `Plane` one namespace apart on the public
+surface is a trap for every host that reads both. Found by reading `rill.zig`'s
+export list after the first draft had already shipped the collision.
+
+### The default, and the two readings that lost
+
+Undeclared means **the world plane** (recon option (ii)). Nothing in any corpus
+breaks: there was not one `def` in any `.rill` file across the six sibling
+repos when this shipped, the `use` situation exactly.
+
+- **(i) inherit the caller's flag** re-imports the ambient decision the
+  declaration exists to remove — an undeclared def would still be whatever the
+  host said. Gated as a mutation: seeding `parseDef`'s plane from
+  `self.program_target.plane` makes a row word bind inside an undeclared def in
+  a kernel file, and the gate goes down.
+- **(iii) plane-AGNOSTIC, resolved per splice** is the most rill-ish reading
+  and is **not implementable as a template**: both plane-sensitive reads happen
+  while the BODY is parsed, and a body is parsed once. A def would have to keep
+  its tokens and re-parse per splice — which is what `using` already is. Named
+  in the manual as "that is what a fold is for", not built.
+
+### The asymmetry, which is a ruling and not an oversight
+
+A **row def may only be instantiated from a row context**; calling one from a
+world statement, or from a world def, is a parse refusal at the CALL SITE
+naming both:
+
+> `'spin' is declared `on row` and this is a world-plane statement — a row def
+> reaches the row being swept, and the world has no row. Call it from a kernel,
+> or declare the caller `on row` too`
+
+> `'spin' is declared `on row` and this is def 'outer', which runs on the world
+> plane — …`
+
+It has to be a *parse* refusal, and recon §6 is why: a row body flattened into
+a world program leaves row-only nodes in a graph that is neither, which the
+plane runtime reaches only at RUNTIME — the exact leak `parseKernel` was
+invented to plug, found by a gate in a sibling repo when `plane.x | gravity`
+with an unfed `plane.x` mounted cleanly.
+
+A **world def may be called from either plane**, and that is the ruling. A
+world def closes over nothing but a relative path, which resolves at mount on
+either plane, so it TRAVELS — that is what closing over nothing buys it.
+`def dbl(x) = x | mul 2` called from a row statement has always worked (recon
+§2 measured it) and still does; a world def holding something a kernel cannot
+run is refused by name at `row.Runtime.mount`, in the same place the same
+operator written inline would die. Making the check symmetric would have made
+`on row` compulsory boilerplate on every kernel helper and bought no loudness
+that did not already exist — the mutation that does it is gated.
+
+### What moved in the parser, and what the recon got right
+
+Exactly what §3 predicted. `rows: bool` left `Parser` and became
+`plane: graph.Plane` on **`Target`** — the granularity the language now has:
+the program's target carries the caller's flag, a def's template carries what
+the def declared. Both readers already held a `*Target`, so both were a
+one-word edit:
+
+- the `$chan at <pos>` desugar (`parseExpr`) — `$wind at row.pos` rewrites to
+  the host's `hear` in a row context, and takes the plane spelling of the
+  standpoint refusal otherwise;
+- the row-word bind (`parseOpcallCarrying`) — `OpDef.row.only` binds only in a
+  row context.
+
+**`parseWith`'s flag survives with a smaller and more honest meaning**: the
+plane of the TOP-LEVEL statements rather than of the file. Not one existing
+caller changed. A file may now hold both kinds of definition — which is what
+makes the one-file package possible — while any single GRAPH is still all one
+plane, because a def contributes nodes only where it is instantiated.
+
+The second reader's refusal gained a second wording, and only in a def:
+
+> `'gravity' is a row word — it means something on a spray, not on the plane;
+> def 'bad' runs on the world plane, so declare it `def bad(…) on row = …``
+
+The **leading clause is byte-identical** to the top-level one, because
+spindrift's G2 asserts it on three programs (`plane.x | gravity`, `spawn`,
+`every 1s | also { perish }`). rill's own gate now pins the top-level tail
+("mount it in a kernel") as the negative control.
+
+Two refusals with nowhere else to live: `on slate` gets its own message,
+because someone who writes it has a real question — *"`slate` is not a plane —
+it is a row's own register file, said and read within one row of one tick. A
+def that reads `slate.…` is a row def: write `on row`"* — and `def f(x) row =
+…` (the plane word without its `on`) points instead of shrugging "expected
+'='".
+
+### D1, and the ruling on its open question
+
+`Program.plane` records the resolved plane, and each `Program.exports` entry
+carries the plane its definition declared — a host enumerating a one-file
+package has to be able to tell which exports it may mount on a spray from
+which drive the world, and that is the only way the northstar's "the planes are
+recorded distinctly" is observable at all.
+
+**It does not serialize**, per the recon's argument and the brief's ruling: a
+dump is of a mounted graph, the plane is a property of the parse, and putting
+it on the wire would bump `fmt_version`, move G2's frozen hash and drag
+struple's Python reader into the blast radius for something the parse already
+answers. G2's hash did not move this beat.
+
+The honest consequence is gated rather than left to be discovered: **a restored
+program cannot know what it was parsed as.** `loadProgram` gives every dump the
+default, exactly as it gives every dump no `exports` and no `warnings`, and a
+host that needs the plane after a restore remembers it. That assertion is also
+what makes the mutation `Program.plane = .row` bite — without it the default is
+dead code, because `parseWith` always assigns.
+
+### `-Dtest-filter`, wired at last
+
+`build.zig` gained `-Dtest-filter=<substring>`. Two ledger entries on
+2026-09-08 recorded the same hazard from opposite sides — a mutation biting a
+DIFFERENT gate than the one it was aimed at and reading as BITTEN from a
+suite-wide count, and a panicking mutation taking every later gate with it —
+and both named this flag as the fix; `CLAUDE.md` already said to add it rather
+than skip the suite. This beat's harness runs one filtered suite per mutation
+and reports a verdict about ONE gate.
+
+It earned its keep immediately. A first pass with a suite-wide harness reported
+**three survivors — M8, M9 and M12b — that were not survivors at all**: zig's
+test runner names only some failures in its output, so a harness scraping
+`error: '…' failed` lines under-reports which gates went down, and the
+attribution was wrong in the *safe*-looking direction. The filtered rerun shows
+all three biting their targets. The trap the filter brings with it is recorded
+in `build.zig` and guarded in the harness: **a filter matching nothing passes
+vacuously**, so every target is checked against the clean tree first.
+
+### Gates and mutations
+
+Fifteen gates, **eighteen mutations, all bitten, each attributed to the ONE
+gate it was aimed at.**
+
+| gate | mutation that bites it |
+|---|---|
+| `on row` parses after the signature, composes with `export`, reserves no word | rename the `on` arm's keyword; rename the `on plane` arm's keyword |
+| an UNDECLARED def is a world def, in a kernel file too | seed `parseDef`'s plane from `self.program_target.plane` (option (i)); replace the def-body row-word refusal with the top-level one (`if (@as(?*Template, null))`) |
+| a `row` def reaches the row — reads, writes, and the path survives the splice | delete `checkDefReach`'s `if (target.plane == .row) return;` |
+| `slate.…` is sayable in a row def | restrict that early return to the `row` head |
+| `@self` still works on BOTH planes | hoist the early return ABOVE the head test — an absolute path then walks into a row def |
+| a row def called from a world statement is refused at the call site | delete the cross-plane arm at the head of `instantiate` |
+| a WORLD def travels to the row | make that arm symmetric (`tmpl.plane != target.plane`) |
+| the caller's flag governs the TOP LEVEL only | read the row-word bind off `self.program_target.plane` again |
+| the `$chan at` desugar reads the DEF's plane | read that site off `self.program_target.plane` again |
+| a fold splicing `row.…` works in a row def, refuses in a world def with provenance | drop `if (tok.fold != 0) self.noteProvenance(…)` from `fail` |
+| a plane word that is not a plane refuses, and so does a missing `on` | make the unknown-plane arm silently mean the world; delete the missing-`on` pointer |
+| the plane is on the Program and is NOT in the dump | default `Program.plane` to `.row`; write the plane into `serialize.dump` |
+| `row.`/`slate.` in a WORLD def stay refused, and the advice names the fix | make `checkDefReach` return unconditionally for a non-`plane` head |
+| NORTHSTAR — one file, every piece | the export pack forgets the declared plane; `publishExports` never runs |
+
+**The brief's northstar file did not parse, and the parity gate was right.**
+`export def scuttle() on row = …` with no `describe` block is refused by the
+parameter-pack beat's rule — *an exported definition documents itself*, and a
+port-less def is not exempt, because a pack that never says what the THING is
+has skipped the useful half. The gate's file gained `describe scuttle` with its
+one leading sentence rather than the rule gaining an exception. Recorded
+because it is the sort of thing a later reader will assume was an oversight.
+
+Two smaller things the gates found. The northstar's node name is `scuttle1.mul2`,
+not `mul1` — the op counter is program-wide, `roaches` spent `mul1`, and that is
+itself the receipt that both defs came out of one file. And the `$chan`
+desugar gate had to be written with `$wind` at STATEMENT HEAD: in argument
+position a `$name` is a channel word and never reaches the `parseExpr` arm the
+gate was aiming at, so the first draft asserted a refusal that came from
+somewhere else.
+
+### What this beat deliberately did NOT build, and the cost it accepts
+
+No archetype mount, no instantiation semantics, nothing that knows what a spray
+is. No serialization of the plane. No seam export for a row parse — that is an
+ABI change with matryoshka's GPU sweep behind it, and Option A does not need
+one.
+
+**The recon's counter-argument (§9) is ACCEPTED as a known future cost, not
+refuted.** In matryoshka — the one host that runs both planes — the plane
+registry is `registerCore` and nothing else, so `parser.zig`'s row-word refusal
+*can never fire there*: the separation that works in the live host is registry
+PARTITIONING, not the flag. A one-file package holding both kinds of definition
+needs one registry with both word sets, which merges those two registries and
+makes every core-vs-host name collision (`over` stopped the build once) a live
+risk across a surface that has been safely partitioned until now. That is real,
+it lands in another repo, and it is a later beat's problem. It is recorded in
+`rill-agents.md` beside the export-table bullet so it is read where the
+decision is read, and nothing in matryoshka was touched.
+
+`docs/cc-recon-def-plane.md` stays in the tree as written, including §5's
+defence of the status quo and §9's argument against its own recommendation. It
+was not edited to agree with the outcome.
+
+### Docs in the same commit
+
+`rill-spec.md` §3.9's close-over bullet gains the three-relative-stores rule
+with the refusal printed, and a new subsection "The plane declaration" (the
+grammar line, the six rules, the asymmetry, and D1); §3.16's closing paragraph
+stops saying `parse` vs `parseKernel` is "the whole difference" and says what
+it is now. `rill-manual.md` §10 gains "Which plane a def runs on" with a fenced
+`on row` def (the manual-parse gate 55 → 56, and it parses under `rill.parse`,
+which is half the ruling). `rill-for-agents.md` §2's grammar grows the `on
+plane` clause and the section gains the exported row def (7 → 8).
+`rill-agents.md`'s ABI list gains the plane bullet, the not-serialized ruling
+and the registry-partition cost. `namespaces.md` gains postscript 3, because
+§C's argument decided the spelling for the third time in one day.
+`parser.zig`'s header gains the plane bullet and its close-over bullet is
+rewritten; `rill.zig` exports `EvalPlane` beside `DefPort`, with the collision
+named where a reader of the export list meets it. `CLAUDE.md` was NOT touched: the recon found its host-word list
+stale (seven spindrift words listed, fifteen registered) and that file is the
+owner's, changed on purpose.

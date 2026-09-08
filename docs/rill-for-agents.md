@@ -110,7 +110,8 @@ actual spelling *is* the design.
 ```
 program   := statement*
 statement := chain | defstmt | describestmt | "using" token+ "as" ":"name
-defstmt   := ["export"] "def" name "(" port ("," port)* ")" "=" body
+defstmt   := ["export"] "def" name "(" port ("," port)* ")" ["on" plane] "=" body
+plane     := "plane" | "row"
 port      := name [":" type] ["=" literal] ["(" number ".." number ")"]
 describestmt := "describe" name NEWLINE INDENT (string | portname string)+
 chain     := expr block* ( "|" (opcall | "also" "{" branch* "}") )* ( "as" name ("," name)* )?
@@ -175,8 +176,34 @@ exactly `@self`, and no segment naming a different entity — a path
 carrying `@roaches` is refused, because it names one instance and is as
 unportable as an absolute path. Position is not checked (where an entity
 room sits in a path is the host's business, so the SIGIL is judged, not
-the index). `row.…` and `slate.…` stay refused whole: they are the
-mount's own stores and have no entity segment to relativise.
+the index).
+
+**A definition declares its plane** (2026-09-08): `def spin(x) on row =
+…`, contextual after the signature, reserving no word; undeclared means
+the world plane. `on row` is what makes `row.…` and `slate.…` sayable in
+a body — they are relative in exactly the way `@self` is (*whichever row
+is being swept*), so it is one principle over three relative stores and
+not a new exemption. In a world def they stay refused, and the refusal
+names the fix.
+
+```rill
+export def scuttle(size = 0.03 (0..1)) on row =
+  row.seed | mul 0.025 | add size | write row.size
+
+describe scuttle
+  "Settles each row's size from the seed it was born with."
+  size "the floor every row starts from"
+```
+
+A **row def may only be instantiated from a row context** — a parse
+refusal at the call site otherwise, because a row body flattened into a
+world program leaves row-only nodes in a graph that is neither. A
+**world def may be called from either**, and that asymmetry is the rule:
+closing over nothing is exactly what lets a def travel. `parse` and
+`parseKernel` now set the plane of the TOP-LEVEL statements only, so one
+file may hold both kinds of definition — which is what makes a one-file
+package possible. The resolved plane is on `Program.plane` and on each
+`Program.exports` entry, and is **not serialized**.
 
 **The parameter pack.** A def port may carry a default and an advisory
 range, and `export def` marks a definition visible to the HOST — rill has

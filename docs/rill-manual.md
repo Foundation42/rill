@@ -1120,8 +1120,47 @@ stuck there. `plane.drift.@self.k.flock` names *this* instance's knob,
 whichever instance that turns out to be, so the def travels. A path
 naming some *other* instance — `plane.drift.@roaches.k.flock` — is
 refused for the same reason an absolute one is, and the refusal says so.
-`row.…` and `slate.…` stay refused whole: they are the mount's own
-stores, and there is nothing there to relativise.
+
+### Which plane a def runs on
+
+rill has two evaluation planes: the world, and a **row** of a population
+(§3.16 of the spec — a kernel). A definition says which one it is for,
+between the signature and the `=`:
+
+```rill
+def spin(x: number) on row =
+  x | mul row.age | write row.size
+```
+
+Leave it off and you get the world plane, which is what every def you
+have written so far was. `on` is not a reserved word — the parser looks
+for it in exactly one place, so you may still call an operator or a
+stream `on` anywhere else — and `export def roaches(rate = 60) on row =
+…` composes exactly as you would expect.
+
+The declaration is what buys a def the *other* two relative stores.
+`row.age` is relative in the same way `@self` is: it means *whichever
+row is being swept*, so a def carrying one still travels. Inside an
+`on row` def, `row.…` and `slate.…` are yours; inside a world def they
+are refused, and the refusal tells you to declare it:
+
+```
+'row.age': defs close over nothing, except relatively — and `row` is
+relative only on the row plane, which def 'spin' does not run on.
+Declare it `def spin(…) on row = …`, or pass the value in through a port
+```
+
+Two rules follow, and they are not symmetric. A **row def can only be
+called from a row context** — from a kernel's statements, or from
+another `on row` def — and calling one from the world is refused where
+you called it. A **world def can be called from either**, because a def
+that closes over nothing travels by construction; `def dbl(x) = x | mul
+2` is as useful in a kernel as it is on the world.
+
+The upshot is that one file can hold both halves of a thing: the driver
+that lives on the world and turns a knob, and the row program that reads
+it. `parse` and `parseKernel` decide the plane of the file's *top-level*
+statements and nothing else.
 
 ### The parameter pack
 

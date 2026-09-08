@@ -65,6 +65,11 @@ pub const Program = graph.Program;
 /// `schema` will emit, what a HUD builds a panel from, what an agent reads.
 pub const DefExport = graph.DefExport;
 pub const DefPort = graph.DefPort;
+/// Which evaluation plane a program, or one `export def` inside it, is for —
+/// `prog.plane`, `prog.exported("scuttle").?.plane` (2026-09-08). NOT
+/// `Plane`, which below is the host STORE's vtable and has been since the
+/// first week: two different questions, one namespace.
+pub const EvalPlane = graph.EvalPlane;
 pub const parse = parser.parse;
 pub const parseKernel = parser.parseKernel;
 pub const Diag = parser.Diag;

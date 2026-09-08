@@ -189,3 +189,23 @@ The shipped spelling is **contextual and reserves nothing**: `rate = 60
 two words that DID join the list this beat — `export` and `describe` — are
 statement keywords in the same sense `def` is, which is the bar. "It would read
 nicely" is not.
+
+## Postscript 3: the plane declaration paid it again, the same day
+
+*2026-09-08, `def <name>(…) on row = …`.* A definition grew a declaration of
+which evaluation plane it runs on, and the spelling problem was §C's a third
+time: `on` reads best as a keyword and reserving it would narrow every name any
+host can ever register, forever, to spell one thing in one position.
+
+It reserves nothing. The parser looks for `on` at exactly one point — after the
+signature's `)`, before the `=` — so `on` is still a legal operator name, a
+legal stream name and a legal port name everywhere else, and a gate pins that
+by registering an operator called `on` and piping into it. The two plane words
+cost nothing either: `plane` and `row` were already on the reserved list, as
+path heads, which is the bar this document keeps.
+
+The prefix spelling `row def spin(x) = …` was cheaper still — no new position
+to parse at all — and lost on COMPOSITION rather than on namespace: `export row
+def` and `row export def` are two orders for one thing, and `export` had
+already been ruled to sit at the statement head. The reserved list is unchanged
+this beat: `plane row slate use using def export describe as also true false`.

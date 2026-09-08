@@ -417,9 +417,21 @@ def rivet(m: mesh, n: int) =
   (`plane.drift.@roaches.k.flock` is refused — it names one instance and is as unportable as
   an absolute path). rill never resolves `@self`; it permits the spelling, and the host
   rewrites it. **Position is not checked** — where a host's entity room sits in its path
-  shape is the host's business, so rill judges the SIGIL, not the index. The exemption is the
-  `plane` head's alone: `row.…` and `slate.…` are the mount's own stores, have no entity
-  segment to relativise, and stay refused whole.
+  shape is the host's business, so rill judges the SIGIL, not the index.
+
+  **`row.…` and `slate.…` are relative in exactly the same way** (v0.4, ruled 2026-09-08):
+  `row.age` resolves to whichever row is being swept and `slate.contact` to whichever row of
+  whichever tick, so neither pins a def to one Project either. They are sayable inside a def
+  that has declared itself `on row`, and refused in one that has not — the declaration is
+  what makes them safe, because without it `row.age` would mean something at some call sites
+  and nothing at others. **One principle, three relative stores**; an absolute path and a
+  named `@instance` stay refused everywhere. The refusal in a world def names the fix:
+
+  ```
+  'row.age': defs close over nothing, except relatively — and `row` is relative only on the
+  row plane, which def 'bad' does not run on. Declare it `def bad(…) on row = …`, or pass
+  the value in through a port
+  ```
 - The last statement's value is the (primary) output; multi-output defs name outputs with a
   final `as`. A def whose last statement has no value at all is refused — and since an
   effect returns its input (§3.8), a def whose last statement is a `cast`, a `tag` or an
@@ -485,6 +497,56 @@ describe roaches
   or not: a describe line naming a port the definition does not have is refused, and the
   refusal lists the ports that do exist. One-directional parity would catch orphans and let
   everybody skip writing prose, which is the exact failure this exists to prevent.
+
+#### The plane declaration (v0.4, ruled 2026-09-08)
+
+A definition says which of rill's two evaluation planes it is for (§3.16). The plane goes
+between the signature and the `=`:
+
+```
+def spin(x) on row = x | mul row.age
+export def roaches(rate = 60 (0..500)) on row = …
+```
+
+`defstmt := ["export"] "def" name "(" port* ")" ["on" plane] "=" body`, where
+`plane := "plane" | "row"`.
+
+- **The spelling reserves nothing.** `on` is read at exactly one point — after the `)`,
+  before the `=` — so it is still a legal operator name, stream name and port name
+  everywhere else; the same trade the parameter pack's `(0..500)` took, and the one
+  `namespaces.md` §C refuses for a globally reserved word. `plane` and `row` were already
+  reserved. `export def … on row` composes: `export` is a statement-head prefix and this is a
+  signature suffix, so there is one order and not two.
+- **Undeclared means the world plane.** Loud, and it does not re-import the ambient decision
+  the declaration exists to remove — an inherited default would leave a def meaning one thing
+  in one file and another in the next. The plane-AGNOSTIC reading (resolve at each splice) is
+  deliberately *not* built: a def body is parsed once, so being agnostic would mean keeping
+  the tokens and re-parsing per splice, and that is what a fold already is (§3.10).
+- **What a `row` def may then reach**: `row.…` and `slate.…` paths (§3.9's close-over rule
+  above), and host words declaring `OpDef.row.only`. A world def may reach neither, wherever
+  it is written.
+- **A row def may only be instantiated from a row context**, and calling one from a world
+  statement — or from a world def — is a parse refusal at the CALL SITE, naming both. It has
+  to be a parse refusal: a row body flattened into a world program would leave row-only nodes
+  in a graph that is neither, and the plane runtime's refusal is a *runtime* one that a node
+  which never evaluates never reaches.
+- **The other direction is allowed, and the asymmetry is the rule rather than an oversight.**
+  A world def closes over nothing but a relative path, which resolves at mount on either
+  plane, so it travels — that is what closing over nothing buys it. `def dbl(x) = x | mul 2`
+  called from a kernel statement works; a world def holding something a kernel cannot run is
+  refused by name at the row mount, in the same place the same operator written inline would
+  die.
+- **`parse` / `parseKernel` now govern the TOP-LEVEL statements, not the file.** A `def … on
+  row` inside a `parse`d program is a row def; an undeclared def inside a `parseKernel`ed one
+  is still a world def. A file may therefore hold both kinds of definition — which is what
+  makes a one-file package possible — while any single GRAPH is still all one plane, because
+  a def contributes nodes only where it is instantiated.
+- **The resolved plane is recorded on `Program.plane`** and on each `Program.exports` entry,
+  so a host can ask a parsed program what it is for instead of scanning its subscriptions for
+  a `row.` prefix. It is **not serialized**: a dump is of a mounted graph, and putting the
+  plane on the wire would bump `fmt_version` for something the parse already answers. A
+  restored program therefore reports the default, exactly as it reports no `exports` and no
+  `warnings`.
 
 ### 3.10 `using` — the parse-time fold (v0.3, ruled 2026-09-08; replaced `use`)
 
@@ -707,11 +769,16 @@ perish
 The words that only mean something on a row — `spawn`, `gravity`,
 `perish` — are the host's (spindrift's), registered through the same
 `Registry.register` as everything else, with `row.only` set. A plane
-program that names one is refused **at parse**, by name: `parse` reads
-the world's programs and `parseKernel` reads a spray's, and that is the
-whole difference between them. (`fails_mount` was the first draft and it
-leaked: it only fires if the node evaluates at tick 0, and `plane.x |
-gravity` with an unfed `plane.x` never did.)
+program that names one is refused **at parse**, by name. (`fails_mount`
+was the first draft and it leaked: it only fires if the node evaluates at
+tick 0, and `plane.x | gravity` with an unfed `plane.x` never did.)
+
+Since 2026-09-08 the question "is this a kernel?" is asked per SCOPE rather
+than per file: `parse` and `parseKernel` set the plane of the TOP-LEVEL
+statements, and a definition declares its own with `on row` (§3.9). A row
+word therefore binds inside a `def … on row` body wherever that def is
+written, and does not bind inside an undeclared def in a kernel file — and
+the refusal in a def names that fix rather than "mount it in a kernel".
 
 **The pipe carries a producer's other outputs by name (v0.4, spindrift beat
 5, ruling 24).** `a | b` feeds `a`'s FIRST output to `b`'s first port, as it

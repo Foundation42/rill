@@ -152,6 +152,51 @@ pub const DefExport = struct {
     /// description, Blade3D's `[Operator(Description = …)]`.
     doc: []const u8 = "",
     ports: []const DefPort = &.{},
+    /// Which plane this definition runs on (2026-09-08) — `.world` unless it
+    /// was declared `on row`. A host enumerating a package needs it to tell
+    /// which exports it may mount on a spray from which belong to the world.
+    plane: EvalPlane = .world,
+};
+
+/// Which evaluation plane a program — or one definition inside it — is for.
+///
+/// Named `EvalPlane` and not `Plane` on purpose: `rill.Plane` is already the
+/// host STORE's vtable — the thing a Runtime reads and writes — and the two
+/// live one namespace apart on the public surface. A reader who meets `Plane`
+/// in a host has met the store; this is the other question entirely, which of
+/// two grammars-over-a-store a program was parsed for.
+///
+/// rill has two. The WORLD is a store of paths, one value per path per tick.
+/// A ROW plane is the same grammar evaluated once per row of a population,
+/// with an integer-only kernel column (`row.zig`). Until 2026-09-08 this was
+/// a `bool` passed by whoever called `parse` / `parseKernel` and thrown away
+/// immediately after — the one fact about a program that was not in its text
+/// and was recorded nowhere, so a host holding a `Program` could only infer
+/// it by scanning `subs` for the `row.` prefix. It is now a per-DEFINITION
+/// declaration (`def spin(x) on row = …`) with the caller's flag governing
+/// the TOP-LEVEL statements only, and this is where the answer lands.
+///
+/// The tag is `world`; the SOURCE spelling is `plane`, because `plane.…` is
+/// how the world store is written in every path in the language. Nothing new
+/// is reserved by the declaration: `plane` and `row` were both already
+/// reserved words, and the `on` that introduces them is contextual.
+///
+/// **Not serialized** (`serialize.zig` never sees it), deliberately: a dump
+/// is of a MOUNTED graph, the plane is a property of the parse, and putting
+/// it on the wire would bump `fmt_version`, move G2's frozen hash and drag
+/// struple's Python reader into the blast radius for nothing a host cannot
+/// ask the parse for. Same reasoning as `exports` and `warnings`.
+pub const EvalPlane = enum {
+    world,
+    row,
+
+    /// How this plane is spelled in rill source — what a refusal must print.
+    pub fn spelling(self: EvalPlane) []const u8 {
+        return switch (self) {
+            .world => "plane",
+            .row => "row",
+        };
+    }
 };
 
 /// A parsed program: pure structure, no live values (those belong to the
@@ -175,6 +220,16 @@ pub const Program = struct {
     /// `export def`s, in source order — the one thing that survives the parse
     /// that flattens defs away. See `DefExport`.
     exports: std.ArrayListUnmanaged(DefExport) = .empty,
+    /// Which plane the TOP-LEVEL statements run on: `.world` from `parse`,
+    /// `.row` from `parseKernel` (2026-09-08, recon D1). Individual defs may
+    /// declare their own — see `EvalPlane` and `DefExport.plane`.
+    ///
+    /// It exists so a host can ASK. Before this, a `Program` could only be
+    /// inferred at (`row.Runtime.mount` scans `subs` for the `row.` prefix),
+    /// and mounting a `parse`d program on a row plane was a silent category
+    /// error that surfaced as a pile of per-node refusals. Not serialized —
+    /// see `EvalPlane`.
+    plane: EvalPlane = .world,
     /// The LAST top-level statement's value, if it has one — what a one-shot
     /// echoes (rillbook §2). Broader than `resultSlot` on purpose: a bare
     /// `plane.x` line has no node, a bare `0.1` has no node AND no

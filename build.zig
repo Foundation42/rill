@@ -122,7 +122,18 @@ pub fn build(b: *std.Build) void {
     runner_step.dependOn(&runner_cmd.step);
 
     // Tests: src/rill.zig pulls in the acceptance-gate suite from src/tests.zig.
-    const tests = b.addTest(.{ .root_module = rill_mod });
+    //
+    // `-Dtest-filter=<substring>` runs one gate. Wired 2026-09-08, and the
+    // reason is mutation ATTRIBUTION rather than speed: two ledger entries on
+    // one day recorded the same hazard — a mutation biting a different gate
+    // than the one it was aimed at, reported as BITTEN by a suite-wide count
+    // while its target stayed green — and both named this flag as the fix.
+    // `CLAUDE.md` already said to add it rather than skip the suite. Note the
+    // trap it brings with it: a filter matching NOTHING passes vacuously, so
+    // a harness using it must check that some test actually ran.
+    const test_filter = b.option([]const u8, "test-filter", "Run only tests whose name contains this substring");
+    const filters: []const []const u8 = if (test_filter) |f| &.{f} else &.{};
+    const tests = b.addTest(.{ .root_module = rill_mod, .filters = filters });
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
