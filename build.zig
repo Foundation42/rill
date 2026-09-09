@@ -121,6 +121,26 @@ pub fn build(b: *std.Build) void {
     const runner_step = b.step("run-file", "Run a .rill file: zig build run-file -- <file> [opts]");
     runner_step.dependOn(&runner_cmd.step);
 
+    // rill-roundtrip: parse a `.rill` file, print its script back, and check
+    // the two parses are the same program. A TOOL rather than a gate because
+    // the corpus it was built to measure lives in the SIBLING repos, and rill
+    // must stay buildable without them — a `b.path("../spindrift/…")` here
+    // would make the library unbuildable on its own, and 21 of those 47 files
+    // use host words rill core must not have. See `tools/roundtrip.zig`. The
+    // gates over programs rill owns are in `src/tests.zig`.
+    const rt_mod = b.createModule(.{
+        .root_source_file = b.path("tools/roundtrip.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rt_mod.addImport("rill", rill_mod);
+    const rt_exe = b.addExecutable(.{ .name = "rill-roundtrip", .root_module = rt_mod });
+    b.installArtifact(rt_exe);
+    const rt_cmd = b.addRunArtifact(rt_exe);
+    if (b.args) |args| rt_cmd.addArgs(args);
+    b.step("roundtrip", "Round-trip .rill files: zig build roundtrip -- [--host-row] <files…>")
+        .dependOn(&rt_cmd.step);
+
     // Tests: src/rill.zig pulls in the acceptance-gate suite from src/tests.zig.
     //
     // `-Dtest-filter=<substring>` runs one gate. Wired 2026-09-08, and the

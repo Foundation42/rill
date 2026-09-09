@@ -12890,3 +12890,613 @@ test "NORTHSTAR: one file carries a fold, a described pack, an @self driver and 
         \\  rate "how many rows are born each second"
     , "port 'flock' has no description");
 }
+
+// ---------------------------------------------------------------------------
+// The script and the printer (R1/R2, 2026-09-09) — `src/script.zig`.
+//
+// The parse flattens: a def body is spliced away, a fold is expanded, a
+// comment is dropped in the tokenizer. That is right for an evaluator and
+// fatal for an EDITOR, which has to hand the file back. `Program.script` is
+// the other half — the same text, as written — and `script.print` puts it
+// back.
+//
+// The printer is NOT byte-faithful to arbitrary input and does not claim to
+// be. It is *semantically* faithful and *stable*, and the three gates below
+// say exactly that: the same program comes back, the second print is the
+// same bytes as the first, and no comment is lost on the way. Everything
+// else is a canon (one statement one line; two-space bodies; blank runs kept
+// as written), and a canon is only worth having if it does not move.
+//
+// The 47-file sibling corpus is measured by `zig build roundtrip` rather than
+// here: rill must stay buildable without matryoshka and spindrift, and 21 of
+// those files use host words rill core must not have. All 47 pass, 35 of them
+// byte-identically. See `tools/roundtrip.zig`.
+//
+// Every gate below names the mutation that had to bite before it was believed.
+// ---------------------------------------------------------------------------
+
+/// A parsed program's STRUCTURE as bytes — the round-trip oracle, built from
+/// `serialize.zig` rather than from a new comparator.
+///
+/// `restore`, not `mount`: restore subscribes and does NOT tick, so what the
+/// dump holds is nodes, wires, statics and order with no live state and no
+/// tick-0 refusal. Two programs whose dumps are equal have the same graph in
+/// the same order, which is the whole of what the printer owes.
+fn structureOf(prog: *rill.Program) ![]u8 {
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.restore(testing.allocator, prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    return rill.dump(&rt, testing.allocator);
+}
+
+fn countCommentLines(src: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, src, '\n');
+    while (it.next()) |ln| {
+        if (std.mem.startsWith(u8, std.mem.trimLeft(u8, ln, " \t"), "//")) n += 1;
+    }
+    return n;
+}
+
+/// Every comment the parse retained, counted off the script itself.
+///
+/// The text count above cannot see a TRAILING comment — `plane.hp | clamp 0
+/// 100 // what's flowing` is not a comment LINE — so on its own it would have
+/// let the printer drop every one of them silently. It did, until the
+/// manual's §7 examples said so.
+fn countScriptComments(s: *const rill.script.Script) usize {
+    var n: usize = s.tail.len;
+    for (s.top) |it| n += itemComments(s, it);
+    return n;
+}
+
+fn itemComments(s: *const rill.script.Script, it: rill.script.Item) usize {
+    return switch (it) {
+        .stmt => |st| st.lead.len + @intFromBool(st.trail.len > 0) + stagesComments(st.stages),
+        .using => |u| u.lead.len + @intFromBool(u.trail.len > 0),
+        .annex => |a| a.lead.len + @intFromBool(a.trail.len > 0),
+        .def => |i| blk: {
+            const d = s.defs[i];
+            var n = d.lead.len + @intFromBool(d.trail.len > 0);
+            for (d.body) |b| n += itemComments(s, b);
+            break :blk n;
+        },
+    };
+}
+
+fn stagesComments(list: []const rill.script.Stage) usize {
+    var n: usize = 0;
+    for (list) |sg| switch (sg) {
+        .fan => |f| for (f.branches) |b| {
+            n += b.lead.len + @intFromBool(b.trail.len > 0) + stagesComments(b.stages);
+        },
+        else => {},
+    };
+    return n;
+}
+
+/// G-roundtrip + G-idempotent + G-comments over one program. Every caller
+/// below runs all three, because they fail in different ways: a printer can
+/// emit a different program (drift), the same program spelled differently
+/// every time (churn), or the right program with the prose deleted.
+fn expectRoundTrip(reg: *rill.Registry, src: []const u8, where: []const u8) !void {
+    var diag = rill.Diag{};
+    var prog = rill.parse(testing.allocator, reg, "rt", src, &diag) catch |err| {
+        if (err == error.Parse) std.debug.print("{s}: source does not parse — {s} (line {d}, col {d})\n{s}\n", .{ where, diag.msg(), diag.line, diag.col, src });
+        return err;
+    };
+    defer prog.deinit();
+
+    const once = try rill.printScript(testing.allocator, prog.script orelse return error.TestUnexpectedResult);
+    defer testing.allocator.free(once);
+
+    var diag2 = rill.Diag{};
+    var prog2 = rill.parse(testing.allocator, reg, "rt", once, &diag2) catch |err| {
+        if (err == error.Parse) std.debug.print("{s}: the PRINT does not parse — {s} (line {d}, col {d})\n--- printed ---\n{s}\n--- source ---\n{s}\n", .{ where, diag2.msg(), diag2.line, diag2.col, once, src });
+        return err;
+    };
+    defer prog2.deinit();
+
+    // G-roundtrip.
+    const a = try structureOf(&prog);
+    defer testing.allocator.free(a);
+    const b = try structureOf(&prog2);
+    defer testing.allocator.free(b);
+    if (!std.mem.eql(u8, a, b)) {
+        std.debug.print("{s}: reprint is a DIFFERENT program\n--- source ---\n{s}\n--- printed ---\n{s}\n", .{ where, src, once });
+        return error.TestUnexpectedResult;
+    }
+
+    // G-idempotent.
+    const twice = try rill.printScript(testing.allocator, prog2.script orelse return error.TestUnexpectedResult);
+    defer testing.allocator.free(twice);
+    if (!std.mem.eql(u8, once, twice)) {
+        std.debug.print("{s}: printing twice MOVED the file\n--- once ---\n{s}\n--- twice ---\n{s}\n", .{ where, once, twice });
+        return error.TestUnexpectedResult;
+    }
+
+    // G-comments, both ways: the text count catches a whole block going
+    // missing, and the script count catches a trailing comment being eaten —
+    // which the text count cannot see, because it is not a comment LINE.
+    const before = countCommentLines(src);
+    const after = countCommentLines(once);
+    if (before != after) {
+        std.debug.print("{s}: {d} comment lines in, {d} out\n--- printed ---\n{s}\n", .{ where, before, after, once });
+        return error.TestUnexpectedResult;
+    }
+    const kept = countScriptComments(prog.script.?);
+    const rekept = countScriptComments(prog2.script.?);
+    if (kept != rekept) {
+        std.debug.print("{s}: {d} comments retained, {d} after the round trip\n--- printed ---\n{s}\n", .{ where, kept, rekept, once });
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// The fixture corpus: one program per syntactic shape the printer has to
+/// know about. The manuals and the rillbook (below) cover breadth — 130-odd
+/// real programs — and these cover the shapes a doc example never writes:
+/// comment blocks, blank runs, folds, defs with packs, fan-out, tails.
+const script_fixtures = [_][]const u8{
+    // a bare chain, and the two-word host verb
+    \\cube 2 | bevel 0.1 | rot 45 as body
+    \\body | shell 0.2 | tap out
+    ,
+    // comments leading, between, and at the end of the file — the shape
+    // `kernels/roaches.rill` is made of
+    \\// The gate guard, standing order 2.
+    \\//
+    \\// "At the sound of the alarm, drop the portcullis."
+    \\plane.signals.horn | write plane.gate.portcullis 1
+    \\
+    \\
+    \\// Two blank lines above this one, on purpose.
+    \\plane.signals.horn | write plane.gate.drawbridge 1
+    \\
+    \\// And a trailing block nothing leads.
+    ,
+    // a fold, spliced into an argument and composed with a projection
+    \\using plane.drift.@self.k as :k
+    \\
+    \\plane.a | mul :k.gain | write plane.out
+    \\:k.tight | add 1 | tap t
+    ,
+    // a def with a full parameter pack, an export, a describe block, and a
+    // call that leans on the defaults
+    \\export def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5)) =
+    \\  rate | mul speed
+    \\
+    \\describe scatter
+    \\  "Rows thrown outward from a point."
+    \\  rate "How many a second."
+    \\  speed "How fast, in metres a second."
+    \\
+    \\scatter | write plane.drift.rate
+    \\scatter 120 0.3 | write plane.drift.fast
+    ,
+    // a local def with a multi-statement body — the tunnel, two levels
+    \\def driver(x: number) =
+    \\  // a comment inside a def body
+    \\  x | mul 0.05 as g
+    \\  g | add 1
+    \\
+    \\plane.a | driver | write plane.out
+    ,
+    // records, arrays, projections, and the `| .field` sugar
+    \\[{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}] as track
+    \\plane.t | along track loop as here
+    \\here | .x | write plane.out
+    \\track | write plane.draw.knots
+    ,
+    // fan-out both ways: the head block and the mid-chain `also`
+    \\plane.a | rose_above 0.5 | also { write plane.b 1 } | write plane.c 2
+    \\every 1s {
+    \\  write plane.d 1
+    \\  write plane.e 2
+    \\}
+    ,
+    // predicate sections, keyword arguments in both spellings, durations
+    \\plane.xs | keep (> 0) | tap kept
+    \\plane.ys | sort by (.x) | tap sorted
+    \\once 1 | cast $tilt 1.0 radius 25 at {x: -12, y: 3, z: 0}
+    \\once 1 | cast $wind 2.0 radius 5 at: {x: 1, y: 0, z: 0}
+    ,
+    // a tail port: the rest of the line is text, slashes and colons included
+    \\sound play /tmp/loop.wav
+    \\say the tail takes everything: slashes/and/colons
+    \\plane.x | emitter drop pop /tmp/a.wav
+    ,
+    // effect modes and flag words, which ride as bare-word arguments
+    \\plane.a | write plane.b hold
+    \\plane.c | write plane.d add
+    ,
+    // trailing comments, which are NOT comment lines — the manual's own
+    // spelling, and the one the first draft of this printer walked a line
+    // down the file on every save
+    \\// a lead
+    \\plane.hp | clamp 0 100 | write plane.ui.bar  // what's flowing
+    \\plane.a | write plane.b 1  // this, because something flowed
+    ,
+};
+
+test "R2 G-roundtrip: parse → print → parse is the same program" {
+    // Mutations that bite, all four executed and watched:
+    //
+    //   · in `script.print`, walk `s.top` in reverse — local names are
+    //     single-assignment and must be defined before use, so parse order IS
+    //     topological order (`parser.zig`'s header), and any other order
+    //     writes a file that binds differently or does not parse. Fixture 0
+    //     refuses with "unknown operator or name 'body'".
+    //   · delete `arg.syn = …` in `parseArgValue` — every argument prints
+    //     empty and the reprint refuses.
+    //   · delete the `self.closeLine()` above `const syn_trail` in `parseDef`
+    //     — the body's first statement measures its blank run from before the
+    //     signature, and fixture 3 grows by that much per print (idempotence).
+    //   · delete the `self.closeLine()` after the `{` in `parseAlsoBlock` —
+    //     same shape, fixture 6.
+    //
+    // What this gate is BLIND to, on purpose, and why the byte-level gates
+    // below exist: losing a blank line is semantically identical AND stable,
+    // so all three checks pass. `closeLine` reading `self.peek()` instead of
+    // the last consumed token eats the blank line under a `describe` block
+    // and this gate never notices — G-pack and G-annex do.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    for (script_fixtures, 0..) |src, i| {
+        var buf: [64]u8 = undefined;
+        try expectRoundTrip(&reg, src, try std.fmt.bufPrint(&buf, "fixture {d}", .{i}));
+    }
+}
+
+test "R2 G-roundtrip: the manuals and the idioms book round-trip too" {
+    // Breadth, for free: every ```rill fence in the two manuals, the README
+    // and the RBF words doc, plus every cell of `idioms.rillbook` — around
+    // 130 real programs that are already gated as parseable. A printer only a
+    // hand-written fixture set has seen is a printer that has seen what its
+    // author thought of.
+    //
+    // Mutations that bite: in `renderTokens`, return `t.text` for a `.string`
+    // token without re-quoting (every program holding a string literal
+    // reprints as a bare word and refuses); make `takeTrail` always return ""
+    // (a trailing `// …` falls through to the NEXT statement's lead and
+    // prints a line lower — which is how trailing comments were found to
+    // exist at all: the manual's §7 writes `plane.hp | clamp 0 100 // what's
+    // flowing`, and the first draft of this printer walked it down the file
+    // on every save).
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var n: usize = 0;
+    inline for (.{ "rill-manual.md", "rill-for-agents.md", "README.md", "rbf-words.md" }) |doc| {
+        n += try roundTripManual(@embedFile(doc), &reg, doc);
+    }
+    n += try roundTripBook(@embedFile("idioms.rillbook"), &reg, "idioms.rillbook");
+    // Both ways, like the parse gate beside it: a corpus that silently
+    // stopped being collected would pass vacuously.
+    try testing.expect(n >= 120);
+}
+
+fn roundTripManual(doc: []const u8, reg: *rill.Registry, doc_name: []const u8) !usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, doc, pos, "```rill\n")) |start| {
+        const body_start = start + "```rill\n".len;
+        const end = std.mem.indexOfPos(u8, doc, body_start, "```") orelse return error.TestUnexpectedResult;
+        try expectRoundTrip(reg, doc[body_start..end], doc_name);
+        count += 1;
+        pos = end;
+    }
+    return count;
+}
+
+fn roundTripBook(doc_src: []const u8, reg: *rill.Registry, doc_name: []const u8) !usize {
+    const parsed = try std.json.parseFromSlice(BookDoc, testing.allocator, doc_src, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    var count: usize = 0;
+    for (parsed.value.cells) |cell| {
+        if (cell.markdown) continue;
+        try expectRoundTrip(reg, cell.source, doc_name);
+        count += 1;
+    }
+    return count;
+}
+
+test "R2 G-comments: a comment block survives with its blank runs" {
+    // The gate the editor lives or dies on. `kernels/roaches.rill` is the
+    // project's documented exemplar and is roughly four-fifths prose; a
+    // round trip that eats it has deleted the only documentation of the thing
+    // it just edited.
+    //
+    // Mutation that bites: delete the `try self.lead(st.lead, depth)` call in
+    // `Printer.item` — the leading comment block vanishes and the counts
+    // below go 5 → 0. (The blank-run assertions bite a second mutation:
+    // print `blank_before` as a constant 1.)
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\// one
+        \\// two
+        \\plane.a | write plane.b 1
+        \\
+        \\
+        \\// three, under two blank lines
+        \\plane.c | write plane.d 2
+        \\
+        \\// four, leading nothing
+        \\// five
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const out = try rill.printScript(testing.allocator, prog.script.?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(src, out);
+    try testing.expectEqual(@as(usize, 5), countCommentLines(out));
+    // The trailing pair leads nothing and lands on `Script.tail`, which is
+    // the only place it can go and still be printed.
+    try testing.expectEqual(@as(usize, 2), prog.script.?.tail.len);
+}
+
+test "R2 G-fold: a fold prints as the reference, never as its expansion" {
+    // Its own gate, and this is exactly why: an expansion is SEMANTICALLY
+    // IDENTICAL, so G-roundtrip sees nothing wrong with it — the graph is the
+    // same graph either way. What is lost is the file: `:k.tight` becoming
+    // `plane.drift.@self.k.tight` everywhere unbinds the fold from its uses,
+    // and the next edit to the room has to be made in nine places.
+    //
+    // Mutation that bites: in `renderTokens`, delete the `t.fold != 0` branch
+    // so spliced tokens render as themselves. `using` still prints, and every
+    // `:k` in the body comes back expanded — this gate goes red and
+    // G-roundtrip stays green.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\using plane.drift.@self.k as :k
+        \\
+        \\plane.a | mul :k.tight | write plane.out
+        \\:k.wide | tap w
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const out = try rill.printScript(testing.allocator, prog.script.?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(src, out);
+    try testing.expect(std.mem.indexOf(u8, out, ":k.tight") != null);
+    try testing.expect(std.mem.indexOf(u8, out, ":k.wide") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "plane.drift.@self.k.tight") == null);
+    // …and the graph still holds the expansion, because that is the half the
+    // evaluator needs. Both truths, one parse.
+    try testing.expect(hasSub(&prog, "plane.drift.@self.k.tight"));
+}
+
+test "R1 G-tunnel: a def is its own nested graph, and prints as a def" {
+    // The hard requirement of the beat: drill in, edit, drill out. A def body
+    // that is not separately addressable is not a tunnel, and a printer that
+    // flattens a def into its call site has thrown the definition away — the
+    // graph would still be right and the FILE would have lost a concept.
+    //
+    // Mutations that bite: (1) drop the `program_target.items.append(.{ .def
+    // = … })` in `parseDef` — the definition vanishes from the print and the
+    // reprint refuses with "unknown operator or name 'driver'". (2) point
+    // `script.Def.body` at `&.{}` instead of `target.items.items` — the def
+    // prints with an empty body and the reprint refuses with "has an empty
+    // body". Either one takes the last assertion here with it.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\def driver(x: number) =
+        \\  // the body's own comment
+        \\  x | mul 0.05 as g
+        \\  g | add 1
+        \\
+        \\plane.a | driver | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const s = prog.script.?;
+
+    // The tunnel: one definition, and its body is a block of its own with the
+    // two statements the author wrote — not a flattened fragment of the top
+    // level, and not text.
+    try testing.expectEqual(@as(usize, 1), s.defs.len);
+    try testing.expectEqualStrings("driver", s.defs[0].name);
+    try testing.expectEqual(@as(usize, 2), s.defs[0].body.len);
+    try testing.expectEqualStrings("x", s.defs[0].ports[0].name);
+    try testing.expectEqualStrings("number", s.defs[0].ports[0].ty);
+    // The top level holds the DOOR, not the body: a `.def` item and the one
+    // statement that calls it.
+    try testing.expectEqual(@as(usize, 2), s.top.len);
+    try testing.expect(s.top[0] == .def);
+    try testing.expectEqual(@as(u32, 0), s.top[0].def);
+
+    const out = try rill.printScript(testing.allocator, s);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(src, out);
+}
+
+test "R1 G-origin: a flattened node names the definition that produced it" {
+    // `def` bodies are spliced into the graph with an instance-name prefix and
+    // the graph does not know defs exist — so an editor looking at a node has
+    // no way to ask "which definition should I tunnel into?" unless the parse
+    // records it. The name (`driver1.mul1`) would have answered, and a
+    // derivation is a second parser for a format nothing else pins.
+    //
+    // Mutation that bites: delete the `origin_spans.append` in `instantiate`
+    // — every origin comes back null and the two assertions below fail.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\def driver(x: number) = x | mul 0.05
+        \\plane.a | driver | write plane.out
+        \\plane.b | mul 2 | tap t
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const s = prog.script.?;
+    try testing.expectEqual(prog.nodes.items.len, s.origins.len);
+
+    var from_def: usize = 0;
+    var free_standing: usize = 0;
+    for (prog.nodes.items, s.origins) |n, o| {
+        if (o) |org| {
+            from_def += 1;
+            try testing.expectEqualStrings("driver", s.defs[org.def].name);
+            // The instance prefix the parser minted is on both, and they agree.
+            try testing.expect(std.mem.startsWith(u8, n.name, org.instance));
+        } else free_standing += 1;
+    }
+    try testing.expect(from_def >= 1);
+    try testing.expect(free_standing >= 1);
+}
+
+test "R2 G-pack: a port's default and its range survive as written" {
+    // A pack that loses its default changes what the file MEANS — a port with
+    // no default is required, so `scatter` with no arguments stops parsing.
+    // A pack that loses its range loses only the widget's advice, which
+    // nothing at runtime reads and no dump records: G-roundtrip is blind to
+    // it, so it is asserted here by name.
+    //
+    // Mutations that bite: delete `syn_port.default = …` in `parseDef` (the
+    // reprint refuses with "port 'rate' of 'scatter' is not bound"); delete
+    // `syn_port.min = …` (the range vanishes from the print and the two
+    // `indexOf` assertions fail while everything else stays green).
+    //
+    // And a third, which lives here because nothing else catches it: make
+    // `closeLine` read `self.peek().line` instead of the last consumed
+    // token's. A `describe` block ends at a dedent, so the cursor is already
+    // on the NEXT item several lines down, and the blank line under the block
+    // is eaten. G-roundtrip is blind to that — a lost blank is semantically
+    // identical and perfectly stable — so it takes a byte comparison over a
+    // program with a `describe` block in it, which is this one.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\export def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5)) =
+        \\  rate | mul speed
+        \\
+        \\describe scatter
+        \\  "Rows thrown outward from a point."
+        \\  rate "How many a second."
+        \\  speed "How fast."
+        \\
+        \\scatter | write plane.drift.rate
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const out = try rill.printScript(testing.allocator, prog.script.?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(src, out);
+    try testing.expect(std.mem.indexOf(u8, out, "rate: number = 60 (0..500)") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "speed = 0.15 (0..5)") != null);
+}
+
+test "R2 G-kw: a keyword argument keeps its name AND its spelling" {
+    // Two claims, and they fail differently. Dropping the NAME is not
+    // equivalent: a keyword-declared port never fills positionally (the `arm
+    // gate_closed` rule), so `cast $t 1.0 radius 25 {…}` refuses outright and
+    // G-roundtrip catches it. Dropping the COLON *is* equivalent — `at 5` and
+    // `at: 5` are one binding — which is precisely why the spelling needs a
+    // gate of its own: nothing downstream can tell, and the file would drift
+    // on every save.
+    //
+    // Mutations that bite: in `Printer.call`, print `arg.text` without
+    // `arg.kw` (G-roundtrip red, this gate red); ignore `arg.kw_colon` and
+    // always emit a space (only this gate red).
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\once 1 | cast $tilt 1.0 radius 25 at {x: -12, y: 3, z: 0}
+        \\once 1 | cast $wind 2.0 radius 5 at: {x: 1, y: 0, z: 0}
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const out = try rill.printScript(testing.allocator, prog.script.?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(src, out);
+}
+
+test "R2 G-annex: a describe block survives with every line" {
+    // `describe` is retained as an ANNEX — one instance of "a block the
+    // parser reads, the runtime elides and the document keeps" — because
+    // Christian ruled on 2026-09-09 that the editor's node positions land the
+    // same way (`layout roaches` keyed by instance name, naming `describe` as
+    // the precedent). The generality is the point: a second such block must
+    // cost a reader in the parser and nothing in the printer.
+    //
+    // Mutation that bites: drop the last `lines.append` in `parseDescribe` —
+    // the printed block loses a port's line and the reprint refuses at the
+    // parity gate with "port 'speed' has no description". A local def would
+    // hide that, so the fixture is exported on purpose. (This gate is
+    // G-pack's twin for the `closeLine` mutation too — see the note there.)
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\export def scatter(rate = 60, speed = 0.15) =
+        \\  rate | mul speed
+        \\
+        \\describe scatter
+        \\  "Rows thrown outward from a point."
+        \\  rate "How many a second."
+        \\  speed "How fast, with a \"quoted\" word in it."
+        \\
+        \\scatter | tap s
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const s = prog.script.?;
+    // The annex is generic: a keyword, a subject, and lines of key + values.
+    const an = for (s.top) |it| {
+        if (it == .annex) break it.annex;
+    } else return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("describe", an.keyword);
+    try testing.expectEqualStrings("scatter", an.subject);
+    try testing.expectEqual(@as(usize, 3), an.lines.len);
+    try testing.expectEqualStrings("", an.lines[0].key); // the leading bare string
+    try testing.expectEqualStrings("rate", an.lines[1].key);
+
+    const out = try rill.printScript(testing.allocator, s);
+    defer testing.allocator.free(out);
+    // The escape survives verbatim: the annex keeps the SPELLING, and the
+    // pack keeps the decoded sentence.
+    try testing.expectEqualStrings(src, out);
+    try testing.expectEqualStrings(
+        "How fast, with a \"quoted\" word in it.",
+        (prog.exported("scatter") orelse return error.TestUnexpectedResult).ports[1].doc,
+    );
+}
+
+test "R1: retaining the script changes nothing the runtime can see" {
+    // The beat's own claim, asserted rather than assumed: R1 is purely
+    // additive. A program parsed today has the same nodes, the same slots and
+    // the same DUMP it had before `Program.script` existed — the script is
+    // not serialized and nothing below the parser reads it.
+    //
+    // Mutation that bites: add `script` to `serialize.dump`'s entry list —
+    // the frozen G2 hash moves, this gate's dump-length claim survives, and
+    // that is the point of pinning the hash rather than the shape. (The
+    // ACTUAL guard is G2's frozen reference two thousand lines above; this
+    // gate states the intent beside the feature so a reader meets it here.)
+    var fx: Fixture = undefined;
+    try mountFixture(testing.allocator, &fx, g2_source, .{
+        .{ "plane.player.health", @as(i64, 80) },
+        .{ "plane.player.stamina", @as(i64, 50) },
+        .{ "plane.player.underwater", true },
+    });
+    defer fx.deinit();
+    try testing.expect(fx.prog.script != null);
+    const d = try rill.dump(&fx.rt, testing.allocator);
+    defer testing.allocator.free(d);
+    try testing.expect(std.mem.indexOf(u8, d, "script") == null);
+}

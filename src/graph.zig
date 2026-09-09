@@ -16,6 +16,7 @@
 const std = @import("std");
 const registry = @import("registry.zig");
 const types = @import("types.zig");
+const script_mod = @import("script.zig");
 
 pub const NodeId = u32;
 pub const SlotId = u32;
@@ -241,6 +242,23 @@ pub const Program = struct {
     /// Downstream adjacency, built by `finalize`: for each slot, the input
     /// slots its value propagates to (non-empty only for output slots).
     downstream: []const []const SlotId = &.{},
+    /// The authored structure of the text this program was parsed from
+    /// (2026-09-09) — statements as written, defs as their own nested graphs,
+    /// folds unexpanded, comments in place. Arena-owned like the rest; null
+    /// for a program that came from a dump rather than from text.
+    ///
+    /// **Nothing below the parser reads it.** The evaluator, the row runtime,
+    /// the mount path and `serialize.zig` are untouched by its existence, and
+    /// a host that only runs programs can ignore it. It exists for the client
+    /// that has to hand the FILE back — the visual editor — and `script.zig`
+    /// explains what "as written" means there.
+    ///
+    /// Not serialized, for the third time and the same reason `exports`,
+    /// `warnings` and `plane` are not: a dump is of a MOUNTED graph, this
+    /// describes the SOURCE, and putting it on the wire would bump
+    /// `fmt_version`, move G2's frozen hash and drag struple's Python reader
+    /// into the blast radius for something no runtime reads.
+    script: ?*const script_mod.Script = null,
 
     pub fn init(gpa: std.mem.Allocator, reg: *const registry.Registry, program_name: []const u8) !Program {
         var arena = std.heap.ArenaAllocator.init(gpa);

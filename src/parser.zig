@@ -103,6 +103,7 @@ const struple = @import("struple");
 const types = @import("types.zig");
 const registry = @import("registry.zig");
 const graph = @import("graph.zig");
+const script = @import("script.zig");
 
 const Program = graph.Program;
 const Source = graph.Source;
@@ -227,7 +228,21 @@ fn colonOpensFold(src: []const u8, i: usize) bool {
     };
 }
 
-fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Token {
+/// A `//` line, as the tokenizer met it. The tokenizer's job is to DROP these
+/// — the graph has no use for prose — so they leave by a side door instead,
+/// for the script to attach to the statement they lead.
+///
+/// Load-bearing, not a nicety: `matryoshka/kernels/roaches.rill` is the
+/// project's documented exemplar and is roughly four-fifths comment. An
+/// editor that round-trips a file and eats its prose has deleted the only
+/// documentation of the thing it just edited. See `script.Comment`.
+const RawComment = struct {
+    line: u32,
+    /// `//` included, trailing whitespace and `\r` trimmed.
+    text: []const u8,
+};
+
+fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag, comments: *std.ArrayListUnmanaged(RawComment)) ParseError![]Token {
     var toks = std.ArrayListUnmanaged(Token).empty;
     var line: u32 = 1;
     var col: u32 = 1;
@@ -260,7 +275,9 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag) ParseError![]Tok
         // it is still text: the tail slices the raw source to end of line,
         // and the skipped tokens were never going to be consumed.
         if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
+            const cstart = i;
             while (i < src.len and src[i] != '\n') : (i += 1) col += 1;
+            try comments.append(a, .{ .line = tl, .text = std.mem.trimRight(u8, src[cstart..i], " \t\r") });
             continue;
         }
         // `-` opens a name when it does NOT open a negative number — the
@@ -506,6 +523,13 @@ const Target = struct {
     slots: *std.ArrayListUnmanaged(graph.Slot),
     names: std.StringArrayHashMapUnmanaged(Source) = .empty,
     template: ?*Template = null, // null = the program itself
+    /// The AUTHORED form of what landed here, in source order — the script's
+    /// block for this target (`script.Item`). It sits on the Target for the
+    /// same reason the plane does: this is the granularity the language has.
+    /// A def's template accumulates its own list, and that list becomes
+    /// `script.Def.body` — which IS the tunnel, at no extra cost, because a
+    /// def body was already being parsed as a mini-graph of its own.
+    items: std.ArrayListUnmanaged(script.Item) = .empty,
     /// Which evaluation plane the statements landing here run on (2026-09-08).
     /// It lives on the TARGET rather than on the Parser because that is the
     /// granularity the language now has: the program's target carries the
@@ -557,10 +581,43 @@ const Arg = struct {
     kw: []const u8 = "", // non-empty: bind to this port by name
     section_node: NodeId = 0, // valid when kind == .section
     tok: Token,
+    /// The argument AS AUTHORED, re-rendered from the tokens it consumed.
+    /// Not the same string as `text`: `text` is what the parser RESOLVED
+    /// (`:k.tight` resolves to `plane.drift.@self.k.tight`), and this is what
+    /// the author typed. The script keeps the spelling; the graph keeps the
+    /// meaning.
+    syn: []const u8 = "",
+    syn_kind: script.Arg.Kind = .word,
+    /// `at: 5` rather than `at 5` — two spellings of one binding.
+    kw_colon: bool = false,
 };
 
 /// A producer's non-first output riding a pipe, by name (see the pipe site).
 const Carried = struct { name: []const u8, src: Source };
+
+/// One chain being recorded — a statement's, or one branch of a fan-out.
+/// The head is filled by whoever reads the first term; the stages accumulate
+/// as `parseChain` walks the pipes.
+const Chain = struct {
+    head: ?script.Head = null,
+    stages: std.ArrayListUnmanaged(script.Stage) = .empty,
+};
+
+/// What `takeLead` returns: the comments above an item, and the blank run.
+const Lead = struct {
+    lead: []const script.Comment,
+    blank: u32,
+};
+
+/// One top-level def splice: the node range it produced and where it came
+/// from. See `script.Origin` for why this is a recorded field rather than a
+/// derivation off the instance-prefixed node name.
+const OriginSpan = struct {
+    lo: NodeId,
+    hi: NodeId,
+    def: u32,
+    instance: []const u8,
+};
 
 const OpResult = struct {
     node: ?NodeId = null,
@@ -610,15 +667,18 @@ fn parseWith(
     errdefer prog.deinit();
     prog.plane = top;
 
+    var comments = std.ArrayListUnmanaged(RawComment).empty;
     var p = Parser{
         .prog = &prog,
         .reg = reg,
         .diag = diag,
         .src = source,
-        .toks = try tokenize(prog.a(), source, diag),
+        .toks = try tokenize(prog.a(), source, diag, &comments),
     };
+    p.comments = comments.items;
     p.program_target = .{ .nodes = &prog.nodes, .slots = &prog.slots, .plane = top };
     try p.parseProgram();
+    try p.publishScript();
 
     // Publish `as` names on the program (sources that are wires only — the
     // console watches slots, and literal/plane sources have no slot).
@@ -661,6 +721,38 @@ const Parser = struct {
     /// `}` closes an argument list only inside a block, and a tail port's
     /// end-of-line capture would otherwise swallow the block's own brace.
     block_depth: u32 = 0,
+
+    // -- the script (2026-09-09) --------------------------------------------
+    //
+    // Retention, not a second parse: every field below is written while the
+    // graph is built, from the tokens the graph was built from. Nothing here
+    // is read by the parser's own decisions, so a mistake in it cannot change
+    // what a program means — which is what makes the beat additive.
+
+    /// Every `//` line, in source order, and how far into it the lead
+    /// attachment has got. See `takeLead`.
+    comments: []const RawComment = &.{},
+    comment_at: usize = 0,
+    /// The last source line already accounted for by an item. What separates
+    /// "two blank lines here" from "the previous statement was three lines
+    /// long".
+    cursor_line: u32 = 0,
+    /// Definitions, in source order. `script.Item.def` indexes this.
+    script_defs: std.ArrayListUnmanaged(script.Def) = .empty,
+    /// One entry per top-level `instantiate`: the node range it spliced and
+    /// which definition it came from. Applied to a per-node table at the end
+    /// (`publishScript`), where the node count is finally known.
+    origin_spans: std.ArrayListUnmanaged(OriginSpan) = .empty,
+    /// The chain being recorded — a statement's, or one branch of a fan-out.
+    /// Null outside a statement.
+    chain: ?*Chain = null,
+    /// The call the last `parseOpcall` / `instantiate` read, as authored. The
+    /// three positions that need it (a statement head, a chain stage, a
+    /// branch head) read it immediately, and a nested call in an argument has
+    /// finished before its consumer overwrites it.
+    last_call: script.Call = .{ .op = "" },
+    /// Did the expression just parsed turn out to be an opcall?
+    expr_was_call: bool = false,
 
     fn a(self: *Parser) std.mem.Allocator {
         return self.prog.a();
@@ -719,6 +811,226 @@ const Parser = struct {
             first = false;
             s = f.via;
         }
+    }
+
+    // -- the recorder -------------------------------------------------------
+
+    /// Render the tokens a construct consumed back into the text the author
+    /// typed, with canonical spacing.
+    ///
+    /// `from` is a position in `self.toks`, `self.pos` is where the construct
+    /// ended, and the slice between them is exactly what was consumed — the
+    /// parser never backtracks (`next` is the only writer of `pos`) and a
+    /// fold splice rebuilds `toks` while preserving the prefix, so a span
+    /// taken across an expansion still covers it.
+    fn renderSpan(self: *Parser, from: usize) ![]const u8 {
+        return self.renderTokens(self.toks[from..self.pos]);
+    }
+
+    /// Tokens → source text. Two rules do all the work.
+    ///
+    /// **A fold collapses back to its reference.** A spliced token carries
+    /// the expansion site that produced it, so a run of them re-renders as
+    /// the one `:name` the author wrote — `:k.tight` never prints as
+    /// `plane.drift.@self.k.tight`. Nested folds walk `via` to the OUTERMOST
+    /// site, because that is the token that is actually in the file.
+    ///
+    /// **A newline inside a span is a record or array separator.** It cannot
+    /// be anything else: those are the only constructs whose interior may
+    /// wrap, and a printer that dropped the break would emit `{a: 1 b: 2}`,
+    /// which does not parse.
+    fn renderTokens(self: *Parser, toks: []const Token) ![]const u8 {
+        var out = std.ArrayListUnmanaged(u8).empty;
+        var prev: ?Token = null;
+        var last_site: u32 = 0; // the fold run currently being collapsed
+        var broke = false; // a newline is pending, as a separator
+        for (toks) |t| {
+            if (t.kind == .newline) {
+                broke = true;
+                continue;
+            }
+            var text = t.text;
+            if (t.fold != 0) {
+                const site = self.outermostSite(t.fold);
+                if (site == last_site) continue; // still inside the same splice
+                last_site = site;
+                text = self.fold_sites.items[site - 1].name;
+            } else {
+                last_site = 0;
+            }
+            if (prev) |pv| {
+                if (broke and needsSeparator(pv, t)) try out.appendSlice(self.a(), ",");
+                if (spaceBetween(pv, t)) try out.appendSlice(self.a(), " ");
+            }
+            broke = false;
+            if (t.kind == .string) {
+                // The token's text is the RAW span between the quotes, escapes
+                // not yet applied — so putting the quotes back is the whole of
+                // re-escaping, and a `\"` in the file stays a `\"`.
+                try out.appendSlice(self.a(), "\"");
+                try out.appendSlice(self.a(), text);
+                try out.appendSlice(self.a(), "\"");
+            } else {
+                try out.appendSlice(self.a(), text);
+            }
+            prev = t;
+        }
+        return out.items;
+    }
+
+    /// The expansion site a spliced token ultimately came from — the `:name`
+    /// that is actually written in the file.
+    fn outermostSite(self: *Parser, site: u32) u32 {
+        var s = site;
+        while (self.fold_sites.items[s - 1].via != 0) s = self.fold_sites.items[s - 1].via;
+        return s;
+    }
+
+    /// After a line break inside a record or array, does a comma belong here?
+    /// Only when the author did not already write one and there is something
+    /// on both sides — `{a: 1,\n b: 2}` must not become `{a: 1, , b: 2}`.
+    fn needsSeparator(prev: Token, next_tok: Token) bool {
+        return switch (prev.kind) {
+            .comma, .lbrace, .lbracket, .lparen => false,
+            else => switch (next_tok.kind) {
+                .comma, .rbrace, .rbracket, .rparen => false,
+                else => true,
+            },
+        };
+    }
+
+    /// The spacing canon, chosen to look like the corpus: `.` and `..` bind
+    /// tight to both sides, an opener binds tight to its right, a closer and
+    /// a comma and a colon bind tight to their left, and everything else is
+    /// one space.
+    fn spaceBetween(prev: Token, next_tok: Token) bool {
+        switch (prev.kind) {
+            .dot, .dotdot, .lparen, .lbracket, .lbrace => return false,
+            else => {},
+        }
+        switch (next_tok.kind) {
+            .dot, .dotdot, .comma, .colon, .rparen, .rbracket, .rbrace => return false,
+            else => {},
+        }
+        return true;
+    }
+
+    /// The comments that lead an item beginning on `line`, and the blank run
+    /// above the item itself. Comments are handed out in source order and
+    /// each is taken exactly once, so nothing is duplicated and nothing is
+    /// lost — the leftovers at the end of the parse land on `Script.tail`.
+    ///
+    /// A comment written INSIDE a multi-line statement (between the branches
+    /// of an `also` block, say) is claimed here by the branch or statement
+    /// that follows it. Not one file in the 47-file sibling corpus does that,
+    /// so it stays a documented consequence rather than a mechanism.
+    fn takeLead(self: *Parser, line: u32) !Lead {
+        var list = std.ArrayListUnmanaged(script.Comment).empty;
+        var prev = self.cursor_line;
+        while (self.comment_at < self.comments.len and self.comments[self.comment_at].line < line) {
+            const c = self.comments[self.comment_at];
+            self.comment_at += 1;
+            try list.append(self.a(), .{
+                .blank_before = if (c.line > prev + 1) c.line - prev - 1 else 0,
+                .text = c.text,
+            });
+            prev = c.line;
+        }
+        return .{
+            .lead = list.items,
+            .blank = if (line > prev + 1) line - prev - 1 else 0,
+        };
+    }
+
+    /// A `// …` written at the END of the item that just closed, on its own
+    /// line. Call after `closeLine`, which is what decides "its own line".
+    ///
+    /// It needs its own hook because `takeLead` cannot claim it: a lead takes
+    /// comments strictly ABOVE an item, so a trailing comment would fall to
+    /// the NEXT item and print a line lower — every save walking it down the
+    /// file. Found in `docs/rill-manual.md`, whose §7 examples are written
+    /// `plane.hp | clamp 0 100 // what's flowing`.
+    fn takeTrail(self: *Parser) []const u8 {
+        if (self.comment_at >= self.comments.len) return "";
+        const c = self.comments[self.comment_at];
+        if (c.line != self.cursor_line) return "";
+        self.comment_at += 1;
+        return c.text;
+    }
+
+    /// Mark every source line up to here as accounted for.
+    ///
+    /// The line of the last CONSUMED token, never of the one under the
+    /// cursor. A `describe` block ends at a dedent, so the token under the
+    /// cursor is the next item's head — several lines and possibly a comment
+    /// block later — and reading it would swallow the gap the next item is
+    /// about to claim as its own blank run. Found by printing
+    /// `kernels/roaches.rill` twice: the second print grew.
+    /// Newlines already consumed do not count either: a block that ends at a
+    /// dedent ran `skipNewlines` first, so the last consumed token is the
+    /// break in the blank run BELOW the block — and claiming it would eat the
+    /// blank line the next item is about to print. (Found the same way: the
+    /// blank line under `describe roaches` went missing.)
+    fn closeLine(self: *Parser) void {
+        var i = self.pos;
+        while (i > 0 and self.toks[i - 1].kind == .newline) i -= 1;
+        if (i == 0) return;
+        const l = self.toks[i - 1].line;
+        if (l > self.cursor_line) self.cursor_line = l;
+    }
+
+    /// Where `name` sits in the script's definition table.
+    fn defIndex(self: *Parser, name: []const u8) ?u32 {
+        for (self.script_defs.items, 0..) |d, i| {
+            if (std.mem.eql(u8, d.name, name)) return @intCast(i);
+        }
+        return null;
+    }
+
+    /// Snapshot one call's arguments as authored, for the script.
+    fn synArgs(self: *Parser, args: []const Arg) ![]const script.Arg {
+        const out = try self.a().alloc(script.Arg, args.len);
+        for (args, out) |src_arg, *dst| dst.* = .{
+            .kind = src_arg.syn_kind,
+            .text = src_arg.syn,
+            .kw = src_arg.kw,
+            .kw_colon = src_arg.kw_colon,
+            .line = src_arg.tok.line,
+            .col = src_arg.tok.col,
+        };
+        return out;
+    }
+
+    /// Assemble the retained script once the whole file is read. The per-node
+    /// origin table is built HERE because only now is the node count known.
+    fn publishScript(self: *Parser) ParseError!void {
+        const origins = try self.a().alloc(?script.Origin, self.prog.nodes.items.len);
+        @memset(origins, null);
+        for (self.origin_spans.items) |os| {
+            var id = os.lo;
+            while (id < os.hi and id < origins.len) : (id += 1) {
+                origins[id] = .{ .def = os.def, .instance = os.instance };
+            }
+        }
+        var tail = std.ArrayListUnmanaged(script.Comment).empty;
+        var prev = self.cursor_line;
+        while (self.comment_at < self.comments.len) {
+            const c = self.comments[self.comment_at];
+            self.comment_at += 1;
+            try tail.append(self.a(), .{
+                .blank_before = if (c.line > prev + 1) c.line - prev - 1 else 0,
+                .text = c.text,
+            });
+            prev = c.line;
+        }
+        const s = try self.a().create(script.Script);
+        s.* = .{
+            .top = self.program_target.items.items,
+            .defs = self.script_defs.items,
+            .origins = origins,
+            .tail = tail.items,
+        };
+        self.prog.script = s;
     }
 
     fn skipNewlines(self: *Parser) void {
@@ -930,6 +1242,8 @@ const Parser = struct {
     /// Undeclared means the world. See `Template.plane` for the default's
     /// argument and `checkDefReach` for what a row def may then reach.
     fn parseDef(self: *Parser, export_tok: ?Token) ParseError!void {
+        const lead = try self.takeLead((export_tok orelse self.peek()).line);
+        var syn_ports = std.ArrayListUnmanaged(script.Port).empty;
         const kw_tok = self.next(); // "def"
         // The dedent that ends the body is measured from the STATEMENT HEAD,
         // which is `export` when there is one — not from `def`. Measuring from
@@ -954,11 +1268,17 @@ const Parser = struct {
             if (pt.kind != .name) return self.fail(pt, "expected port name in def signature", .{});
             if (pt.text[0] == '$' or pt.text[0] == '@' or pt.text[0] == '#' or pt.text[0] == '^') return self.fail(pt, "'{s}': a sigil names a store row (`$` field, `@` entity, `#` condition, `^` archetype) — a port cannot wear it", .{pt.text});
             var ty: types.TypeId = types.Tag.any;
+            // The pack as WRITTEN, beside the pack as parsed. `graph.DefPort`
+            // holds struple bytes, which is right for a host reading the
+            // number and useless for putting the file back: `0.5` and `0.50`
+            // are one number and two files.
+            var syn_port = script.Port{ .name = pt.text, .line = pt.line, .col = pt.col };
             if (self.peek().kind == .colon) {
                 _ = self.next();
                 const tt = self.next();
                 if (tt.kind != .name) return self.fail(tt, "expected type name after ':'", .{});
                 ty = self.reg.types.intern(tt.text) catch return error.OutOfMemory;
+                syn_port.ty = tt.text;
             }
             var decl = PortDecl{ .name = try self.a().dupe(u8, pt.text), .ty = ty, .tok = pt };
             // `= <literal>` — the default. A literal and nothing else: a def
@@ -969,8 +1289,10 @@ const Parser = struct {
             // other, and the tokens it splices are judged by the same rule.
             if (self.peek().kind == .sym and std.mem.eql(u8, self.peek().text, "=")) {
                 _ = self.next();
+                const default_mark = self.pos;
                 try self.expandIfFold();
                 const lit = try self.parseDefLiteral(name_tok.text, pt.text, "default");
+                syn_port.default = try self.renderSpan(default_mark);
                 if (!types.accepts(ty, lit.ty)) {
                     return self.fail(self.toks[self.pos - 1], "def '{s}' port '{s}': the default is {s}, but the port is declared {s}", .{ name_tok.text, pt.text, self.reg.types.name(lit.ty), self.reg.types.name(ty) });
                 }
@@ -980,14 +1302,18 @@ const Parser = struct {
             // nothing, and inside a signature a `(` can only ever open one.
             if (self.peek().kind == .lparen) {
                 _ = self.next();
+                const lo_mark = self.pos;
                 try self.expandIfFold();
                 const lo = try self.parseDefLiteral(name_tok.text, pt.text, "range minimum");
+                syn_port.min = try self.renderSpan(lo_mark);
                 const dd = self.next();
                 if (dd.kind != .dotdot) {
                     return self.fail(dd, "def '{s}' port '{s}': a range is written '(<min>..<max>)' — expected '..', got '{s}'", .{ name_tok.text, pt.text, dd.text });
                 }
+                const hi_mark = self.pos;
                 try self.expandIfFold();
                 const hi = try self.parseDefLiteral(name_tok.text, pt.text, "range maximum");
+                syn_port.max = try self.renderSpan(hi_mark);
                 const close = self.next();
                 if (close.kind != .rparen) {
                     return self.fail(close, "def '{s}' port '{s}': expected ')' to close the range", .{ name_tok.text, pt.text });
@@ -1020,6 +1346,7 @@ const Parser = struct {
                 }
             }
             try ports.append(self.a(), decl);
+            try syn_ports.append(self.a(), syn_port);
             const sep = self.peek();
             if (sep.kind == .comma) {
                 _ = self.next();
@@ -1044,9 +1371,13 @@ const Parser = struct {
         // Rejected: `def spin(x): row = …` — the colon has four meanings
         // already and the port-type one lives inside those very parens.
         var plane: graph.EvalPlane = .world;
+        // As written, not as resolved: an undeclared def and one that says
+        // `on plane` are the same plane and not the same file.
+        var syn_on: []const u8 = "";
         if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "on")) {
             _ = self.next();
             const pl = self.next();
+            syn_on = pl.text;
             if (pl.kind == .name and std.mem.eql(u8, pl.text, "row")) {
                 plane = .row;
             } else if (pl.kind == .name and std.mem.eql(u8, pl.text, "plane")) {
@@ -1072,6 +1403,14 @@ const Parser = struct {
             return self.fail(eq, "expected '=' after def signature", .{});
         }
 
+        // The signature is one line and it is now behind us. Without this the
+        // body's first statement measures its blank run from whatever stood
+        // before the `def`, counts the signature and its whole comment block
+        // as blank, and the file grows by that much on every save — which is
+        // exactly what `kernels/roaches.rill` did, twelve lines a round.
+        self.closeLine();
+        const syn_trail = self.takeTrail();
+
         const tmpl = try self.a().create(Template);
         tmpl.* = .{
             .name = try self.a().dupe(u8, name_tok.text),
@@ -1088,8 +1427,10 @@ const Parser = struct {
 
         var last: OpResult = .{};
         var last_names: []const []const u8 = &.{};
+        var inline_body = false;
         if (self.peek().kind != .newline and self.peek().kind != .eof) {
             // single-line body: def double(x) = x | mul 2
+            inline_body = true;
             last = try self.parseStatement(&target);
             last_names = last.out_names;
         } else {
@@ -1128,6 +1469,27 @@ const Parser = struct {
         }
         tmpl.outputs = outs.items;
 
+        // THE TUNNEL. `target.items` is the def's own block of statements,
+        // built by the same `parseStatement` that builds the top level's — so
+        // a definition is an editable graph in exactly the sense the program
+        // is, and drilling in is indexing, not re-parsing. The parse already
+        // built this mini-graph and dropped it; keeping it is the beat.
+        const def_index: u32 = @intCast(self.script_defs.items.len);
+        try self.script_defs.append(self.a(), .{
+            .name = tmpl.name,
+            .exported = exported,
+            .ports = syn_ports.items,
+            .on = syn_on,
+            .body = target.items.items,
+            .inline_body = inline_body,
+            .lead = lead.lead,
+            .blank_before = lead.blank,
+            .trail = syn_trail,
+            .line = def_tok.line,
+            .col = def_tok.col,
+        });
+        try self.program_target.items.append(self.a(), .{ .def = def_index });
+
         try self.defs.put(self.a(), tmpl.name, tmpl);
     }
 
@@ -1154,6 +1516,15 @@ const Parser = struct {
     /// so rather than shrugging, because "unknown name" would send the author
     /// hunting for a typo that is not there.
     fn parseDescribe(self: *Parser) ParseError!void {
+        const lead = try self.takeLead(self.peek().line);
+        // Recorded as an ANNEX — one instance of "a block the parser reads,
+        // the runtime elides and the document keeps" — rather than as a
+        // bespoke `describe`. Christian ruled on 2026-09-09 that the editor's
+        // node positions land the same way (a `layout` block keyed by the
+        // instance names `autoName` mints, naming `describe` as the
+        // precedent), so the second such block must cost a reader here and
+        // nothing in the printer. See `script.Annex`.
+        var lines = std.ArrayListUnmanaged(script.AnnexLine).empty;
         const kw = self.next(); // "describe"
         const name_tok = self.next();
         if (name_tok.kind != .name) {
@@ -1195,6 +1566,7 @@ const Parser = struct {
                     return self.fail(t, "describe '{s}': the definition's description is empty — say what it does, or leave the line out", .{tmpl.name});
                 }
                 tmpl.doc = try self.unescape(t.text);
+                try lines.append(self.a(), .{ .values = try self.oneValue(self.toks[self.pos - 1 ..][0..1]) });
                 any_line = true;
                 continue;
             }
@@ -1224,11 +1596,32 @@ const Parser = struct {
                 return self.fail(t, "describe '{s}': port '{s}' is described twice", .{ tmpl.name, t.text });
             }
             pd.doc = try self.unescape(st.text);
+            try lines.append(self.a(), .{ .key = t.text, .values = try self.oneValue(self.toks[self.pos - 1 ..][0..1]) });
             any_line = true;
         }
         if (!any_line) {
             return self.fail(kw, "describe '{s}' says nothing — put the description on the next line, indented", .{tmpl.name});
         }
+        self.closeLine();
+        try self.program_target.items.append(self.a(), .{ .annex = .{
+            .keyword = kw.text,
+            .subject = name_tok.text,
+            .lines = lines.items,
+            .lead = lead.lead,
+            .blank_before = lead.blank,
+            .trail = self.takeTrail(),
+            .line = kw.line,
+            .col = kw.col,
+        } });
+    }
+
+    /// One annex value, rendered. A `describe` line's string keeps its quotes
+    /// and its escapes exactly as typed — the pack holds the decoded text for
+    /// a HUD, and the file holds the spelling.
+    fn oneValue(self: *Parser, toks: []const Token) ![]const []const u8 {
+        const out = try self.a().alloc([]const u8, 1);
+        out[0] = try self.renderTokens(toks);
+        return out;
     }
 
     /// usingstmt := "using" token+ "as" foldname — a parse-time MACRO
@@ -1246,6 +1639,7 @@ const Parser = struct {
     /// those can wear a colon. Three rules survive: not a store sigil, not a
     /// reserved word, not already bound.
     fn parseUsing(self: *Parser) ParseError!void {
+        const lead = try self.takeLead(self.peek().line);
         const kw = self.next(); // "using"
         const start = self.pos;
         while (self.peek().kind != .newline and self.peek().kind != .eof) _ = self.next();
@@ -1281,6 +1675,19 @@ const Parser = struct {
             .body = body,
             .def_line = kw.line,
         });
+        // The binding as authored. Its tokens were captured unparsed, so
+        // rendering them is the whole job — and every `:k` downstream prints
+        // as `:k` because the script never sees the expansion.
+        self.closeLine();
+        try self.program_target.items.append(self.a(), .{ .using = .{
+            .name = name_tok.text,
+            .body = try self.renderTokens(body),
+            .lead = lead.lead,
+            .blank_before = lead.blank,
+            .trail = self.takeTrail(),
+            .line = kw.line,
+            .col = kw.col,
+        } });
     }
 
     /// At a `:name`: splice the fold's tokens into the stream in its place and
@@ -1381,12 +1788,26 @@ const Parser = struct {
     /// `also { … }`, one spelling per position.
     fn parseStatement(self: *Parser, target: *Target) ParseError!OpResult {
         const head_tok = self.peek();
+        // The recorder opens here and closes at the bottom of this function.
+        // A statement is the unit an editor moves, so it is the unit the lead
+        // comments attach to.
+        const lead = try self.takeLead(head_tok.line);
+        var chain = Chain{};
+        const outer_chain = self.chain;
+        self.chain = &chain;
+        defer self.chain = outer_chain;
+
+        const head_mark = self.pos;
         var current = try self.parseExpr(target);
+        chain.head = if (self.expr_was_call)
+            .{ .call = self.last_call }
+        else
+            .{ .value = try self.renderSpan(head_mark) };
         while (self.peek().kind == .lbrace) {
             if (current.outputs.len == 0) {
                 return self.fail(self.peek(), "nothing to fan out — the statement head has no output", .{});
             }
-            try self.parseAlsoBlock(target, current.outputs[0], head_tok);
+            try self.parseAlsoBlock(target, current.outputs[0], head_tok, false);
         }
         try self.parseChain(target, &current);
 
@@ -1460,6 +1881,18 @@ const Parser = struct {
             }
             return self.fail(end, "unexpected '{s}' — expected end of statement", .{end.text});
         }
+
+        self.closeLine();
+        try target.items.append(self.a(), .{ .stmt = .{
+            .lead = lead.lead,
+            .blank_before = lead.blank,
+            .head = chain.head.?,
+            .stages = chain.stages.items,
+            .names = current.out_names,
+            .trail = self.takeTrail(),
+            .line = head_tok.line,
+            .col = head_tok.col,
+        } });
         return current;
     }
 
@@ -1491,7 +1924,12 @@ const Parser = struct {
             // needs a body to be several nodes, and is still refused by name.)
             if (self.peek().kind == .dot) {
                 if (current.outputs.len == 0) return self.fail(self.peek(), "nothing to pipe — upstream operator has no output", .{});
+                const proj_mark = self.pos;
                 const projected = try self.parseProjections(target, current.outputs[0]);
+                // Sugar kept as sugar: `| .pos.x` is the `project` operator,
+                // and printing it back as `project pos | project x` would be
+                // right and unrecognisable.
+                if (self.chain) |ch| try ch.stages.append(self.a(), .{ .project = try self.renderSpan(proj_mark) });
                 current.* = .{ .outputs = try self.oneSource(projected) };
                 continue;
             }
@@ -1502,7 +1940,7 @@ const Parser = struct {
             }
             if (current.outputs.len == 0) return self.fail(op_tok, "nothing to pipe — upstream operator has no output", .{});
             if (op_tok.kind == .name and std.mem.eql(u8, op_tok.text, "also")) {
-                try self.parseAlsoBlock(target, current.outputs[0], op_tok);
+                try self.parseAlsoBlock(target, current.outputs[0], op_tok, true);
                 continue; // `current` untouched — the identity, in one line
             }
             // A path after a pipe is the most-forgotten spelling in live use
@@ -1523,6 +1961,7 @@ const Parser = struct {
             // before; nothing binds by position.
             const carried = try self.carriedOutputs(target, current.*);
             current.* = try self.parseOpcallCarrying(target, op_tok, current.outputs[0], false, carried);
+            if (self.chain) |ch| try ch.stages.append(self.a(), .{ .call = self.last_call });
         }
     }
 
@@ -1551,12 +1990,22 @@ const Parser = struct {
     /// land in the program's write list through the usual path in
     /// `parseOpcall`, which is why the cycle check sees through the block for
     /// free.
-    fn parseAlsoBlock(self: *Parser, target: *Target, src: Source, also_tok: Token) ParseError!void {
+    fn parseAlsoBlock(self: *Parser, target: *Target, src: Source, also_tok: Token, spelled_also: bool) ParseError!void {
         const open = self.next();
         if (open.kind != .lbrace) return self.fail(open, "expected '{{' after 'also'", .{});
+        // The `{` is on the head's line, and the branches measure their blank
+        // runs from here. Without this the first branch counts the whole head
+        // as blank and the block grows by that much on every save — the same
+        // shape of bug the def signature had.
+        self.closeLine();
 
         self.block_depth += 1;
         defer self.block_depth -= 1;
+
+        // The enclosing chain, saved before the branches swap `self.chain`:
+        // a fan-out is one STAGE of it, and each branch is a chain of its own.
+        const outer_chain = self.chain;
+        var recorded = std.ArrayListUnmanaged(script.Branch).empty;
 
         var branches: usize = 0;
         while (true) {
@@ -1564,13 +2013,28 @@ const Parser = struct {
             const t = self.peek();
             if (t.kind == .rbrace) break;
             if (t.kind == .eof) return self.fail(also_tok, "unclosed block — expected '}}'", .{});
+            const lead = try self.takeLead(t.line);
+            var bchain = Chain{};
+            self.chain = &bchain;
             try self.parseBranch(target, src);
+            self.chain = outer_chain;
+            try recorded.append(self.a(), .{
+                .lead = lead.lead,
+                .blank_before = lead.blank,
+                .head = bchain.head.?.call,
+                .stages = bchain.stages.items,
+                .trail = self.takeTrail(),
+            });
             branches += 1;
         }
         _ = self.next(); // }
         if (branches == 0) {
             return self.fail(also_tok, "empty block — it would pass the value along and do nothing", .{});
         }
+        if (outer_chain) |ch| try ch.stages.append(self.a(), .{ .fan = .{
+            .spelled_also = spelled_also,
+            .branches = recorded.items,
+        } });
     }
 
     /// One branch of an `also` block: a chain whose head is always the
@@ -1604,7 +2068,9 @@ const Parser = struct {
         }
         _ = self.next();
         var current = try self.parseOpcall(target, head, src, false);
+        if (self.chain) |ch| ch.head = .{ .call = self.last_call };
         try self.parseChain(target, &current);
+        self.closeLine();
 
         if (self.peek().kind == .name and std.mem.eql(u8, self.peek().text, "as")) {
             return self.fail(self.peek(), "no name escapes a block — bind the stream before the block, or end the branch with a sink", .{});
@@ -1632,6 +2098,11 @@ const Parser = struct {
 
     /// expr := opcall | path | literal | record | name
     fn parseExpr(self: *Parser, target: *Target) ParseError!OpResult {
+        // The recorder's one question here: was the head an operator call
+        // (whose arguments the editor edits piecewise) or a value (which it
+        // edits as text)? Cleared first so a stale answer cannot leak.
+        self.expr_was_call = false;
+        const expr_mark = self.pos;
         try self.expandIfFold();
         const t = self.peek();
         switch (t.kind) {
@@ -1723,18 +2194,29 @@ const Parser = struct {
                             }
                             var hear_tok = t;
                             hear_tok.text = "hear";
-                            return self.parseOpcall(target, hear_tok, null, false);
+                            const res = try self.parseOpcall(target, hear_tok, null, false);
+                            // The graph gets `hear`; the file keeps `$wind at
+                            // row.pos`. Printing the desugared form back would
+                            // be semantically right and unrecognisable to
+                            // whoever wrote the line.
+                            self.last_call.sugar = try self.renderSpan(expr_mark);
+                            self.expr_was_call = true;
+                            return res;
                         }
                         return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: in a kernel, '{s} at row.pos' (or '{s} grad at row.pos') — a bare channel has no implicit 'here'", .{ t.text, t.text, t.text });
                     }
                     return self.fail(t, "'{s}' is a field channel, and a field read names its standpoint: plane.sensors.<post>.{s}, or @tom.{s} through an entity-bound ear — a bare channel has no implicit 'here'. To deposit, 'cast {s} …'", .{ t.text, t.text, t.text, t.text });
                 }
                 const op_tok = self.next();
-                return self.parseOpcall(target, op_tok, null, false);
+                const res = try self.parseOpcall(target, op_tok, null, false);
+                self.expr_was_call = true;
+                return res;
             },
             .sym => {
                 const op_tok = self.next();
-                return self.parseOpcall(target, op_tok, null, false);
+                const res = try self.parseOpcall(target, op_tok, null, false);
+                self.expr_was_call = true;
+                return res;
             },
             else => return self.fail(t, "expected an expression, got '{s}'", .{t.text}),
         }
@@ -2287,7 +2769,12 @@ const Parser = struct {
         // `string` field is an unresolvable name. Same shape as the tail:
         // the port's declaration is what dispatches, not a lookahead guess.
         var shape_static: ?registry.StaticVal = null;
-        if (opHasShape(def)) shape_static = try self.parseShapeLiteral(op_name);
+        var shape_syn: []const u8 = "";
+        if (opHasShape(def)) {
+            const shape_mark = self.pos;
+            shape_static = try self.parseShapeLiteral(op_name);
+            shape_syn = try self.renderSpan(shape_mark);
+        }
 
         var args = std.ArrayListUnmanaged(Arg).empty;
         if (has_tail) {
@@ -2319,6 +2806,19 @@ const Parser = struct {
                 } else j += 1;
             }
         }
+
+        // The call, as authored. Recorded HERE — after keyword pairing, which
+        // is the only step that rewrites the argument list, and before the
+        // statics loop, which only reads it. `op_name` is already the
+        // spelling that was typed: the two-word lookup above rewrote it to
+        // `boolean subtract` exactly when the author wrote two words.
+        self.last_call = .{
+            .op = op_name,
+            .shape = shape_syn,
+            .args = try self.synArgs(args.items),
+            .line = op_tok.line,
+            .col = op_tok.col,
+        };
 
         // ONE tag per call (ironwood R6 fork B): a second `#`-condition has
         // nowhere honest to bind, and "too many arguments" would mislabel a
@@ -2860,6 +3360,7 @@ const Parser = struct {
                         _ = self.next(); // ':'
                         var arg = try self.parseArgValue(target);
                         arg.kw = t.text;
+                        arg.kw_colon = true;
                         try args.append(self.a(), arg);
                         continue;
                     }
@@ -2924,7 +3425,11 @@ const Parser = struct {
             var pk_all = struple.Packer.init(self.a());
             pk_all.appendString(text_all) catch return error.OutOfMemory;
             const bytes_all = pk_all.toOwnedSlice() catch return error.OutOfMemory;
-            try args.append(self.a(), .{ .kind = .literal, .source = .{ .literal = bytes_all }, .ty = types.Tag.string, .tok = op_tok });
+            // A tail is the one argument whose spelling cannot be rebuilt
+            // from tokens — that is what "verbatim from the raw source"
+            // means, and `/tmp/loop.wav` would come back through the spacing
+            // canon as `/ tmp / loop.wav`. So the raw slice IS the spelling.
+            try args.append(self.a(), .{ .kind = .literal, .source = .{ .literal = bytes_all }, .ty = types.Tag.string, .tok = op_tok, .syn = text_all, .syn_kind = .tail });
             return;
         }
 
@@ -2962,7 +3467,9 @@ const Parser = struct {
         var pk = struple.Packer.init(self.a());
         pk.appendString(final_text) catch return error.OutOfMemory;
         const bytes = pk.toOwnedSlice() catch return error.OutOfMemory;
-        try args.append(self.a(), .{ .kind = .literal, .source = .{ .literal = bytes }, .ty = types.Tag.string, .tok = start_tok });
+        // `text`, not `final_text`: an author who quoted the tail gets the
+        // quotes back, and one who did not does not.
+        try args.append(self.a(), .{ .kind = .literal, .source = .{ .literal = bytes }, .ty = types.Tag.string, .tok = start_tok, .syn = text, .syn_kind = .tail });
     }
 
     /// arg := literal | path | name(.field)* | record | "(" opcall ")"
@@ -2992,7 +3499,37 @@ const Parser = struct {
         return .{ .kind = .stream, .source = res.outputs[0], .ty = self.sourceTy(target, res.outputs[0]), .tok = op_tok };
     }
 
+    /// One argument, plus its authored spelling for the script.
+    ///
+    /// The capture is a WRAPPER rather than a line in each of the eight
+    /// return paths below, so a new argument shape cannot forget to record
+    /// itself. The mark is taken before `expandIfFold`, which is what makes
+    /// `push :k.shove` print back as `:k.shove` — the span then covers the
+    /// `:name` the author wrote, and `renderTokens` collapses the splice.
     fn parseArgValue(self: *Parser, target: *Target) ParseError!Arg {
+        const mark = self.pos;
+        const open_kind = self.peek().kind;
+        var arg = try self.parseArgValueInner(target);
+        arg.syn = try self.renderSpan(mark);
+        // A record and an array both arrive as `.stream` (they are nodes),
+        // and the two are worth telling apart to whoever is editing them.
+        // The opening token is the only thing that distinguishes them, and it
+        // is the same token the parser dispatched on.
+        arg.syn_kind = switch (arg.kind) {
+            .literal => .literal,
+            .word => .word,
+            .plane_path => .path,
+            .section => .section,
+            .stream => switch (open_kind) {
+                .lbrace => .record,
+                .lbracket => .array,
+                else => .stream,
+            },
+        };
+        return arg;
+    }
+
+    fn parseArgValueInner(self: *Parser, target: *Target) ParseError!Arg {
         // Argument position is the reason `using` exists rather than a
         // namespace import: `push :flock` splices a whole expression where a
         // def could never go, because `instantiate` is only reachable from
@@ -3190,6 +3727,17 @@ const Parser = struct {
         var args = std.ArrayListUnmanaged(Arg).empty;
         try self.parseArgs(target, &args);
 
+        // A def call is a call: the script records it the same way an
+        // operator call is recorded, so `roaches rate 20` prints back as
+        // itself rather than as the eleven nodes it flattens into. This is
+        // the other half of the tunnel — the door is the call site.
+        self.last_call = .{
+            .op = tmpl.name,
+            .args = try self.synArgs(args.items),
+            .line = op_tok.line,
+            .col = op_tok.col,
+        };
+
         // Bind caller args to def ports (same rules as opcalls, no statics).
         const bound = try self.a().alloc(?Arg, tmpl.ports.len);
         @memset(bound, null);
@@ -3310,6 +3858,23 @@ const Parser = struct {
             // reads and writes one `@self` path is caught for free, and gated.
             if (target.template == null and self.reg.get(tn.op).class.writes()) {
                 self.prog.registerWrites(statics, new_id) catch return error.OutOfMemory;
+            }
+        }
+
+        // Which definition produced which flattened node (2026-09-09). Only
+        // the PROGRAM's splices are recorded: a def calling a def splices into
+        // the outer TEMPLATE, whose node ids are template-local and get
+        // remapped again when the outer one lands — so the outer splice
+        // records the whole range, once, with real program ids. Same reason
+        // the `.plane` subscription above guards on `target.template == null`.
+        if (target.template == null) {
+            if (self.defIndex(tmpl.name)) |di| {
+                try self.origin_spans.append(self.a(), .{
+                    .lo = node_base,
+                    .hi = @intCast(target.nodes.items.len),
+                    .def = di,
+                    .instance = inst_name,
+                });
             }
         }
 

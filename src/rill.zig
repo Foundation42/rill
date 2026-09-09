@@ -37,6 +37,10 @@ pub const types = @import("types.zig");
 pub const registry = @import("registry.zig");
 pub const graph = @import("graph.zig");
 pub const parser = @import("parser.zig");
+/// The authored structure of a parsed program, and the printer that puts it
+/// back as `.rill` text (2026-09-09). `prog.script` is what a visual editor
+/// reads and edits; nothing in the runtime touches it.
+pub const script = @import("script.zig");
 pub const ops = @import("ops.zig");
 pub const plane = @import("plane.zig");
 pub const eval = @import("eval.zig");
@@ -72,6 +76,10 @@ pub const DefPort = graph.DefPort;
 pub const EvalPlane = graph.EvalPlane;
 pub const parse = parser.parse;
 pub const parseKernel = parser.parseKernel;
+/// `prog.script` → `.rill` text. Semantically faithful and stable, not
+/// byte-faithful to arbitrary input: see `script.print` for the canon.
+pub const Script = script.Script;
+pub const printScript = script.print;
 pub const Diag = parser.Diag;
 pub const ParseError = parser.ParseError;
 pub const Plane = plane.Plane;
@@ -92,6 +100,7 @@ test {
     _ = @import("registry.zig"); // one registration path
     _ = @import("graph.zig"); // flat graph, path overlap
     _ = @import("parser.zig"); // text → flat graph
+    _ = @import("script.zig"); // the authored structure, and back to text
     _ = @import("ops.zig"); // core operator set
     _ = @import("plane.zig"); // borrowed plane + mock
     _ = @import("eval.zig"); // mount / feed / tick

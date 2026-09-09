@@ -4084,3 +4084,268 @@ rewritten; `rill.zig` exports `EvalPlane` beside `DefPort`, with the collision
 named where a reader of the export list meets it. `CLAUDE.md` was NOT touched: the recon found its host-word list
 stale (seven spindrift words listed, fifteen registered) and that file is the
 owner's, changed on purpose.
+
+## The script survives the parse, and prints back, 2026-09-09
+
+Christian is building a Softimage-ICE-style visual graph editor for rill. It
+has to READ a `.rill` file into a graph, let someone edit it, and WRITE it back
+out as `.rill`. rill could read source; it could not write it. This beat is the
+half that was missing, in two parts: **R1**, retain the authored structure the
+parse consumes and discards, and **R2**, print it back.
+
+His hard requirement, stated up front so it would be designed in rather than
+retrofitted: **graph tunneling**. A `def` must be editable as its own nested
+graph — drill in, edit, drill out — the way ICE and Blueprints do it. His
+reason is experience: if that is not there from the start it never gets done.
+
+### What the parse was already building and throwing away
+
+Almost all of it. `parser.zig:465` has said since the def beat that a
+`Template` is "a parsed def body: a mini-graph whose input-slot sources may be
+`.port`", and `graph.Source.port` is documented as the def's own input port,
+"never survives flattening". The tunnel was being built on every parse and
+dropped at the end of `parseDef`. `Program.exports` — the pack of an
+`export def` — was the one thing that survived.
+
+So R1 is retention, not invention. `Target` grows an `items` list; a def's
+template accumulates its own, and that list becomes `script.Def.body`. A
+definition is an editable graph in exactly the sense the program is, and
+drilling in is indexing rather than re-parsing. The tunnel cost one field.
+
+### The shape, and what "as written" means
+
+`Program.script` holds `top: []Item` and `defs: []Def`, where an `Item` is a
+statement, a def (by index — the tunnel's door), a `using` binding, or an
+**annex**. Every leaf holds the text the AUTHOR typed, re-rendered from that
+leaf's own tokens:
+
+- `:k.tight` stays `:k.tight`, never `plane.drift.@self.k.tight`.
+- `boolean subtract` stays two words (`op_name` is already the spelling that
+  was typed — the two-word lookup rewrites it exactly when two were written).
+- `at 5` and `at: 5` stay apart.
+- a def's `rate = 60 (0..500)` stays `60` and `0..500`, not struple bytes.
+
+A leaf is TEXT rather than a nested tree on purpose. A record literal, an
+array and a predicate section are already nodes in the graph, so the editor
+has structure for them there; duplicating it here would be two
+representations to keep in step, and what the script owes is the spelling.
+
+**The capture mechanism is a token span, and it works because the parser never
+backtracks.** `next` is the only writer of `pos`, and a fold splice rebuilds
+`toks` while preserving the prefix — so `toks[mark..pos]` is exactly what a
+construct consumed, expansion included. `renderTokens` then puts it back:
+a run of spliced tokens collapses to the one `:name` that is actually in the
+file (walking `via` to the outermost site, so nested folds collapse to the
+outer one), and a newline inside a span is a record/array separator, which is
+the only thing it can be. That is the whole of it — one wrapper on
+`parseArgValue`, and marks at seven other points.
+
+The one argument that cannot be rebuilt from tokens is a TAIL, because
+"verbatim from the raw source" is what a tail means and `/tmp/loop.wav` would
+come back through the spacing canon as `/ tmp / loop.wav`. The raw slice is
+the spelling there, and `parseTailArgs` records it directly.
+
+### `describe` was generalised, on Christian's ruling
+
+He ruled the same day on where the editor's node positions live: **not in
+comments and not in a sidecar file** — a real rill block that the parser reads
+and retains and the runtime elides entirely, naming `describe` as the explicit
+precedent, keyed by the instance names `autoName` already mints:
+
+    layout roaches
+      near1  240 120
+      push1  400 120
+
+It is NOT built here and the parser does not accept it. What is built is the
+shape it lands in: `script.Annex` — a keyword, a subject, and lines of an
+optional key plus values, each value already RENDERED — so `describe` is one
+instance of a kind rather than a special case threaded through the printer.
+Adding `layout` means a reader in the parser and one more `keyword`; the
+printer does not move. Values are kept rendered (quotes on) precisely so no
+future annex kind has to teach the printer how to re-escape its own leaves.
+
+Named `Annex` after reading the alternatives aloud. Rejected: `Block` (a
+`{…}` fan-out is already called a block in this language), `Section` (a
+predicate section is), `Body` (a def has one), `Sidecar` (Christian
+explicitly ruled OUT a sidecar file, so the word would mislead), `Note`
+(collides with `noteProvenance`, and understates `layout`), `Gloss` (right for
+prose, wrong for coordinates). The module itself kept the brief's working name
+`script`; `doc` and `Source` were both already taken, and `layout` is now
+spoken for by the block above.
+
+### Comments, which are the load-bearing part
+
+`matryoshka/kernels/roaches.rill` is the project's documented exemplar and is
+roughly four-fifths prose. An editor that eats it on save has deleted the only
+documentation of the thing it just edited, so this is a correctness
+requirement and not a nicety, and it is said so in the code where they are
+attached.
+
+The tokenizer's job is to DROP comments, so they leave by a side door
+(`RawComment`) and are attached to the item they LEAD — which is what survives
+an edit: move a statement and its explanation moves with it. Blank runs ride
+the same way (`blank_before`), preserved exactly as written rather than
+normalised, because normalising would rewrite every file in the corpus on its
+first save and that is what makes a git history useless.
+
+**Trailing same-line comments needed their own hook, and were found by the
+manuals.** A lead takes comments strictly ABOVE an item, so
+`plane.hp | clamp 0 100 // what's flowing` — the manual's own §7 spelling —
+fell to the next statement and printed a line lower. Every save walked it
+further down the file. `takeTrail` runs after `closeLine` and claims a comment
+on the item's own last line.
+
+### Three cursor bugs, all the same bug
+
+`cursor_line` is what separates "two blank lines here" from "the previous
+statement was three lines long". Three places forgot to advance it, and each
+one made the file GROW by that much on every save:
+
+1. A def's signature. The body's first statement measured its blank run from
+   whatever stood before the `def` and counted the signature and its whole
+   comment block as blank. `kernels/roaches.rill` grew twelve lines a round.
+2. `closeLine` reading the token under the cursor. A `describe` block ends at
+   a dedent, so that token is the NEXT item's head — several lines and a
+   comment block later — and reading it ate the gap. It also had to skip back
+   over newlines already consumed by `skipNewlines`, or the blank line under
+   the block went missing.
+3. The `{` of a fan-out. The first branch counted the whole head as blank.
+
+All three were found by running the printer twice and diffing, which is
+exactly what G-idempotent does — (1) and (2) on `roaches.rill` through the
+tool, (3) on a fixture through the gate.
+
+### Gates and mutations
+
+Every mutation below was executed and watched go red. Seventeen bit the gate
+they were aimed at; the eighteenth did not, and the gate was wrong.
+
+| gate | mutation that bites |
+| --- | --- |
+| G-roundtrip (fixtures) | walk `s.top` in reverse in `script.print` — parse order is topological order, so fixture 0 refuses with "unknown operator or name 'body'" |
+| G-roundtrip | `arg.syn = ""` in `parseArgValue` — every argument prints empty |
+| G-roundtrip | delete `closeLine` above `syn_trail` in `parseDef` — fixture 3 grows per print |
+| G-roundtrip | delete `closeLine` after the `{` in `parseAlsoBlock` — fixture 6 grows per print |
+| G-roundtrip (manuals + rillbook) | render a `.string` token without re-quoting — every string literal reprints as a bare word |
+| G-roundtrip (manuals + rillbook) | `takeTrail` always returns `""` — a trailing comment walks down the file |
+| G-comments | delete `self.lead(st.lead, depth)` in `Printer.item` — the block vanishes, 5 → 0 |
+| G-comments | print `blank_before` as at most 1 — the blank runs collapse |
+| G-fold | delete the `t.fold != 0` branch in `renderTokens` — every `:k` prints expanded |
+| G-tunnel | drop the `.def` item append in `parseDef` — the definition vanishes and the reprint refuses |
+| G-tunnel | `script.Def.body = &.{}` — the def prints with an empty body |
+| G-origin | drop the `origin_spans.append` in `instantiate` — every origin comes back null |
+| G-pack | delete `syn_port.default` — the reprint refuses, "port 'rate' is not bound" |
+| G-pack | delete `syn_port.min` — the range vanishes and nothing else notices |
+| G-pack / G-annex | `closeLine` reads `self.peek().line` — the blank under a `describe` block is eaten |
+| G-kw | print `arg.text` without `arg.kw` — a kw-declared port never fills positionally, so it refuses |
+| G-kw | ignore `kw_colon` — `at: 5` becomes `at 5`, which nothing downstream can tell |
+| G-annex | drop the last `lines.append` in `parseDescribe` — the parity gate refuses the reprint |
+
+**The gate that was wrong, and the finding in it.** The `closeLine` mutation
+was aimed at G-roundtrip and SURVIVED it. It should have: losing a blank line
+is both semantically identical AND perfectly stable, so all three of
+round-trip, idempotence and comment-count pass. The round-trip triple does not
+subsume a byte comparison, and that is worth knowing about it: the byte-level
+gates (G-pack, G-annex, G-comments, G-fold, G-kw, G-tunnel, all
+`expectEqualStrings` against a hand-written source) are not decoration beside
+G-roundtrip, they are the half that sees whitespace. The mutation was
+re-attributed to them rather than the claim being softened.
+
+**`kw` dropped positionally is NOT equivalent**, which the brief asked about:
+a keyword-declared port never fills positionally (the `arm gate_closed` rule),
+so `cast $t 1.0 radius 25 {…}` refuses outright. Dropping the COLON *is*
+equivalent, which is exactly why it needs a gate of its own — nothing
+downstream can tell, and the file would drift on every save.
+
+### The corpus, and why its gate is a tool
+
+The brief asked for G-roundtrip over every `.rill` file in
+`{rill,spindrift,matryoshka}` — 47 of them. **All 47 round-trip**: 26 through
+`parse`, 21 through `parseKernel`, zero drift, zero instability, zero comments
+lost. 35 come back byte-identical; the 12 that differ differ only by the
+declared canon (a wrapped chain unwrapped, a column of aligned `describe`
+strings normalised to one space, `{ kind: "x" }` closed up).
+
+That measurement is `zig build roundtrip`, a tool, **not** a gate in
+`zig build test`, and the reason is not laziness:
+
+- rill is the library matryoshka and spindrift embed. It is public and
+  standalone, and a `b.path("../spindrift/…")` in `build.zig` would make it
+  unbuildable on its own.
+- 21 of the 47 use HOST words — `spawn`, `near`, `push`, `collide` — that rill
+  core does not have and must not have. `tests.zig`'s NORTHSTAR banner already
+  refuses to teach rill what a kernel is.
+
+`tools/roundtrip.zig` declares the fifteen spindrift row words as stubs with
+their port shapes copied from `spindrift/src/words.zig` (a stub whose arity
+differed would parse the file differently and measure the wrong thing), and
+`--host-row` turns them on. Nothing in the sibling repos was touched.
+
+The IN-REPO gates run the same three checks over programs rill owns: a
+twelve-program fixture set covering the shapes a doc example never writes, plus
+every ```rill fence in both manuals, the README and `rbf-words.md`, plus every
+cell of `idioms.rillbook` — about 130 real programs, already gated as
+parseable, now gated as printable. That breadth is what found the trailing
+comment; a printer only its author's fixtures have seen is a printer that has
+seen what its author thought of.
+
+**The oracle is `Runtime.restore` + `serialize.dump`, not a new comparator.**
+`restore` subscribes and does NOT tick, so the dump is the program's structure
+— nodes, wires, statics, order — with no live state and no tick-0 refusal.
+
+### The canon, and what it costs
+
+One statement, one line; a chain never wraps. Two spaces for a def body and a
+`describe` block (what `rill-manual.md` and `roaches.rill` use). Blank runs
+preserved as written. Two spaces before a trailing comment. A trailing
+newline, always.
+
+The corpus wraps chains in four ironwood rills, always with the `|` in the
+left margin. That is a nice shape and it is NOT recoverable from the structure
+— the parser skips the newline after a `|` — so a printer that guessed would
+churn the file differently every time. One line is the stable answer, and
+`deadline.rill` reprints as one line. If Christian wants the wrap kept, the
+fix is to record it as a flag on the stage, not to guess.
+
+### What this beat deliberately did NOT build
+
+- **Node layout positions.** Christian is ruling on where they live and has;
+  the `Annex` shape is the door and nothing more.
+- **A tree for record, array and section interiors.** They are text plus a
+  kind tag. They are already nodes in the graph, which is where an editor
+  should reach for their structure.
+- **Anything on the runtime path.** No change to `eval.zig`, `row.zig`, the
+  mount path, or `serialize.zig`'s format. `Program.script` is not serialized,
+  for the third time and the same reason `exports`, `warnings` and `plane` are
+  not: a dump is of a MOUNTED graph, this describes the SOURCE, and putting it
+  on the wire would bump `fmt_version`, move G2's frozen hash and drag
+  struple's Python reader into the blast radius for something no runtime
+  reads. **The frozen G2 hash did not move.** All 371 pre-existing tests stay
+  green, which was the beat's first gate.
+- **A seam export.** `c_api.zig` is untouched; the editor is a Zig client.
+
+### Known consequences, written down rather than discovered
+
+- A comment written INSIDE a multi-line statement — between the branches of
+  an `also` block, say — is claimed by the branch or statement that FOLLOWS
+  it. Not one file in the 47 does that, so it stays a consequence rather than
+  a mechanism.
+- A trailing comment on any line of an annex except its last moves the same
+  way.
+- `$wind at row.pos` desugars to a `hear` call in the graph. The script keeps
+  the sugar (`Call.sugar`) so it prints as written, but the ARGUMENTS of a
+  sugared call are not separately addressable — the editor gets one string.
+- A def that calls a def: `script.origins` names the OUTERMOST instance.
+  `Node.name` carries the whole chain, which is where the rest is.
+
+### Docs in the same commit
+
+`src/script.zig` carries the design in its header — the tunnel, what "as
+written" means, and why comments are load-bearing. `parser.zig`'s recorder
+block says why nothing in it can change what a program means. `graph.zig`'s
+`Program.script` states the not-serialized ruling where a reader of the struct
+meets it. `rill.zig` exports `script`, `Script` and `printScript`. `build.zig`
+gains the `roundtrip` step with the reason it is a step and not a test.
+`CLAUDE.md` was NOT touched — it is the owner's file — but note for whoever
+does: its "There is no `-Dtest-filter` wired in this repo's `build.zig`" is
+stale, and has been since 2026-09-08.
