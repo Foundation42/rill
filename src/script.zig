@@ -196,6 +196,19 @@ pub const Def = struct {
     body: []const Item = &.{},
     /// `def double(x) = x | mul 2` — the body sat on the signature line.
     inline_body: bool = false,
+    /// How far the body was indented, in spaces. Zero means "nothing was
+    /// retained" — a def the editor built from scratch — and the printer
+    /// falls back to the canon.
+    ///
+    /// Retained rather than canonised because the corpus is genuinely SPLIT
+    /// and the split runs between two sets of Christian's own files:
+    /// `kernels/roaches.rill`, the one `.rill` file in the 47 with a
+    /// multi-line def body, writes 4; all six def bodies printed in
+    /// `rill-manual.md` and `rill-for-agents.md` write 2. Either canon
+    /// degrades the other set on every save, which is the exact failure this
+    /// printer exists not to have. Retaining degrades neither, and it is the
+    /// same principle already shipped one field up for blank runs.
+    indent: u32 = 0,
     lead: []const Comment = &.{},
     blank_before: u32 = 0,
     /// A `// …` on the signature's own line.
@@ -323,6 +336,20 @@ pub const Script = struct {
 // The printer
 // ---------------------------------------------------------------------------
 
+/// The indent, in spaces, for a nested block that has nothing retained to
+/// say otherwise: a `describe` block's lines, a fan-out's branches, and a def
+/// body the editor built rather than read.
+///
+/// Two, and the measurement is the reason. Across the 47-file corpus and
+/// rill's own docs: every `describe` block indents by 2 — `roaches.rill` and
+/// both manuals, unanimous — and six of the seven def bodies Christian has
+/// written do too (`rill-manual.md` x3, `rill-for-agents.md` x3; `tests.zig`
+/// runs 85 to 2). The single dissenter is `roaches.rill`'s own body line at
+/// 4, in a file whose `describe` block is 2 — so 4 is not even that file's
+/// convention. A def that WAS read keeps what it had (`Def.indent`); this is
+/// only the fallback.
+const body_canon: u32 = 2;
+
 /// The canon, chosen to read like the corpus Christian reads daily:
 ///
 ///   - one statement, one line; a chain never wraps. (The corpus wraps in
@@ -330,8 +357,13 @@ pub const Script = struct {
 ///     nice shape and it is NOT recoverable from the structure — the parser
 ///     skips the newline — so a printer that guessed would churn the file
 ///     differently every time. One line is the stable answer.)
-///   - two spaces for a def body and for a `describe` block, which is what
-///     `docs/rill-manual.md` and `kernels/roaches.rill` use.
+///   - a `describe` block indents by two and pads its keys into a column, so
+///     the values line up. Every `describe` in the corpus and in both manuals
+///     writes two, and `kernels/roaches.rill` hand-aligns eleven ports —
+///     alignment is what makes a block that size readable, not decoration.
+///   - a def body keeps the indent it was WRITTEN with (`Def.indent`), and
+///     falls back to two only when there is nothing to keep. The corpus is
+///     split on this and `body_canon` says how.
 ///   - blank runs preserved exactly as written. Preserving beats normalising
 ///     here: normalising would rewrite every file in the corpus on its first
 ///     save, which is the thing that makes a git history useless.
@@ -367,13 +399,15 @@ const Printer = struct {
         while (i < n) : (i += 1) try self.w("\n");
     }
 
-    fn indent(self: *Printer, depth: u32) Oom!void {
+    /// `col` is a count of SPACES, not a nesting level: a def body may be
+    /// indented by whatever it was written with, which a level cannot say.
+    fn indent(self: *Printer, col: u32) Oom!void {
         var i: u32 = 0;
-        while (i < depth) : (i += 1) try self.w("  ");
+        while (i < col) : (i += 1) try self.w(" ");
     }
 
-    fn line(self: *Printer, depth: u32, text: []const u8) Oom!void {
-        try self.indent(depth);
+    fn line(self: *Printer, col: u32, text: []const u8) Oom!void {
+        try self.indent(col);
         try self.w(text);
         try self.w("\n");
     }
@@ -387,28 +421,28 @@ const Printer = struct {
         try self.w(text);
     }
 
-    fn lead(self: *Printer, comments: []const Comment, depth: u32) Oom!void {
+    fn lead(self: *Printer, comments: []const Comment, col: u32) Oom!void {
         for (comments) |c| {
             try self.blanks(c.blank_before);
-            try self.line(depth, c.text);
+            try self.line(col, c.text);
         }
     }
 
-    fn item(self: *Printer, it: Item, depth: u32) Oom!void {
+    fn item(self: *Printer, it: Item, col: u32) Oom!void {
         switch (it) {
             .stmt => |st| {
-                try self.lead(st.lead, depth);
+                try self.lead(st.lead, col);
                 try self.blanks(st.blank_before);
-                try self.indent(depth);
-                try self.stmt(st, depth);
+                try self.indent(col);
+                try self.stmt(st, col);
                 try self.trail(st.trail);
                 try self.w("\n");
             },
-            .def => |idx| try self.def(&self.script.defs[idx], depth),
+            .def => |idx| try self.def(&self.script.defs[idx], col),
             .using => |u| {
-                try self.lead(u.lead, depth);
+                try self.lead(u.lead, col);
                 try self.blanks(u.blank_before);
-                try self.indent(depth);
+                try self.indent(col);
                 try self.w("using ");
                 try self.w(u.body);
                 try self.w(" as ");
@@ -420,18 +454,30 @@ const Printer = struct {
             // keyword is data, so `layout` costs a reader in the parser and
             // nothing here (see `Annex`).
             .annex => |an| {
-                try self.lead(an.lead, depth);
+                try self.lead(an.lead, col);
                 try self.blanks(an.blank_before);
-                try self.indent(depth);
+                try self.indent(col);
                 try self.w(an.keyword);
                 try self.w(" ");
                 try self.w(an.subject);
                 try self.w("\n");
+                // Pad every key to the longest in the block, so the values
+                // line up. Not decoration: `describe roaches` runs to eleven
+                // ports and Christian hand-aligned it, because a column is
+                // what makes a block that size readable. Deterministic, so
+                // idempotence is untouched — and gated at BYTE level, which
+                // is the half that sees whitespace.
+                var key_w: usize = 0;
+                for (an.lines) |al| key_w = @max(key_w, al.key.len);
                 for (an.lines, 0..) |al, i| {
-                    try self.indent(depth + 1);
+                    try self.indent(col + body_canon);
                     if (al.key.len > 0) {
                         try self.w(al.key);
-                        if (al.values.len > 0) try self.w(" ");
+                        if (al.values.len > 0) {
+                            // A keyless line — the leading bare string — is
+                            // not padded: it is not in the column.
+                            try self.indent(@intCast(key_w - al.key.len + 1));
+                        }
                     }
                     for (al.values, 0..) |v, j| {
                         if (j > 0) try self.w(" ");
@@ -444,10 +490,10 @@ const Printer = struct {
         }
     }
 
-    fn def(self: *Printer, d: *const Def, depth: u32) Oom!void {
-        try self.lead(d.lead, depth);
+    fn def(self: *Printer, d: *const Def, col: u32) Oom!void {
+        try self.lead(d.lead, col);
         try self.blanks(d.blank_before);
-        try self.indent(depth);
+        try self.indent(col);
         if (d.exported) try self.w("export ");
         try self.w("def ");
         try self.w(d.name);
@@ -479,29 +525,33 @@ const Printer = struct {
         try self.w(" =");
         if (d.inline_body and d.body.len == 1 and d.body[0] == .stmt) {
             try self.w(" ");
-            try self.stmt(d.body[0].stmt, depth);
+            try self.stmt(d.body[0].stmt, col);
             try self.trail(if (d.trail.len > 0) d.trail else d.body[0].stmt.trail);
             try self.w("\n");
             return;
         }
         try self.trail(d.trail);
         try self.w("\n");
-        for (d.body) |b| try self.item(b, depth + 1);
+        // What the body was written with, or the canon if it was written by
+        // nobody. See `Def.indent`: the corpus is split and retaining is the
+        // only answer that degrades neither half.
+        const body_col = col + if (d.indent > 0) d.indent else body_canon;
+        for (d.body) |b| try self.item(b, body_col);
     }
 
-    fn stmt(self: *Printer, st: Stmt, depth: u32) Oom!void {
+    fn stmt(self: *Printer, st: Stmt, col: u32) Oom!void {
         switch (st.head) {
             .call => |c| try self.call(c),
             .value => |v| try self.w(v),
         }
-        try self.stages(st.stages, depth);
+        try self.stages(st.stages, col);
         for (st.names, 0..) |n, i| {
             try self.w(if (i == 0) " as " else ", ");
             try self.w(n);
         }
     }
 
-    fn stages(self: *Printer, list: []const Stage, depth: u32) Oom!void {
+    fn stages(self: *Printer, list: []const Stage, col: u32) Oom!void {
         for (list) |sg| switch (sg) {
             .call => |c| {
                 try self.w(" | ");
@@ -516,28 +566,28 @@ const Printer = struct {
                 try self.w(if (f.spelled_also) " | also {" else " {");
                 if (f.branches.len == 1 and f.branches[0].lead.len == 0) {
                     try self.w(" ");
-                    try self.branch(f.branches[0], depth);
+                    try self.branch(f.branches[0], col);
                     try self.w(" }");
                     continue;
                 }
                 try self.w("\n");
                 for (f.branches) |b| {
-                    try self.lead(b.lead, depth + 1);
+                    try self.lead(b.lead, col + body_canon);
                     try self.blanks(b.blank_before);
-                    try self.indent(depth + 1);
-                    try self.branch(b, depth + 1);
+                    try self.indent(col + body_canon);
+                    try self.branch(b, col + body_canon);
                     try self.trail(b.trail);
                     try self.w("\n");
                 }
-                try self.indent(depth);
+                try self.indent(col);
                 try self.w("}");
             },
         };
     }
 
-    fn branch(self: *Printer, b: Branch, depth: u32) Oom!void {
+    fn branch(self: *Printer, b: Branch, col: u32) Oom!void {
         try self.call(b.head);
-        try self.stages(b.stages, depth);
+        try self.stages(b.stages, col);
     }
 
     fn call(self: *Printer, c: Call) Oom!void {

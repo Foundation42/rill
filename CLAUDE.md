@@ -6,13 +6,22 @@ Pick a gate because the change can break the thing it watches, never to
 feel reassured. Chris has asked for this twice; a suite run per edit
 makes the harness the activity rather than the work.
 
-    zig build test        # 371, and quick — this is the cheap one
+    zig build test -Dtest-filter=roundtrip   # one gate, while iterating
+    zig build test                          # the whole suite, before a commit
 
-371 tests with no GPU in the loop, so the calculus here is gentler than
-in matryoshka: run it when you have changed code, not after every edit,
-and once before a commit. There is no `-Dtest-filter` wired in this
-repo's `build.zig`; if iterating ever gets slow enough to matter, adding
-one is the fix rather than skipping the suite.
+No GPU in the loop, so the calculus here is gentler than in matryoshka:
+run it when you have changed code, not after every edit, and once before
+a commit. `-Dtest-filter` IS wired (since 2026-09-08) — this file claimed
+otherwise until the script beat, which is the kind of staleness that
+makes a reader distrust the whole page.
+
+    zig build roundtrip -- --host-row <files…>
+
+is not a gate but a tool: it parses a `.rill` file, prints its script
+back, and checks the reprint is the same program, stable, and has lost
+no comments. It takes files because rill must build standalone — a
+`b.path("../spindrift/…")` would break that, and 21 of the 47 corpus
+files use host words rill core must not have. `--host-row` stubs them.
 
 **What is NOT cheap is downstream.** matryoshka embeds rill and gates it
 with a nineteen-section GPU sweep plus reference captures. Touching the

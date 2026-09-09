@@ -13382,7 +13382,7 @@ test "R2 G-pack: a port's default and its range survive as written" {
         \\
         \\describe scatter
         \\  "Rows thrown outward from a point."
-        \\  rate "How many a second."
+        \\  rate  "How many a second."
         \\  speed "How fast."
         \\
         \\scatter | write plane.drift.rate
@@ -13446,7 +13446,7 @@ test "R2 G-annex: a describe block survives with every line" {
         \\
         \\describe scatter
         \\  "Rows thrown outward from a point."
-        \\  rate "How many a second."
+        \\  rate  "How many a second."
         \\  speed "How fast, with a \"quoted\" word in it."
         \\
         \\scatter | tap s
@@ -13499,4 +13499,75 @@ test "R1: retaining the script changes nothing the runtime can see" {
     const d = try rill.dump(&fx.rt, testing.allocator);
     defer testing.allocator.free(d);
     try testing.expect(std.mem.indexOf(u8, d, "script") == null);
+}
+
+test "R2 G-column: an annex aligns its values, and a def body keeps its indent" {
+    // Two whitespace claims, both byte-level, because whitespace is the half
+    // G-roundtrip is blind to (see the note on that gate).
+    //
+    // ALIGNMENT is not decoration. `describe roaches` runs to eleven ports
+    // and Christian hand-aligned the column, which is what makes a block that
+    // size readable; an editor that collapses it degrades the file's
+    // documentation a little on every save, and roaches.rill is the file the
+    // project points people at. Padding to the longest key is deterministic,
+    // so idempotence is untouched.
+    //
+    // THE INDENT is retained rather than canonised because the corpus is
+    // split, and split between two sets of Christian's own files: the one
+    // `.rill` file in the 47 with a multi-line def body writes 4, and all six
+    // def bodies printed in the manuals write 2. Either canon degrades the
+    // other half on every save. Retention degrades neither, and matches what
+    // blank runs already do. `body_canon` (2, the 6-to-1 majority) is only
+    // the fallback, for a def nobody wrote.
+    //
+    // Mutations that bite: in `Printer.item`'s annex arm, write a single
+    // space instead of `key_w - al.key.len + 1` (the column collapses and the
+    // first block below goes red); in `Printer.def`, use `body_canon`
+    // unconditionally instead of `d.indent` (the four-space body reprints at
+    // two, and the second block goes red). Deleting the `body_indent`
+    // capture in `parseDef` bites the same second claim from the other side.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+
+    // A wide column, the shape roaches.rill has: the longest key sets it and
+    // the leading bare string is NOT in it.
+    const aligned =
+        \\export def scatter(rate = 60, speed = 0.15, capacity = 100) =
+        \\    rate | mul speed | mul capacity
+        \\
+        \\describe scatter
+        \\  "Rows thrown outward from a point."
+        \\  rate     "How many a second."
+        \\  speed    "How fast."
+        \\  capacity "How many seats the hall has."
+        \\
+        \\scatter | tap s
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", aligned, &diag);
+    defer prog.deinit();
+    const out = try rill.printScript(testing.allocator, prog.script.?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(aligned, out);
+    // The four-space body came back as four, not as the canon.
+    try testing.expectEqual(@as(u32, 4), prog.script.?.defs[0].indent);
+
+    // …and a two-space body comes back as two, from the same printer. Both
+    // halves of the split, one gate, so neither can be "fixed" by moving the
+    // canon.
+    const twospace =
+        \\def driver(x: number) =
+        \\  x | mul 0.05 | add 1
+        \\
+        \\plane.a | driver | write plane.out
+        \\
+    ;
+    var diag2 = rill.Diag{};
+    var prog2 = try rill.parse(testing.allocator, &reg, "p", twospace, &diag2);
+    defer prog2.deinit();
+    const out2 = try rill.printScript(testing.allocator, prog2.script.?);
+    defer testing.allocator.free(out2);
+    try testing.expectEqualStrings(twospace, out2);
+    try testing.expectEqual(@as(u32, 2), prog2.script.?.defs[0].indent);
 }

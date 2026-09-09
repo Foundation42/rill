@@ -4349,3 +4349,61 @@ gains the `roundtrip` step with the reason it is a step and not a test.
 `CLAUDE.md` was NOT touched — it is the owner's file — but note for whoever
 does: its "There is no `-Dtest-filter` wired in this repo's `build.zig`" is
 stale, and has been since 2026-09-08.
+
+### Follow-up the same day: the exemplar's whitespace
+
+Reviewing the beat against `kernels/roaches.rill` found the one difference in
+that file's reprint that was a real regression rather than a canon:
+
+      -  rate     "THE EMISSION RATE: rows born a second. …"
+      +  rate "THE EMISSION RATE: rows born a second. …"
+
+Christian hand-aligned those eleven `describe` values into a column. At that
+width the column is what makes the block readable, so collapsing it degrades
+the project's own exemplar a little on every save — which is how an editor
+stops being used. The printer now pads every key to the longest in the block.
+Deterministic, so idempotence is untouched, and gated at BYTE level, because
+whitespace is the half G-roundtrip is blind to (this beat's own finding).
+
+**The def body indent was reconsidered by measuring, and the answer was to
+retain rather than to pick.** The count:
+
+| where | def body indent |
+| --- | --- |
+| `kernels/roaches.rill` — the only one of the 47 with a multi-line body | 4 |
+| `rill-manual.md` ×3, `rill-for-agents.md` ×3 | 2 |
+| `tests.zig` fixtures | 85 at 2, 2 at 4 |
+| every `describe` block — roaches AND both manuals | 2, unanimous |
+
+The corpus is genuinely split, and the split runs between two sets of
+Christian's own files: the `.rill` corpus says 4, the printed manual says 2.
+Picking either degrades the other on every save, which is exactly the failure
+this printer exists not to have — a 2-space canon would still have walked
+`roaches.rill`'s body line on every round trip, so it would not have fixed the
+thing that prompted the review. So `script.Def.indent` retains what was
+written, on the same principle already shipped one field up for blank runs,
+and `body_canon` (2, the six-to-one majority, and the unanimous answer for
+`describe` blocks) is the fallback for a def the editor built rather than
+read. Recorded rather than assumed: `roaches.rill` is not even internally
+consistent — its own `describe` block is at 2.
+
+Three more mutations, executed and watched: collapse the annex column to a
+single space (G-column red); use `body_canon` unconditionally in
+`Printer.def` (red); delete the `body_indent` capture in `parseDef` (red, from
+the other side). Total for the beat: 21 mutations, 20 biting the gate they
+were aimed at and one re-attributed.
+
+`kernels/roaches.rill` now reprints **byte-identically**, and the corpus goes
+from 38 byte-identical to 39 of 47 (the earlier report of 35 was inflated by
+three basename collisions in the emit directory — `motes.rill`, `smoke.rill`
+and `kindle.rill` exist in both spindrift and matryoshka; re-measured one file
+at a time). Still 47/47 on all three checks. Nothing got worse.
+
+The eight that still differ do so for one remaining reason, a different
+mechanism from this one: **cross-statement column alignment inside chains** —
+`follow.rill` aligns its pipes down four lines, `zones.rill` aligns a sign
+column (`cast $tilt  1.0` against `cast $tilt -1.0`), `watch.rill` aligns one
+pipe, and the five ironwood rills wrap their chains. Retaining those means
+recording per-token padding, which is a much larger thing than a block's key
+width and was not built. Named here so it is a decision rather than an
+oversight.
