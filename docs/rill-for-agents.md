@@ -162,7 +162,7 @@ ever protecting.
 
 ```rill
 export def flock(gain: number = 0.05 (0..1)) =
-  lfo sine 7s | mul gain | write plane.drift.@self.k.flock
+    lfo sine 7s | mul gain | write plane.drift.@self.k.flock
 
 describe flock
   "Drives this instance's own flocking knob from a slow sine."
@@ -188,7 +188,7 @@ names the fix.
 
 ```rill
 export def scuttle(size = 0.03 (0..1)) on row =
-  row.seed | mul 0.025 | add size | write row.size
+    row.seed | mul 0.025 | add size | write row.size
 
 describe scuttle
   "Settles each row's size from the seed it was born with."
@@ -213,7 +213,7 @@ pack survives the parse that flattens its body away, on
 
 ```rill
 export def roaches(rate: number = 60 (0..500), spread = 0.35 (0..3)) =
-  rate | mul spread
+    rate | mul spread
 
 describe roaches
   "Cockroaches milling on a floor, scattering and regrouping."

@@ -13287,9 +13287,9 @@ test "R1 G-tunnel: a def is its own nested graph, and prints as a def" {
     defer reg.deinit();
     const src =
         \\def driver(x: number) =
-        \\  // the body's own comment
-        \\  x | mul 0.05 as g
-        \\  g | add 1
+        \\    // the body's own comment
+        \\    x | mul 0.05 as g
+        \\    g | add 1
         \\
         \\plane.a | driver | write plane.out
         \\
@@ -13378,7 +13378,7 @@ test "R2 G-pack: a port's default and its range survive as written" {
     defer reg.deinit();
     const src =
         \\export def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5)) =
-        \\  rate | mul speed
+        \\    rate | mul speed
         \\
         \\describe scatter
         \\  "Rows thrown outward from a point."
@@ -13442,7 +13442,7 @@ test "R2 G-annex: a describe block survives with every line" {
     defer reg.deinit();
     const src =
         \\export def scatter(rate = 60, speed = 0.15) =
-        \\  rate | mul speed
+        \\    rate | mul speed
         \\
         \\describe scatter
         \\  "Rows thrown outward from a point."
@@ -13501,7 +13501,7 @@ test "R1: retaining the script changes nothing the runtime can see" {
     try testing.expect(std.mem.indexOf(u8, d, "script") == null);
 }
 
-test "R2 G-column: an annex aligns its values, and a def body keeps its indent" {
+test "R2 G-column: an annex aligns its values, and a def body indents by four" {
     // Two whitespace claims, both byte-level, because whitespace is the half
     // G-roundtrip is blind to (see the note on that gate).
     //
@@ -13512,20 +13512,24 @@ test "R2 G-column: an annex aligns its values, and a def body keeps its indent" 
     // project points people at. Padding to the longest key is deterministic,
     // so idempotence is untouched.
     //
-    // THE INDENT is retained rather than canonised because the corpus is
-    // split, and split between two sets of Christian's own files: the one
-    // `.rill` file in the 47 with a multi-line def body writes 4, and all six
-    // def bodies printed in the manuals write 2. Either canon degrades the
-    // other half on every save. Retention degrades neither, and matches what
-    // blank runs already do. `body_canon` (2, the 6-to-1 majority) is only
-    // the fallback, for a def nobody wrote.
+    // THE DEF BODY INDENT is four, unconditionally — Christian's ruling,
+    // 2026-09-09: "honestly I'd prefer 4, to match most tabs." A first pass
+    // RETAINED whatever was written, because the measurement found the corpus
+    // split between `kernels/roaches.rill` at 4 and the six def bodies
+    // printed in the manuals at 2. He asked for one canon instead, so the
+    // retained field is gone and the manuals were restretched to 4 in the
+    // same commit.
+    //
+    // The second block below is what proves "unconditionally": a body
+    // WRITTEN at two comes back at four. Retention would have passed that
+    // source through unchanged, so the assertion is the difference between
+    // the ruling and what it replaced, not a restatement of it.
     //
     // Mutations that bite: in `Printer.item`'s annex arm, write a single
     // space instead of `key_w - al.key.len + 1` (the column collapses and the
-    // first block below goes red); in `Printer.def`, use `body_canon`
-    // unconditionally instead of `d.indent` (the four-space body reprints at
-    // two, and the second block goes red). Deleting the `body_indent`
-    // capture in `parseDef` bites the same second claim from the other side.
+    // first block goes red); set `def_body_indent` to 2 (both blocks go red);
+    // set it to `nested_indent` (same, and it also says why they are two
+    // constants — the annex's 2 was never part of the ruling).
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
 
@@ -13550,15 +13554,19 @@ test "R2 G-column: an annex aligns its values, and a def body keeps its indent" 
     const out = try rill.printScript(testing.allocator, prog.script.?);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings(aligned, out);
-    // The four-space body came back as four, not as the canon.
-    try testing.expectEqual(@as(u32, 4), prog.script.?.defs[0].indent);
 
-    // …and a two-space body comes back as two, from the same printer. Both
-    // halves of the split, one gate, so neither can be "fixed" by moving the
-    // canon.
+    // A body WRITTEN at two comes back at four: the canon is applied, not
+    // echoed. This is the assertion retention could never have made.
     const twospace =
         \\def driver(x: number) =
         \\  x | mul 0.05 | add 1
+        \\
+        \\plane.a | driver | write plane.out
+        \\
+    ;
+    const restretched =
+        \\def driver(x: number) =
+        \\    x | mul 0.05 | add 1
         \\
         \\plane.a | driver | write plane.out
         \\
@@ -13568,6 +13576,14 @@ test "R2 G-column: an annex aligns its values, and a def body keeps its indent" 
     defer prog2.deinit();
     const out2 = try rill.printScript(testing.allocator, prog2.script.?);
     defer testing.allocator.free(out2);
-    try testing.expectEqualStrings(twospace, out2);
-    try testing.expectEqual(@as(u32, 2), prog2.script.?.defs[0].indent);
+    try testing.expectEqualStrings(restretched, out2);
+    // …and the restretched form is a fixed point, so the second save does
+    // nothing. A canon that moved a file once per save would be worse than
+    // the split it replaced.
+    var diag3 = rill.Diag{};
+    var prog3 = try rill.parse(testing.allocator, &reg, "p", restretched, &diag3);
+    defer prog3.deinit();
+    const out3 = try rill.printScript(testing.allocator, prog3.script.?);
+    defer testing.allocator.free(out3);
+    try testing.expectEqualStrings(restretched, out3);
 }

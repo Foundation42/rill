@@ -1110,7 +1110,7 @@ program:
 
 ```rill
 def driver(x: number) =
-  x | mul 0.05 | write plane.drift.@self.k.flock
+    x | mul 0.05 | write plane.drift.@self.k.flock
 
 plane.beat | driver
 ```
@@ -1129,7 +1129,7 @@ between the signature and the `=`:
 
 ```rill
 def spin(x: number) on row =
-  x | mul row.age | write row.size
+    x | mul row.age | write row.size
 ```
 
 Leave it off and you get the world plane, which is what every def you
@@ -1197,7 +1197,7 @@ in their own block:
 
 ```rill
 export def roaches(rate: number = 60 (0..500), spread = 0.35 (0..3)) =
-  rate | mul spread
+    rate | mul spread
 
 describe roaches
   "Cockroaches milling on a floor, scattering and regrouping."

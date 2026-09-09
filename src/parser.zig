@@ -1428,11 +1428,6 @@ const Parser = struct {
         var last: OpResult = .{};
         var last_names: []const []const u8 = &.{};
         var inline_body = false;
-        // How far the body was indented, relative to the statement head. The
-        // dedent rule already reads these columns (`t.col <= def_tok.col`),
-        // so nothing new is measured — it is just kept. See `script.Def`'s
-        // `indent` for why it is kept rather than canonised.
-        var body_indent: u32 = 0;
         if (self.peek().kind != .newline and self.peek().kind != .eof) {
             // single-line body: def double(x) = x | mul 2
             inline_body = true;
@@ -1453,7 +1448,6 @@ const Parser = struct {
                 // be wrong. What the rewrite is for is the diagnostic
                 // position — see `expandIfFold`.)
                 if (t.col <= def_tok.col) break; // dedent ends the body
-                if (body_indent == 0) body_indent = t.col - def_tok.col;
                 last = try self.parseStatement(&target);
                 last_names = last.out_names;
                 any_stmt = true;
@@ -1488,7 +1482,6 @@ const Parser = struct {
             .on = syn_on,
             .body = target.items.items,
             .inline_body = inline_body,
-            .indent = body_indent,
             .lead = lead.lead,
             .blank_before = lead.blank,
             .trail = syn_trail,

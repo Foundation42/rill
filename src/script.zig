@@ -196,19 +196,6 @@ pub const Def = struct {
     body: []const Item = &.{},
     /// `def double(x) = x | mul 2` — the body sat on the signature line.
     inline_body: bool = false,
-    /// How far the body was indented, in spaces. Zero means "nothing was
-    /// retained" — a def the editor built from scratch — and the printer
-    /// falls back to the canon.
-    ///
-    /// Retained rather than canonised because the corpus is genuinely SPLIT
-    /// and the split runs between two sets of Christian's own files:
-    /// `kernels/roaches.rill`, the one `.rill` file in the 47 with a
-    /// multi-line def body, writes 4; all six def bodies printed in
-    /// `rill-manual.md` and `rill-for-agents.md` write 2. Either canon
-    /// degrades the other set on every save, which is the exact failure this
-    /// printer exists not to have. Retaining degrades neither, and it is the
-    /// same principle already shipped one field up for blank runs.
-    indent: u32 = 0,
     lead: []const Comment = &.{},
     blank_before: u32 = 0,
     /// A `// …` on the signature's own line.
@@ -336,19 +323,32 @@ pub const Script = struct {
 // The printer
 // ---------------------------------------------------------------------------
 
-/// The indent, in spaces, for a nested block that has nothing retained to
-/// say otherwise: a `describe` block's lines, a fan-out's branches, and a def
-/// body the editor built rather than read.
+/// A def body's indent, in spaces. Christian's ruling, 2026-09-09: *"honestly
+/// I'd prefer 4, to match most tabs."*
 ///
-/// Two, and the measurement is the reason. Across the 47-file corpus and
-/// rill's own docs: every `describe` block indents by 2 — `roaches.rill` and
-/// both manuals, unanimous — and six of the seven def bodies Christian has
-/// written do too (`rill-manual.md` x3, `rill-for-agents.md` x3; `tests.zig`
-/// runs 85 to 2). The single dissenter is `roaches.rill`'s own body line at
-/// 4, in a file whose `describe` block is 2 — so 4 is not even that file's
-/// convention. A def that WAS read keeps what it had (`Def.indent`); this is
-/// only the fallback.
-const body_canon: u32 = 2;
+/// The measurement that put the question to him found the corpus split, and
+/// split between two sets of his own files: `kernels/roaches.rill` — the one
+/// of the 47 `.rill` files with a multi-line def body — writes 4, while all
+/// six def bodies printed in `rill-manual.md` and `rill-for-agents.md` write
+/// 2. A first pass RETAINED what was written, on the same principle blank
+/// runs use, so that neither set moved. He asked for one canon instead, and
+/// the `.rill` file is the side that wins it — so the retained field is gone
+/// and the manuals were restretched to 4 in the same commit, because a
+/// document that teaches an indent the printer does not emit is a document
+/// that is wrong the first time anyone round-trips it.
+const def_body_indent: u32 = 4;
+
+/// The indent for a block nested inside a statement or an annex: a `describe`
+/// block's lines, and a fan-out's branches.
+///
+/// Two, and NOT swept along with the ruling above, which was about def
+/// bodies. There is nothing to rule on for `describe`: 2 is unanimous across
+/// `roaches.rill`, both manuals and every fixture. There is nothing to
+/// measure for a fan-out — no multi-line `also { … }` exists in the 47-file
+/// corpus, in either manual, or in the rillbook — so it sits here by
+/// inheritance rather than by evidence, and if it should follow the def body
+/// to 4 that is a ruling nobody has been asked for yet.
+const nested_indent: u32 = 2;
 
 /// The canon, chosen to read like the corpus Christian reads daily:
 ///
@@ -361,9 +361,8 @@ const body_canon: u32 = 2;
 ///     the values line up. Every `describe` in the corpus and in both manuals
 ///     writes two, and `kernels/roaches.rill` hand-aligns eleven ports —
 ///     alignment is what makes a block that size readable, not decoration.
-///   - a def body keeps the indent it was WRITTEN with (`Def.indent`), and
-///     falls back to two only when there is nothing to keep. The corpus is
-///     split on this and `body_canon` says how.
+///   - a def body indents by four (Christian's ruling — see
+///     `def_body_indent`), a fan-out's branches by two.
 ///   - blank runs preserved exactly as written. Preserving beats normalising
 ///     here: normalising would rewrite every file in the corpus on its first
 ///     save, which is the thing that makes a git history useless.
@@ -470,7 +469,7 @@ const Printer = struct {
                 var key_w: usize = 0;
                 for (an.lines) |al| key_w = @max(key_w, al.key.len);
                 for (an.lines, 0..) |al, i| {
-                    try self.indent(col + body_canon);
+                    try self.indent(col + nested_indent);
                     if (al.key.len > 0) {
                         try self.w(al.key);
                         if (al.values.len > 0) {
@@ -532,11 +531,7 @@ const Printer = struct {
         }
         try self.trail(d.trail);
         try self.w("\n");
-        // What the body was written with, or the canon if it was written by
-        // nobody. See `Def.indent`: the corpus is split and retaining is the
-        // only answer that degrades neither half.
-        const body_col = col + if (d.indent > 0) d.indent else body_canon;
-        for (d.body) |b| try self.item(b, body_col);
+        for (d.body) |b| try self.item(b, col + def_body_indent);
     }
 
     fn stmt(self: *Printer, st: Stmt, col: u32) Oom!void {
@@ -572,10 +567,10 @@ const Printer = struct {
                 }
                 try self.w("\n");
                 for (f.branches) |b| {
-                    try self.lead(b.lead, col + body_canon);
+                    try self.lead(b.lead, col + nested_indent);
                     try self.blanks(b.blank_before);
-                    try self.indent(col + body_canon);
-                    try self.branch(b, col + body_canon);
+                    try self.indent(col + nested_indent);
+                    try self.branch(b, col + nested_indent);
                     try self.trail(b.trail);
                     try self.w("\n");
                 }

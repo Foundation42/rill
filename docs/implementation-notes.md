@@ -4365,8 +4365,8 @@ stops being used. The printer now pads every key to the longest in the block.
 Deterministic, so idempotence is untouched, and gated at BYTE level, because
 whitespace is the half G-roundtrip is blind to (this beat's own finding).
 
-**The def body indent was reconsidered by measuring, and the answer was to
-retain rather than to pick.** The count:
+**The def body indent was reconsidered by measuring, and put to Christian.**
+The count:
 
 | where | def body indent |
 | --- | --- |
@@ -4377,24 +4377,43 @@ retain rather than to pick.** The count:
 
 The corpus is genuinely split, and the split runs between two sets of
 Christian's own files: the `.rill` corpus says 4, the printed manual says 2.
-Picking either degrades the other on every save, which is exactly the failure
-this printer exists not to have — a 2-space canon would still have walked
-`roaches.rill`'s body line on every round trip, so it would not have fixed the
-thing that prompted the review. So `script.Def.indent` retains what was
-written, on the same principle already shipped one field up for blank runs,
-and `body_canon` (2, the six-to-one majority, and the unanimous answer for
-`describe` blocks) is the fallback for a def the editor built rather than
-read. Recorded rather than assumed: `roaches.rill` is not even internally
-consistent — its own `describe` block is at 2.
+Picking either degrades the other on every save, so the first pass RETAINED
+what was written (`script.Def.indent`), on the same principle already shipped
+one field up for blank runs, with 2 as the fallback.
 
-Three more mutations, executed and watched: collapse the annex column to a
-single space (G-column red); use `body_canon` unconditionally in
-`Printer.def` (red); delete the `body_indent` capture in `parseDef` (red, from
-the other side). Total for the beat: 21 mutations, 20 biting the gate they
-were aimed at and one re-attributed.
+**Christian ruled: one canon, and it is 4.** His words: *"honestly I'd prefer
+4, to match most tabs."* So the retained field is gone, `def_body_indent` is
+4 unconditionally, and rill's own docs were restretched in the same commit —
+`rill-manual.md` ×3 and `rill-for-agents.md` ×3 — because a document that
+teaches an indent the printer does not emit is wrong the first time anyone
+round-trips it. The `.rill` corpus does not move at all: `roaches.rill`'s body
+was already at 4, which is the happy consequence of the side that won.
 
-`kernels/roaches.rill` now reprints **byte-identically**, and the corpus goes
-from 38 byte-identical to 39 of 47 (the earlier report of 35 was inflated by
+`nested_indent` (2) was deliberately NOT swept along. A `describe` block was
+never split — 2 is unanimous across `roaches.rill`, both manuals and every
+fixture — so there is nothing to rule on there, and the ruling was about def
+bodies. A fan-out's branches sit on the same 2 by inheritance rather than by
+evidence: **no multi-line `also { … }` exists anywhere** — not in the 47-file
+corpus, not in either manual, not in the rillbook. Whether it should follow
+the def body to 4 is a ruling nobody has been asked for, and it is named in
+the constant's own comment so the next reader meets the question rather than
+the assumption.
+
+G-column's second half changed shape with the ruling rather than being
+deleted. It used to prove RETENTION — a 4-space body and a 2-space body both
+coming back as written. It now proves the canon is APPLIED: a body written at
+2 comes back at 4, which is the one assertion retention could never have made,
+plus the fixed-point check that the restretched form does not move again.
+
+Three mutations for it, executed and watched: collapse the annex column to a
+single space; set `def_body_indent` to 2; set it to `nested_indent` (which
+also says why they are two constants). Total for the beat: **21 mutations,
+all 21 biting their named gate** — M17, the `closeLine` one that survived
+G-roundtrip, is recorded against G-pack, which is where it actually lives.
+
+`kernels/roaches.rill` reprints **byte-identically**, and the corpus went
+from 38 byte-identical to 39 of 47 — and stayed at 39 through the indent
+ruling, since no `.rill` file moved (the earlier report of 35 was inflated by
 three basename collisions in the emit directory — `motes.rill`, `smoke.rill`
 and `kindle.rill` exist in both spindrift and matryoshka; re-measured one file
 at a time). Still 47/47 on all three checks. Nothing got worse.
