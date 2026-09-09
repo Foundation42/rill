@@ -4021,7 +4021,10 @@ test "the manuals parse: every printed example compiles" {
     // the block is rill, not prose about rill — the gate two thousand lines
     // below then holds its COLUMNS to the canon, which is the half a parse
     // gate cannot see.
-    try testing.expectEqual(@as(usize, 57), human);
+    // 57 → 58 (shaped holes, 2026-09-09): §10's `using` section gains the
+    // hole. Fenced because "it parses" IS the claim — a statement whose
+    // argument is bound to nothing is the thing the language could not say.
+    try testing.expectEqual(@as(usize, 58), human);
     // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
     // ```rill fence so this gate reads it rather than the reader trusting it.
     // 5 → 6 (the parameter pack, same day): §2 gains `export def roaches`.
@@ -14273,12 +14276,12 @@ test "R3 G-doc: every printed example is written the way the printer writes it" 
     // and the campaign notes hold sixteen more fences between them and are
     // NOT gated: they are not embedded in the build, and they are records of
     // decisions rather than teaching material.
-    try testing.expectEqual(@as(usize, 57), human);
+    try testing.expectEqual(@as(usize, 58), human);
     try testing.expectEqual(@as(usize, 8), agent);
     try testing.expectEqual(@as(usize, 4), readme);
     try testing.expectEqual(@as(usize, 3), rbf_doc);
     // NOTHING is exempt. `doc_fragments` is empty and that is a measurement:
-    // all 72 fences in the four docs are whole programs, so not one of them
+    // all 73 fences in the four docs are whole programs, so not one of them
     // needed the escape hatch.
     try testing.expectEqual(@as(usize, 0), doc_fragments.len);
 }
@@ -14470,4 +14473,391 @@ test "R4 G-layout-loud: what a layout block may NOT hold" {
         \\plane.a | layout 2 | write plane.out
         \\
     , "statement keyword");
+}
+
+// ---------------------------------------------------------------------------
+// R4 — shaped holes (§3.15). Drag an operator onto a canvas and it lands
+// UNWIRED; rill's text could not say that, because parse order is dependency
+// order and an orphan has no place in the statement list. `using ?number as
+// :tight` is a `using` bound to NOTHING, carrying a shape — Christian's
+// spelling, and DECLARED on purpose, so an unknown `:name` stays the loud
+// refusal it has always been.
+// ---------------------------------------------------------------------------
+
+/// What the mount SAID, captured. A hole is announced by name, and a gate that
+/// read `prog.holes` alone would be reading the parser's answer twice — this
+/// reads the runtime's.
+const HoleLog = struct {
+    var buf: [8][64]u8 = undefined;
+    var lens: [8]usize = .{0} ** 8;
+    var count: usize = 0;
+
+    fn reset() void {
+        count = 0;
+    }
+
+    fn sink(ctx: ?*anyopaque, label: []const u8, val: []const u8) void {
+        _ = ctx;
+        if (!std.mem.eql(u8, label, "rill.hole")) return;
+        if (count >= buf.len) return;
+        const n = @min(val.len, buf[count].len);
+        @memcpy(buf[count][0..n], val[0..n]);
+        lens[count] = n;
+        count += 1;
+    }
+
+    fn at(i: usize) []const u8 {
+        return buf[i][0..lens[i]];
+    }
+};
+
+test "R4 G-hole: a DECLARED hole parses, and an UNDECLARED :name still refuses" {
+    // Both directions, and the second is the whole reason the spelling is
+    // `using` rather than a bare `?` at the use site. If an unknown fold
+    // quietly became a hole, `:kk` for `:k` would stop being a refusal and
+    // start being a silently dead statement — in files that are live in a
+    // running sim.
+    //
+    // MUTATION that bites: in `expandIfFold`, make the `folds.get` miss
+    // return a hole instead of refusing (`orelse { … return .{ .hole = … }; }`).
+    // Executed 2026-09-09 — the second half goes red: `:nope` parses.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\using ?number as :tight
+        \\
+        \\plane.a | add :tight | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.holes.len);
+    try testing.expectEqualStrings(":tight", prog.holes[0].name);
+    try testing.expectEqual(types.Tag.number, prog.holes[0].ty);
+    // The node EXISTS — that is the representation's whole point. `add1` is
+    // in the graph with an open input, rather than the statement vanishing.
+    try testing.expect(nodeIdOf(&prog, "add1") != null);
+
+    // …and an unbound name is what it always was.
+    try expectParseError(
+        \\plane.a | add :nope | write plane.out
+    , "is not a bound fold");
+    // Including the near-miss that motivated the spelling.
+    try expectParseError(
+        \\using ?number as :tight
+        \\plane.a | add :tigth | write plane.out
+    , "is not a bound fold");
+}
+
+test "R4 G-hole-any: a bare `?` is `?any` — one feature with a default, not two" {
+    // `?` alone reaches every port, because `any` is a wildcard on either
+    // side of a wire and always has been. That is what "an unshaped hole
+    // poisons everything downstream" means concretely: no shape, no check.
+    //
+    // MUTATION that bites: make a bare `?` refuse ("a hole needs a shape").
+    // Executed 2026-09-09 — every assertion below dies at the parse. The
+    // OPEN RULING (2026-09-09, unresolved) is whether that mutation is
+    // actually the right behaviour: `describe`'s principle — the burden is on
+    // the writer — argues the shape should be mandatory, and `any` being a
+    // real port type a def may declare argues it should not. Built optional.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\using ? as :k
+        \\
+        \\plane.a | add :k | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.holes.len);
+    try testing.expectEqual(types.Tag.any, prog.holes[0].ty);
+    // The same `?` reaches a boolean port and a mesh port too — `any` is not
+    // a fourth kind of hole, it is the absence of a claim.
+    try expectPrintedStable(&reg,
+        \\using ? as :k
+        \\
+        \\plane.a | where :k | write plane.out
+        \\
+    ,
+        \\using ? as :k
+        \\
+        \\plane.a | where :k | write plane.out
+        \\
+    );
+    try expectPrintedStable(&reg,
+        \\using ? as :k
+        \\
+        \\:k | bevel 0.2 | tap m
+        \\
+    ,
+        \\using ? as :k
+        \\
+        \\:k | bevel 0.2 | tap m
+        \\
+    );
+}
+
+test "R4 G-hole-shape: the shape reaches the port, and a mismatch is refused NAMING BOTH" {
+    // THE refusal a shaped hole buys, and the feature's main justification —
+    // without it a shaped hole is just a comment. A `number` hole spliced
+    // into a boolean port is wrong before anything runs, and the message
+    // names the hole the author declared AND the port it was dropped on.
+    //
+    // MUTATION that bites: delete the `arg.kind == .hole` arm in
+    // `parseOpcall`'s bind loop. Executed 2026-09-09 — the refusal still
+    // happens (the generic type check catches it) but says "'where' port
+    // 'pred': expected boolean, got number", which names the port and NOT the
+    // hole. The needle below is `hole ':t' is number`, so it goes red.
+    //
+    // MUTATION 2, the one that removes the feature: make `sourceTy` answer
+    // `types.Tag.any` for a `.hole`. Executed 2026-09-09 — the shape stops
+    // flowing, every hole reaches every port, and both refusals below go
+    // green-that-should-be-red (`expectParseError` reports "expected
+    // error.Parse, found Program").
+    try expectParseError(
+        \\using ?number as :t
+        \\plane.a | where :t | write plane.out
+    , "hole ':t' is number, and 'where' port 'pred' takes boolean");
+    try expectParseError(
+        \\using ?boolean as :b
+        \\plane.a | mul :b | write plane.out
+    , "hole ':b' is boolean, and 'mul' port 'b' takes number");
+    // A HOST-interned type works as a shape, and works both ways. `mesh` is
+    // this fixture's host type (`hostRegistry`), registered on an op's port
+    // and never mentioned in `types.zig`.
+    //
+    // MUTATION that bites: hard-code the built-in list in `parseUsing` —
+    // resolve the shape by scanning `number boolean string record bytes array
+    // duration any` and refusing anything else. Executed 2026-09-09 — `?mesh`
+    // stops parsing and the accepting half below goes red at the `try`.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    try expectPrintedStable(&reg,
+        \\using ?mesh as :m
+        \\
+        \\:m | bevel 0.2 | tap out
+        \\
+    ,
+        \\using ?mesh as :m
+        \\
+        \\:m | bevel 0.2 | tap out
+        \\
+    );
+    try expectParseError(
+        \\using ?mesh as :m
+        \\plane.a | mul :m | write plane.out
+    , "hole ':m' is mesh, and 'mul' port 'b' takes number");
+    // …and the shape is interned BY NAME, so a type no host has ever
+    // registered is still a shape and is still not `any`.
+    try expectParseError(
+        \\using ?light as :l
+        \\plane.a | mul :l | write plane.out
+    , "hole ':l' is light");
+}
+
+test "R4 G-hole-mount: everything else mounts and RUNS, and the mount names the open holes" {
+    // The rule that matters most: a hole may never break what is already
+    // running. One statement is held open by name; the other computes and
+    // writes exactly as it would in a file with no hole in it.
+    //
+    // MUTATION 1 that bites: fail the whole mount on a hole — `if
+    // (prog.holes.len > 0) return error.Refused;` in `Runtime.mount`, which
+    // is the plausible wrong reading ("a half-built program is not
+    // mountable"). Executed 2026-09-09 — the mount errors and the gate dies
+    // at `Runtime.mount`.
+    //
+    // MUTATION 2 that bites, and it is the quiet one: skip the announcement —
+    // delete the `prog.holes` loop in `mount`. Executed 2026-09-09 — the
+    // program still runs, `plane.out` is still 6, and only the two `HoleLog`
+    // assertions go red. Which is why they are here: "everything else runs"
+    // is half the claim and "and it SAYS SO, by name" is the other half.
+    //
+    // MUTATION 3 that bites: delete `if (s.source == .hole) return;` from
+    // `markNode`, so a hole falls through to the two skips below it. It takes
+    // an OPTIONAL port to see it — a hole on a required port stays quiet
+    // either way, which is exactly why the second half of this gate exists
+    // and why the first half alone would have been decoration. Executed
+    // 2026-09-09: with the line gone, `step` fires with a null `max` and the
+    // second half's write count goes from 0 to 1. That is the whole reason a
+    // hole is not `.none`, and the reason it is tested on the port where the
+    // difference shows.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\using ?number as :tight
+        \\
+        \\plane.a | mul 2 | write plane.out
+        \\plane.b | add :tight | write plane.other
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.a", @as(i64, 3));
+    try mock.putValue("plane.b", @as(i64, 4));
+
+    HoleLog.reset();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{
+        .log_fn = HoleLog.sink,
+    });
+    defer rt.deinit();
+
+    // The other statement ran. One write, and it is the right one.
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+    try testing.expectEqualStrings("plane.out", mock.writes.items[0].path);
+    try testing.expectEqual(@as(f64, 6), types.asNumber(mock.writes.items[0].value).?);
+
+    // The mount said which name is open. BY NAME — not by count, because the
+    // author or the editor chose the name and "one input is open" sends
+    // whoever reads it hunting.
+    try testing.expectEqual(@as(usize, 1), HoleLog.count);
+    try testing.expectEqualStrings(":tight", HoleLog.at(0));
+
+    // …and it stays quiet across ticks, not just at mount.
+    try feedValue(&rt, testing.allocator, "plane.b", @as(i64, 9));
+    try rt.tick(.{ .frame = 1, .time_ns = 16_000_000 });
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+
+    // THE OPTIONAL PORT, which is where the readiness rule is load-bearing.
+    // `step`'s `max` is `kwOpt` — an unbound optional port reads as null and
+    // does NOT hold the node back, by design (the gates' `off`/`on` controls
+    // sit on paths that may never fire). A hole on one must still hold it,
+    // because the author declared that input open rather than absent.
+    var m2 = rill.MockPlane.init(testing.allocator);
+    defer m2.deinit();
+    try m2.putValue("plane.beat", @as(i64, 1));
+    var d3 = rill.Diag{};
+    var p3 = try rill.parse(testing.allocator, &reg, "p",
+        \\using ?number as :cap
+        \\
+        \\plane.beat | step [60, 64] max :cap | write plane.note
+        \\
+    , &d3);
+    defer p3.deinit();
+    var rt3 = try rill.Runtime.mount(testing.allocator, &p3, m2.asPlane(), .{});
+    defer rt3.deinit();
+    try testing.expectEqual(@as(usize, 0), m2.writes.items.len);
+
+    // One hole spliced twice is ONE open hole with two consequences — a
+    // second reading of the name is a count wearing a name's clothes.
+    const twice =
+        \\using ?number as :tight
+        \\
+        \\plane.a | add :tight | write plane.out
+        \\plane.b | mul :tight | write plane.other
+        \\
+    ;
+    var d2 = rill.Diag{};
+    var p2 = try rill.parse(testing.allocator, &reg, "p", twice, &d2);
+    defer p2.deinit();
+    try testing.expectEqual(@as(usize, 1), p2.holes.len);
+}
+
+test "R4 G-hole-print: a hole survives print → parse → print, and a dump → load" {
+    // Byte-stable, both features, and a hole is retained as the SPELLING the
+    // author wrote: `:tight`, never the shape it was bound to.
+    //
+    // MUTATION that bites: map a hole's `syn_kind` to `.stream` instead of
+    // `.hole`. Executed 2026-09-09 — the file still prints back byte for
+    // byte, and only the retained ARGUMENT's kind goes red. Which is the
+    // point of asserting it: an editor draws a wire and an open socket
+    // differently, and "it round-trips" does not tell it which this is.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\// a canvas dropped two operators and wired neither
+        \\using ?number as :tight
+        \\using ? as :anything
+        \\
+        \\plane.a | mul 2 | write plane.out
+        \\plane.b | add :tight | write plane.other
+        \\:anything | tap loose
+        \\
+        \\layout demo
+        \\    mul1 240 120
+        \\    add1 240 260
+        \\
+    ;
+    try expectPrintedStable(&reg, src, src);
+
+    // The retained argument knows it is a hole and not a stream, because an
+    // editor draws the two differently: an open socket, not a wire.
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const st = for (prog.script.?.top) |it| {
+        if (it == .stmt and it.stmt.stages.len > 0 and it.stmt.stages[0] == .call and
+            std.mem.eql(u8, it.stmt.stages[0].call.op, "add")) break it.stmt;
+    } else return error.TestUnexpectedResult;
+    try testing.expectEqual(rill.script.Arg.Kind.hole, st.stages[0].call.args[0].kind);
+    try testing.expectEqualStrings(":tight", st.stages[0].call.args[0].text);
+
+    // A hole is a GRAPH fact, so it survives a DUMP — unlike `warnings`,
+    // `exports`, `plane` and `script`, which describe the source. A restored
+    // program whose holey node suddenly evaluated would be a different
+    // program.
+    //
+    // MUTATION that bites: serialize a `.hole` slot as `.none` (tag 0).
+    // Executed 2026-09-09 — the round trip loads, `holes` comes back empty
+    // and the last two assertions go red; and worse than red, the restored
+    // `add1` would evaluate, because `.none` is SKIPPED by the readiness
+    // test.
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    try mock.putValue("plane.a", @as(i64, 3));
+    try mock.putValue("plane.b", @as(i64, 4));
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+    const d = try rill.dump(&rt, testing.allocator);
+    defer testing.allocator.free(d);
+    var back = try rill.loadProgram(testing.allocator, &reg, d);
+    defer back.deinit();
+    try testing.expectEqual(@as(usize, 2), back.holes.len);
+    try testing.expectEqualStrings(":tight", back.holes[0].name);
+    try testing.expectEqual(types.Tag.number, back.holes[0].ty);
+    try testing.expectEqualStrings(":anything", back.holes[1].name);
+    try testing.expectEqual(types.Tag.any, back.holes[1].ty);
+}
+
+test "R4 G-hole-place: a hole stands where a VALUE stands, and nowhere else" {
+    // The trap `parser.zig`'s header documents: two splices of one fold build
+    // two INDEPENDENT node sets, so `using` must never become how a
+    // node-to-node wire is spelled — a fan-out written that way would
+    // silently duplicate the upstream subgraph. Wires stay `as` and the pipe.
+    //
+    // A hole cannot make that spelling attractive, because a hole is bound to
+    // NOTHING: there is no upstream subgraph to duplicate. What the refusals
+    // below keep is the other half — a hole is a value, so it may not stand
+    // in operator position, as a branch head, or projected as though it had
+    // fields it cannot have.
+    //
+    // MUTATION that bites: delete the `if (f.hole) |ty|` arm in
+    // `expandIfFold`. Executed 2026-09-09 — a hole in operator position is
+    // no longer refused by name; it falls through to "expected operator
+    // after '|'", and the first needle goes red.
+    try expectParseError(
+        \\using ?number as :t
+        \\plane.a | :t 2 | write plane.out
+    , "is an open hole (?number) — a hole stands where a VALUE stands");
+    try expectParseError(
+        \\using ? as :k
+        \\plane.a | also { :k } | write plane.out
+    , "is an open hole");
+    // No fields until something is bound to it.
+    try expectParseError(
+        \\using ?record as :r
+        \\plane.a | add :r.x | write plane.out
+    , "no fields until something is bound to it");
+    // And a hole binding is a hole and nothing else: `using ?number plus as
+    // :t` is a fold whose body happens to start with a `?`, which is a slip,
+    // not a feature.
+    try expectParseError(
+        \\using ?number extra as :t
+        \\plane.a | add :t
+    , "a hole stands alone");
 }

@@ -177,6 +177,16 @@ const TokKind = enum {
     /// `:name` — a fold reference (§3.10), sigil included, one token, exactly
     /// as `$chan` is. `colonOpensFold` says when a `:` spells one.
     fold,
+    /// `?number`, `?light`, or a bare `?` — a SHAPED HOLE's declaration
+    /// (§3.15, 2026-09-09), the `?` and its shape glued into one token the
+    /// way `$chan` and `:flock` are one token each.
+    ///
+    /// Additive by construction: `?` had no token of its own and lexed as
+    /// `.raw`, which is legal ONLY inside a tail port — so no program that
+    /// parsed before this could hold one anywhere a token is read, and a
+    /// tail slices the raw source between offsets and never asks a token its
+    /// kind. The corpus has no `?` in any position at all.
+    hole,
     comma,
     dot,
     /// `..` — the range separator, and nowhere else in the language
@@ -408,6 +418,25 @@ fn tokenize(a: std.mem.Allocator, src: []const u8, diag: *Diag, comments: *std.A
             col += 1;
             continue;
         }
+        // `?shape` — one token, `?` included. The shape is glued on with no
+        // space, which is Christian's spelling (*"not just a `?` but a
+        // SHAPED `?`"*) and is settled HERE rather than in the parser so
+        // there is exactly one canon: `? number` cannot lex into a hole, so
+        // the printer never has to choose between two spellings of it.
+        if (c == '?') {
+            const start = i;
+            var j = i + 1;
+            if (j < src.len and isNameStart(src[j])) {
+                j += 1;
+                while (j < src.len and (isNameChar(src[j]) or
+                    ((src[j] == '-' or src[j] == '/') and j + 1 < src.len and isNameChar(src[j + 1])))) : (j += 1)
+                {}
+            }
+            try toks.append(a, .{ .kind = .hole, .text = src[start..j], .line = tl, .col = tc, .off = to });
+            col += @intCast(j - i);
+            i = j;
+            continue;
+        }
         // `:name` — one token, colon included, the way `$chan` is one token
         // sigil included. Additive by construction: every other `:` in the
         // language glues to the name on its LEFT (see `colonOpensFold`), and
@@ -586,6 +615,15 @@ const Target = struct {
 const Fold = struct {
     body: []const Token,
     def_line: u32,
+    /// Non-null when the binding is a HOLE — `using ?number as :tight` — and
+    /// then this is its declared shape (`types.Tag.any` for a bare `?`).
+    ///
+    /// A hole is a `using` bound to NOTHING, which is why it lives on the
+    /// fold table rather than beside it: the whole reason for the spelling is
+    /// that a hole is **declared**. An unknown `:name` stays the loud error
+    /// it has always been, so a typo (`:kk` for `:k`) can never quietly
+    /// become a hole in a file that is live in a running sim.
+    hole: ?types.TypeId = null,
 };
 
 /// One splice. `via` is the site of the expansion that produced the `:name`
@@ -602,7 +640,7 @@ const FoldSite = struct {
 /// backstop for a chain that is merely absurd.
 const max_fold_depth: u32 = 32;
 
-const ArgKind = enum { literal, stream, plane_path, section, word };
+const ArgKind = enum { literal, stream, plane_path, section, word, hole };
 
 const Arg = struct {
     kind: ArgKind,
@@ -1912,9 +1950,46 @@ const Parser = struct {
         if (body.len == 0) {
             return self.fail(kw, "`using` has nothing to fold — put the tokens between `using` and `as {s}`", .{name_tok.text});
         }
+        // A SHAPED HOLE: `using ?number as :tight`, a `using` bound to
+        // nothing that carries a shape (§3.15, 2026-09-09). Christian's
+        // spelling, refined twice — first *"maybe we can make use of `using`
+        // somehow"*, then *"not just a `?` but a SHAPED `?`"*.
+        //
+        // It rides `using` and not a sigil of its own because the point is
+        // that a hole is **declared**: an editor drops an unwired operator on
+        // the canvas and writes the binding, and a `:name` nobody bound stays
+        // the loud refusal it has always been. Without the declaration a
+        // mistyped fold would become a silent hole, and these files are live
+        // in a running sim.
+        //
+        // The shape is OPTIONAL and `?` is `?any` — one feature with a
+        // default, not two. **Open ruling** (2026-09-09, not resolved):
+        // whether it should be mandatory. `describe`'s principle — the burden
+        // is on the writer — argues yes; `any` being a real port type that a
+        // def may declare argues no. Built optional; the day it is ruled
+        // mandatory, the change is one refusal in this function.
+        for (body) |bt| {
+            if (bt.kind != .hole) continue;
+            if (body.len == 1) break;
+            return self.fail(bt, "a hole stands alone — write `using {s} as {s}`, and fold the rest under a name of its own", .{ bt.text, name_tok.text });
+        }
+        var hole_ty: ?types.TypeId = null;
+        if (body.len == 1 and body[0].kind == .hole) {
+            const shape = body[0].text[1..];
+            // Interned BY NAME, exactly as a `def` port's type is (see
+            // `types.TypeTable.intern`): the vocabulary is the host's, not a
+            // list in this file. `?light` and `?mesh` work the day matryoshka
+            // mints them, and they work before it does — a half-built graph
+            // must not wait on a registration.
+            hole_ty = if (shape.len == 0)
+                types.Tag.any
+            else
+                self.reg.types.intern(shape) catch return error.OutOfMemory;
+        }
         try self.folds.put(self.a(), try self.a().dupe(u8, name_tok.text), .{
             .body = body,
             .def_line = kw.line,
+            .hole = hole_ty,
         });
         // The binding as authored. Its tokens were captured unparsed, so
         // rendering them is the whole job — and every `:k` downstream prints
@@ -1956,6 +2031,16 @@ const Parser = struct {
             const f = self.folds.get(tok.text) orelse {
                 return self.fail(tok, "'{s}' is not a bound fold — bind it first with `using <tokens…> as {s}`", .{ tok.text, tok.text });
             };
+            // A HOLE is bound to nothing, so there is nothing to splice. It
+            // is a VALUE, and the three positions that can take one
+            // (`parseExpr`, `parseArgValueInner`, `parseFieldValue`) claim it
+            // BEFORE calling this. Reaching here means it was written where a
+            // value cannot go — in operator position, as a branch head, in a
+            // record's key — and the refusal says so rather than shrugging at
+            // a token it declined to expand.
+            if (f.hole) |ty| {
+                return self.fail(tok, "'{s}' is an open hole ({s}) — a hole stands where a VALUE stands: a statement's head, or an operator's argument", .{ tok.text, self.holeSpelling(ty) });
+            }
             // The provenance chain IS the recursion stack: a fold that
             // expands, directly or through others, back to itself would
             // splice forever, and the name is already sitting in the chain.
@@ -1990,6 +2075,24 @@ const Parser = struct {
             @memcpy(out[self.pos + f.body.len ..], self.toks[self.pos + 1 ..]);
             self.toks = out;
         }
+    }
+
+    /// The hole bound at the cursor, or null — for the three positions that
+    /// take a value. Peeks only; the caller consumes the token.
+    fn holeHere(self: *Parser) ?graph.Hole {
+        const t = self.toks[self.pos];
+        if (t.kind != .fold) return null;
+        const f = self.folds.get(t.text) orelse return null;
+        const ty = f.hole orelse return null;
+        return .{ .name = t.text, .ty = ty };
+    }
+
+    /// A hole's shape, spelled as it was written: `?number`, or `?` for
+    /// `any`. What a refusal about a hole must print — `any` is a real type
+    /// name and printing it would suggest the author wrote it.
+    fn holeSpelling(self: *Parser, ty: types.TypeId) []const u8 {
+        if (ty == types.Tag.any) return "?";
+        return std.fmt.allocPrint(self.a(), "?{s}", .{self.reg.types.name(ty)}) catch "?";
     }
 
     /// The expansion chain, outermost fold first, ending at `tok` — the text
@@ -2344,6 +2447,16 @@ const Parser = struct {
         // edits as text)? Cleared first so a stale answer cannot leak.
         self.expr_was_call = false;
         const expr_mark = self.pos;
+        // A hole at the head is the orphan case the feature exists for: an
+        // operator dragged onto a canvas with nothing upstream of it. Claimed
+        // before `expandIfFold`, which refuses a hole everywhere else.
+        if (self.holeHere()) |h| {
+            _ = self.next();
+            if (self.peek().kind == .dot) {
+                return self.fail(self.peek(), "'{s}' is an open hole — it has no fields until something is bound to it", .{h.name});
+            }
+            return .{ .outputs = try self.oneSource(.{ .hole = h }) };
+        }
         try self.expandIfFold();
         const t = self.peek();
         switch (t.kind) {
@@ -2904,9 +3017,19 @@ const Parser = struct {
         }
     }
 
-    /// `"{" (name ["?"] ":" stype) (("," | NEWLINE) …)* "}"`. The `?` is the
-    /// `raw` token it has always been — a shape is the only place it means
-    /// anything, so it costs no token kind.
+    /// `"{" (name ["?"] ":" stype) (("," | NEWLINE) …)* "}"`.
+    ///
+    /// **`?` was NOT a free character**, and this is the site that said so.
+    /// It was a `.raw` token here — the one position in the language where a
+    /// bare `?` meant anything — and the shaped-hole beat (2026-09-09) gave
+    /// `?` a token kind of its own, so this reads `.hole` now. The two never
+    /// collide because a shape's `?` is always followed by the field's colon
+    /// and a hole's shape is always followed by a name character, so the
+    /// lexer's one rule separates them: `id?` in `{id?: string}` still lexes
+    /// as a lone `?`, exactly as it did.
+    ///
+    /// Found by the suite, not by reading: the `?`-optional gate went red the
+    /// first time the tokenizer claimed the character.
     fn parseShapeRecord(self: *Parser, op_name: []const u8) ParseError![]const u8 {
         const open = self.next(); // {
         var entries = std.ArrayListUnmanaged([2][]const u8).empty;
@@ -2915,7 +3038,7 @@ const Parser = struct {
             const ft = self.next();
             if (ft.kind != .name) return self.fail(ft, "'{s}': expected a field name in the shape", .{op_name});
             var key = ft.text;
-            if (self.peek().kind == .raw and self.peek().text.len == 1 and self.peek().text[0] == '?') {
+            if (self.peek().kind == .hole and self.peek().text.len == 1) {
                 _ = self.next();
                 key = try std.fmt.allocPrint(self.a(), "{s}?", .{ft.text});
             }
@@ -3293,6 +3416,17 @@ const Parser = struct {
             };
             const val_ty = if (arg.kind == .section) self.sourceTy(target, arg.source) else arg.ty;
             if (!types.acceptsPort(port.ty, val_ty, port.broadcasts)) {
+                // THE refusal a shaped hole buys, and the whole reason the
+                // shape is not a comment: a hole declared `number` spliced
+                // into a boolean port is wrong before anything runs, and the
+                // message names BOTH — the hole the author declared and the
+                // port it was dropped on. Without it, `?` and `?number` mean
+                // the same thing to the parser and the shape is decoration.
+                if (arg.kind == .hole) {
+                    return self.fail(arg.tok, "hole '{s}' is {s}, and '{s}' port '{s}' takes {s} — a shaped hole must match the port it fills", .{
+                        arg.source.hole.name, self.reg.types.name(val_ty), op_name, port.name, self.reg.types.name(port.ty),
+                    });
+                }
                 if (port.ty == types.Tag.duration and val_ty == types.Tag.number) {
                     // §2.2: `sample 5` is a wire-time type error, with the fix named.
                     return self.fail(arg.tok, "'{s}' port '{s}' takes a duration — write it with a unit: 5s, 250ms, 3f", .{ op_name, port.name });
@@ -3543,6 +3677,11 @@ const Parser = struct {
             .literal => |b| types.typeOfValue(b),
             .plane => types.Tag.any,
             .port => |i| if (target.template) |t| t.ports[i].ty else types.Tag.any,
+            // **The shape flows.** A shaped hole reaches the port it feeds
+            // and is checked there, so a half-built graph still type-checks;
+            // an unshaped one is `any` and poisons everything downstream,
+            // which is exactly what `any` already means on a wire.
+            .hole => |h| h.ty,
             .none => types.Tag.any,
         };
     }
@@ -3767,6 +3906,7 @@ const Parser = struct {
             .word => .word,
             .plane_path => .path,
             .section => .section,
+            .hole => .hole,
             .stream => switch (open_kind) {
                 .lbrace => .record,
                 .lbracket => .array,
@@ -3777,6 +3917,17 @@ const Parser = struct {
     }
 
     fn parseArgValueInner(self: *Parser, target: *Target) ParseError!Arg {
+        // A hole is a value, and this is where the SHAPE earns its keep: the
+        // Arg carries the hole's type, so the bind loop in `parseOpcall`
+        // checks it against the port's declared type like any other argument
+        // and refuses a mismatch at parse, naming both.
+        if (self.holeHere()) |h| {
+            const ht = self.next();
+            if (self.peek().kind == .dot) {
+                return self.fail(self.peek(), "'{s}' is an open hole — it has no fields until something is bound to it", .{h.name});
+            }
+            return .{ .kind = .hole, .source = .{ .hole = h }, .ty = h.ty, .tok = ht };
+        }
         // Argument position is the reason `using` exists rather than a
         // namespace import: `push :flock` splices a whole expression where a
         // def could never go, because `instantiate` is only reachable from
@@ -4163,6 +4314,10 @@ fn substSource(src: Source, slot_base: SlotId, port_sources: []const Source) Sou
         // and the host does, at mount, per instance. (This arm read
         // `unreachable` while every plane path in a template was banned.)
         .plane => |p| .{ .plane = p }, // arena-shared, immutable
+        // A hole inside a def body survives the splice per instance, name and
+        // shape intact: two instances of a half-built definition are two
+        // nodes held open by the same hole, which is what the author wrote.
+        .hole => |h| .{ .hole = h }, // arena-shared, immutable
         .port => |i| port_sources[i],
     };
 }

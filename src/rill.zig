@@ -79,6 +79,10 @@ pub const EvalPlane = graph.EvalPlane;
 /// --json` prints them beside a refusal's diagnostics with severity
 /// "warning".
 pub const Warning = graph.Warning;
+/// A declared, unbound input — `using ?number as :tight` (§3.15,
+/// 2026-09-09). `prog.holes` names the ones holding statements open, which is
+/// what the mount reads out.
+pub const Hole = graph.Hole;
 pub const parse = parser.parse;
 pub const parseKernel = parser.parseKernel;
 /// `prog.script` → `.rill` text. Semantically faithful and stable, not

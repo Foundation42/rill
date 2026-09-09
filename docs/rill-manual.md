@@ -1288,6 +1288,53 @@ streams, with predicate sections for the common case:
 plane.damage | where (> 0) | inc plane.stats.hits 1
 ```
 
+### A hole — `using ?number as :tight`
+
+Drag an operator onto a canvas and it lands **unwired**. rill's text could
+not say that: parse order is dependency order, so an orphan has no place
+in the statement list at all.
+
+A **hole** is a `using` bound to nothing, carrying a shape:
+
+```rill
+using ?number as :tight
+using ? as :whatever
+
+plane.crowd | mul 2 | write plane.hud.crowd
+plane.flock | add :tight | write plane.hud.flock
+```
+
+The second statement does not run. Everything else in the file mounts
+and runs exactly as it would with no hole in it — **a hole may never
+break what is already running** — and the mount says which names are
+open, by name.
+
+It is **declared**, and that is the whole reason for the spelling. An
+unknown `:name` is still the loud refusal it has always been, so a typo
+(`:tigth` for `:tight`) cannot quietly become a dead statement.
+
+`?` alone is `?any`. The shape vocabulary is the one `def` ports use —
+`number boolean string record bytes array duration any`, the aliases
+`int float bool str map`, and whatever types the host has minted, since
+they are interned by name.
+
+**The shape flows.** A shaped hole reaches the port it feeds, so a
+half-built graph still type-checks — and a hole that does not fit is
+refused at parse, naming both:
+
+    hole ':tight' is number, and 'where' port 'pred' takes boolean
+      — a shaped hole must match the port it fills
+
+That refusal is the shape's whole justification. Without it, `?` and
+`?number` mean the same thing and the shape is a comment.
+
+A hole stands where a **value** stands — a statement's head, or an
+operator's argument — and nowhere else. It has no fields until something
+is bound to it. And it is never how a wire between two nodes is spelled:
+two splices of one fold build two independent node sets, so a fan-out
+written with `using` would silently duplicate the upstream subgraph.
+Wires stay `as` and the pipe.
+
 ---
 
 ## 10a. `layout` — the picture lives in the document

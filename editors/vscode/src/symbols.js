@@ -24,7 +24,10 @@
 //
 //   3. `using … as :k` — a fold. It is file-scoped and everything downstream
 //      reads through it, so it belongs near the top of the outline the way
-//      it belongs near the top of the file.
+//      it belongs near the top of the file. A shaped HOLE (`using ?number as
+//      :tight`, §3.15) is a `using` bound to nothing, so it lands here with
+//      no new rule at all, and its detail is the shape — which is exactly
+//      what a reader wants to know about one: what would fit here.
 //
 //   4. `… as name` — a bound stream. Names are single-assignment and must be
 //      defined before use, so parse order IS topological order: the outline's

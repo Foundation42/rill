@@ -81,6 +81,10 @@ pub const Arg = struct {
         array,
         /// the rest of the line, verbatim (§3.11)
         tail,
+        /// `:tight` where `:tight` is a declared HOLE (§3.15) — an argument
+        /// deliberately left unbound. Told apart from `stream` because an
+        /// editor draws it differently: an open socket, not a wire.
+        hole,
     };
     kind: Kind,
     /// The argument as authored. This is what `print` emits; every other

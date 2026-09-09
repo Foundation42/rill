@@ -5195,3 +5195,144 @@ in the same commit — the e2e walker already had it right.
 **Corpus: 47/47 round-trip, 47/47 `rill fmt` no-op, byte-identical.** No
 corpus file uses `layout`, which is what makes that the no-regression gate.
 Suite 501 → 504. Extension 57 → 58 tests, 49 → 51 mutations.
+
+---
+
+## Shaped holes — `using ?number as :tight` (2026-09-09)
+
+Drag an operator onto a canvas and it lands **unwired**. rill's text could not
+say that: `parser.zig`'s header states the constraint the whole language rests
+on — parse order is dependency order — so an orphan has no place in the
+statement list at all, and the editor had nowhere to put the node. Christian:
+*"I completely agree with the ability for rill to be able to express these
+things, not lose them in the gaps."*
+
+The spelling is his, refined twice — first *"maybe we can make use of `using`
+somehow"*, then *"not just a `?` but a **shaped** `?`"*.
+
+    using ?number as :tight
+
+### It is DECLARED, and that is the whole point
+
+An *undeclared* `:name` stays exactly the loud error it has always been. If an
+unknown fold silently became a hole, `:tigth` for `:tight` would stop being a
+refusal and start being a quietly dead statement — in files that are live in a
+running sim. `using` carries the declaration, and it is the only reason the
+feature is safe. Both directions are gated.
+
+### Representation: `Source.hole`, carrying the NAME and the shape
+
+The brief recommended `hole: TypeId` on `graph.Source`, and the code disagreed
+in one place: **the name is the point.** The mount says which holes are open
+by name, never by count, and a `TypeId` cannot say `:tight`. So the variant
+carries a small struct — `{ name, ty }` — and everything else follows from the
+Source alone: `sourceTy` answers the shape, the bind loop names both sides,
+`finalize` collects the distinct open holes into `Program.holes`, and a dump
+carries it.
+
+The node EXISTS, which was the brief's real recommendation and is right: the
+editor sees it, the checker flows the shape through it, and the mount skips it
+by name — rather than the statement vanishing at parse.
+
+**`.none` was not reusable, and the difference is load-bearing.** An unbound
+input reads as `.none` on a section's OPEN ports, which the consumer fills per
+element, so `eval.markNode` *skips* a `.none` input when deciding readiness —
+and skips an unbound OPTIONAL port too. A hole must do the opposite. The
+readiness line is therefore ahead of both skips, and the gate for it is on an
+optional port (`step`'s `max`), because on a required port a hole stays quiet
+either way and the mutation would not have bitten.
+
+### The shape flows, and buys a refusal
+
+    hole ':tight' is number, and 'where' port 'pred' takes boolean
+      — a shaped hole must match the port it fills
+
+That is the feature's main justification: without it, `?` and `?number` mean
+the same thing to the parser and the shape is a comment. A hole reaches the
+port it feeds and is checked there, so a half-built graph still type-checks; a
+bare `?` is `?any`, which is a wildcard on either side of a wire and always
+has been — that is what "an unshaped hole poisons everything downstream" means
+concretely.
+
+The shape is **interned by name**, exactly as a `def` port's type is, so
+`?mesh` and `?light` work the day a host mints them and work before it does.
+
+**Open ruling, not resolved**: whether the shape should be mandatory.
+`describe`'s principle (the burden is on the writer) argues yes; `any` being a
+real port type a def may declare argues no. Built optional, and the gate for
+`?` = `?any` names the mutation that would make it mandatory, so the day it is
+ruled the change is one refusal in `parseUsing`.
+
+### The trap, and why this does not walk into it
+
+`parser.zig`'s header documents it: two splices of one fold build two
+INDEPENDENT node sets, so `using` must never become how a node-to-node wire is
+spelled — a fan-out written that way silently duplicates the upstream
+subgraph. A hole cannot make that spelling attractive, because **a hole is
+bound to nothing**: there is no upstream subgraph to duplicate. Wires stay
+`as` and the pipe, and a hole stands only where a value stands — a statement's
+head or an operator's argument, refused by name anywhere else.
+
+### `?` was NOT a free character — found by the suite
+
+The brief assumed `?` was unspent. It was not: a shape literal's optional
+field is `expect {id?: string}`, and it was a `.raw` token — the one position
+in the language where a bare `?` meant anything. The gate *"beat 2b: a missing
+field is named, and `?` makes it optional"* went red the first time the
+tokenizer claimed the character.
+
+The two never collide, and the lexer's own rule is what separates them: a
+shape's `?` is followed by the field's colon, a hole's shape by a name
+character. `parseShapeRecord` now reads `.hole` where it read `.raw`, and its
+doc comment — which claimed `?` "costs no token kind" — was corrected in the
+same edit. The extension's grammar carries the same lookahead and the same
+gate.
+
+### The dump: tag 4, and `fmt_version` deliberately does not move
+
+A hole is a GRAPH fact — *this input is open* — unlike `warnings`, `exports`,
+`plane` and `script`, which describe the SOURCE and are correctly absent from
+a dump. A restored program whose holey node suddenly evaluated would be a
+different program, so a `.hole` slot serializes as src tag 4 with the name and
+the type name, and `loadProgram` rebuilds it.
+
+`fmt_version` stays at 2. A version bump exists for a change in the meaning of
+bytes an old dump already holds; this is the opposite — no dump written before
+today can contain a tag no parser could produce, so every old dump still loads
+unchanged and **G2's frozen hash does not move**. A newer dump carrying a hole
+meets an older reader at `else => Malformed`, which is loud.
+
+### Gates, and the mutation each was paid for
+
+Every one executed 2026-09-09 and watched go red.
+
+| gate | mutation | observed |
+| --- | --- | --- |
+| `R4 G-hole` | `holeHere`'s fold miss returns a hole instead of null | red: `:nope` parses — `expected error.Parse, found Program` |
+| `R4 G-hole-any` | refuse a bare `?` ("a hole needs a shape") — the open ruling taken the other way | red: three gates die at the parse |
+| `R4 G-hole-shape` | delete the `arg.kind == .hole` arm in the bind loop | red: the refusal names the port and NOT the hole |
+| `R4 G-hole-shape` | a hole argument's `.ty` is `any` — the shape does not flow | red: `?boolean` into `mul` parses |
+| `R4 G-hole-shape` | hard-code the eight built-in type words in `parseUsing` | red: `'mesh' is not a type` — the host type stops being a shape |
+| `R4 G-hole-mount` | `if (prog.holes.len > 0) return error.Refused` in `mount` | red: the mount errors |
+| `R4 G-hole-mount` | delete the `prog.holes` announcement loop | red: everything still runs, and only the two "it said so, by name" assertions go red |
+| `R4 G-hole-mount` | delete `if (s.source == .hole) return;` from `markNode` | red on the OPTIONAL-port half only: `step` fires with a null `max`, writes 0 → 1 |
+| `R4 G-hole-print` | `syn_kind` `.hole` → `.stream` | red: the file still round-trips byte for byte and only the retained argument's KIND moves — which is why the kind is asserted |
+| `R4 G-hole-print` | serialize a `.hole` as tag 0 (`.none`) | red: `holes` comes back empty from the dump |
+| `R4 G-hole-place` | delete the hole arm in `expandIfFold` | red: a hole in operator position shrugs "expected operator after '\|'" |
+| `G7g` (grammar) | drop the `(?![:])` lookahead from `#hole` | red: a shape literal's `id?:` is claimed as a hole |
+| `G7g-list` (grammar) | replace the shape capture with the eight built-in words | red: `?mesh` stops scoping as a type |
+| `C10` (outline) | anchor `USING`'s body capture at a name | red: both holes vanish from the outline |
+
+### The outline SHOWS a hole
+
+A hole is a `using` bound to nothing, so it lands in the outline as a fold
+with no new rule at all, and its detail is the shape — which is exactly what a
+reader wants to know about one: *what would fit here*. It came for free, so it
+is gated: the next edit to `USING` could take it away silently.
+
+(A `layout` block is still deliberately absent from the outline, for the
+opposite reason — see the note in `symbols.js`.)
+
+**Corpus: 47/47 round-trip, 47/47 `rill fmt` no-op, byte-identical.** No
+corpus file uses either feature. Suite 504 → 510. Extension 58 → 59 tests,
+51 → 55 mutations.

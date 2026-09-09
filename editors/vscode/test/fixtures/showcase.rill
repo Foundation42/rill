@@ -17,6 +17,13 @@
 
 using plane.drift.@self.k as :k
 
+// A SHAPED HOLE is a `using` bound to nothing: an operator a canvas dropped
+// and has not wired yet. `?` alone is `?any`; a shape reaches the port it
+// feeds, so a half-built graph still type-checks.
+
+using ?number as :tight
+using ? as :whatever
+
 plane.input.kbd.space | > 0.5 as space_down
 row.seed | mul 0.025 | add 0.03 | write row.size
 row.u0 | relax 1 slate.contact | write row.u0 add
@@ -74,6 +81,12 @@ plane.orders.sally
 // `rbf` is rill core's only two-word family; a host's are not knowable here.
 
 rbf through 4 | write plane.field.value
+
+// …and the holes above, standing where a value stands: an argument, and a
+// statement's head. Neither statement runs until something is bound.
+
+plane.flock | add :tight | write plane.hud.flock
+:whatever | tap loose
 
 // ══ THE PACK ═════════════════════════════════════════════════════════════
 

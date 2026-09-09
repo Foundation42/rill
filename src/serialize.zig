@@ -143,6 +143,25 @@ pub fn dump(rt: *const eval.Runtime, gpa: std.mem.Allocator) ![]u8 {
                     try src.appendInt(3);
                     try src.appendString(p);
                 },
+                // A hole is a GRAPH fact — this input is open — so unlike
+                // `warnings`, `exports`, `plane` and `script`, which describe
+                // the SOURCE, it has to survive a dump: a restored program
+                // whose holey node suddenly evaluated would be a different
+                // program. Tag 4, name then type name.
+                //
+                // `fmt_version` deliberately does NOT move. A version bump
+                // exists for a change in the meaning of bytes an old dump
+                // already holds, and this is the opposite: no dump written
+                // before 2026-09-09 can contain a tag no parser could
+                // produce, so every old dump still loads unchanged and G2's
+                // frozen hash stays where it is. A NEWER dump carrying a hole
+                // meets an older reader at the `else => Malformed` arm below,
+                // which is loud.
+                .hole => |h| {
+                    try src.appendInt(4);
+                    try src.appendString(h.name);
+                    try src.appendString(prog.reg.types.name(h.ty));
+                },
                 .port => unreachable, // never survives flattening
             }
             try putEntry(&se, a, "src", try packArrayOf(a, src.bytes()));
@@ -294,6 +313,14 @@ pub fn loadProgram(gpa: std.mem.Allocator, reg: *registry.Registry, bytes: []con
             1 => .{ .wire = @intCast(try asInt(pr.nextView() catch null orelse return error.Malformed)) },
             2 => .{ .literal = try asBytesIn(a, pr.nextView() catch null orelse return error.Malformed) },
             3 => .{ .plane = try asStrIn(a, pr.nextView() catch null orelse return error.Malformed) },
+            4 => blk: {
+                const hname = try asStrIn(a, pr.nextView() catch null orelse return error.Malformed);
+                const hty = try asStr(scratch, pr.nextView() catch null orelse return error.Malformed);
+                break :blk .{ .hole = .{
+                    .name = hname,
+                    .ty = reg.types.intern(hty) catch return error.OutOfMemory,
+                } };
+            },
             else => return error.Malformed,
         };
         const sid: graph.SlotId = slot_id;

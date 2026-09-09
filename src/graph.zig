@@ -32,6 +32,40 @@ pub const Source = union(enum) {
     literal: []const u8, // struple-encoded constant (program-arena-owned)
     plane: []const u8, // live plane path — a subscription
     port: u8, // def template: the def's own input port
+    /// A declared, unbound input — a SHAPED HOLE (§3.15, 2026-09-09), written
+    /// `using ?number as :tight` and spliced `:tight`.
+    ///
+    /// **The node EXISTS.** That is the whole of the representation choice.
+    /// rill's text cannot otherwise say "this operator is here and its input
+    /// is unbound", because parse order is dependency order and an orphan has
+    /// no place in the statement list — so an editor that drags an operator
+    /// onto a canvas had nowhere to put it. Making the statement vanish at
+    /// parse would have hidden it from the editor, from the checker and from
+    /// the mount; making the SOURCE say "open" leaves the node in the graph
+    /// with a reason attached.
+    ///
+    /// `.none` was not reusable and the difference is load-bearing: an
+    /// unbound input reads as `.none` on a section's OPEN ports, which the
+    /// consumer fills per element, and `eval.markNode` therefore SKIPS a
+    /// `.none` input when deciding whether a node is ready. A hole must do
+    /// the opposite — hold the node quiet — so it is its own variant and
+    /// every readiness test names it.
+    hole: Hole,
+};
+
+/// A hole's two facts: what the author called it, and what shape it promised.
+///
+/// The NAME is here and not derived, because naming is the point — the mount
+/// says which holes are open BY NAME, never by count, and the name is the one
+/// the author or the editor chose. The TYPE is what makes a shaped hole more
+/// than a comment: it reaches the port it feeds, so a half-built graph still
+/// type-checks and a `number` hole spliced into a boolean port is refused at
+/// parse, naming both.
+pub const Hole = struct {
+    /// The fold name, sigil included: `:tight`.
+    name: []const u8,
+    /// The declared shape; `types.Tag.any` for a bare `?`.
+    ty: types.TypeId,
 };
 
 pub const Slot = struct {
@@ -242,6 +276,11 @@ pub const Program = struct {
     casts: std.ArrayListUnmanaged(CastTarget) = .empty,
     /// Non-fatal parse diagnostics, in source order. Arena-owned like the rest.
     warnings: std.ArrayListUnmanaged(Warning) = .empty,
+    /// Every hole holding a statement open, distinct, in slot order — built
+    /// by `finalize` from the slot sources, so it is right whether the
+    /// program came from text or from a dump. A DECLARED hole nobody splices
+    /// is not in here: it holds nothing open.
+    holes: []const Hole = &.{},
     /// `export def`s, in source order — the one thing that survives the parse
     /// that flattens defs away. See `DefExport`.
     exports: std.ArrayListUnmanaged(DefExport) = .empty,
@@ -369,10 +408,36 @@ pub const Program = struct {
         const out = try alloc.alloc([]const SlotId, lists.len);
         for (lists, out) |*l, *o| o.* = l.items;
         self.downstream = out;
+        try self.collectHoles();
         self.carryKinds();
         try self.linkBodies();
     }
 
+    /// The distinct holes holding statements open in this program, in slot
+    /// order — what the mount reads out, by name.
+    ///
+    /// Built HERE and not at parse so it is right on both doors: a program
+    /// restored from a dump carries its holes too (they are slot sources, see
+    /// `Source.hole`), and a host that loaded one must be told the same thing
+    /// a host that parsed one is.
+    ///
+    /// DISTINCT and in slot order, not one entry per slot: `:tight` spliced
+    /// into three ports is one open hole with three consequences, and reading
+    /// its name out three times is a count wearing a name's clothes.
+    fn collectHoles(self: *Program) !void {
+        var list = std.ArrayListUnmanaged(Hole).empty;
+        for (self.slots.items) |*s| {
+            const h = switch (s.source) {
+                .hole => |x| x,
+                else => continue,
+            };
+            const seen = for (list.items) |k| {
+                if (std.mem.eql(u8, k.name, h.name)) break true;
+            } else false;
+            if (!seen) try list.append(self.a(), h);
+        }
+        self.holes = list.items;
+    }
 
     /// An elementwise operator CARRIES the kind of what is piped into it: an
     /// occurrence through `mul 2` is still an occurrence.

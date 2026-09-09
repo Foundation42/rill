@@ -236,6 +236,18 @@ pub const Runtime = struct {
             }
         }
 
+        // Open holes are announced at mount, BY NAME (§3.15). Not by count:
+        // the name is the point — the author or the editor chose it, and
+        // "one input is open" sends whoever reads it hunting. Everything
+        // else in the file mounts and runs regardless, which is the rule
+        // that matters most about a hole: it may never break what is
+        // already running.
+        if (rt.log_fn) |lf| {
+            for (prog.holes) |h| {
+                lf(rt.log_ctx, "rill.hole", h.name);
+            }
+        }
+
         // Tick 0: everything evaluates once, in topo order, at the mount
         // moment's fed time — window baselines are real from the first eval.
         // `mounting` is what makes a `fails_mount` refusal fatal here and
@@ -535,6 +547,14 @@ pub const Runtime = struct {
         // `on` controls may sit on paths that fire rarely or never.
         for (n.inputs) |sid| {
             const s = self.prog.slot(sid);
+            // A HOLE holds this node quiet for as long as it is open — and
+            // it does so BEFORE the two tests below, both of which would let
+            // the node run. `.none` is skipped here (a section's open ports
+            // are filled per element by the consumer) and an optional port is
+            // skipped too, so a hole that reused either spelling would
+            // silently evaluate a statement the author declared unfinished.
+            // §3.15: a statement referencing an unbound name does not mount.
+            if (s.source == .hole) return;
             if (s.source == .none or self.has[sid]) continue;
             if (s.port < def.inputs.len and def.inputs[s.port].optional) continue;
             return;

@@ -205,12 +205,28 @@ test('C10: the outline of the showcase — banners, def, ports, fold, streams', 
   assert.ok(bound, 'an `as` name is in the outline');
   assert.equal(bound.kind, 'variable');
 
+  // A HOLE is a `using` bound to nothing, so it is in the outline exactly as
+  // a fold is — and its DETAIL is the shape, which is the whole of what a
+  // reader wants to know about it: what would fit here. No new rule was
+  // needed for that, and none was added; it is worth a gate precisely
+  // because it came for free and the next edit to `USING` could take it away.
+  const hole = find(tree, ':tight');
+  assert.ok(hole, 'a hole is in the outline');
+  assert.equal(hole.kind, 'constant');
+  assert.equal(hole.detail, '?number');
+  assert.equal(find(tree, ':whatever').detail, '?', 'a bare `?` is `?any`');
+
   const def = find(tree, 'scatter');
   assert.ok(def, 'the def is in the outline');
   assert.equal(def.detail, 'A worked example of a parameter pack: a default, a range and a sentence.');
   assert.deepEqual(def.children.map((c) => c.name), ['rate', 'speed', 'blend']);
   assert.equal(def.children[0].detail, ': number = 60 (0..500)');
 });
+// MUTATION, the hole half: anchor symbols.js's USING body capture at a name
+// (`([A-Za-z].*?)` for `(.*?)`). Executed 2026-09-09 — `using ?number as
+// :tight` stops matching, both holes vanish from the outline, and the
+// `:tight` assertion goes red while every other entry stays.
+//
 // MUTATION: change symbols.js's DESCRIBE handling to skip lifting the leading
 // bare string onto the def. The detail falls back to 'export def' and the
 // outline stops answering "what is this", which is the question it exists for.

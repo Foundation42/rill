@@ -407,6 +407,49 @@ test('G7f: a layout block is coordinates, and its keys are nodes', () => {
   // …and the block ENDS at the dedent, so `spawn` is a statement again.
   assert.ok(scopesOfText(tokens, 'spawn').includes('entity.name.function.rill'));
 });
+test('G7g: a shaped hole is a `?` and a type, and `?` alone is `?any`', () => {
+  const tokens = lex([
+    'using ?number as :tight',
+    'using ?mesh as :m',
+    'using ? as :k',
+    '',
+    'plane.a | add :tight | write plane.out',
+    'expect {id?: string} exact',
+    '',
+  ].join('\n'));
+
+  assert.ok(scopesOfText(tokens, '?', 0).includes('keyword.operator.hole.rill'),
+    'the sigil is the hole');
+  assert.ok(scopesOfText(tokens, 'number').includes('entity.name.type.rill'));
+  // A HOST type is a shape the day the host mints it, so this rule carries no
+  // list of type words — `mesh` scopes exactly as `number` does.
+  assert.ok(scopesOfText(tokens, 'mesh').includes('entity.name.type.rill'));
+  // A bare `?` is `?any`: the sigil alone, with nothing after it. (Third `?`
+  // in the fixture — the two above it wear shapes.)
+  assert.ok(scopesOfText(tokens, '?', 2).includes('keyword.operator.hole.rill'));
+  // The REFERENCE is still a fold: `using` binds it, `:tight` splices it, and
+  // a hole changes neither spelling.
+  assert.ok(scopesOfText(tokens, ':tight', 1).includes('variable.other.constant.fold.rill'));
+  // …and the `?` the language ALREADY SPENT — an optional field in a shape
+  // literal — is not claimed. That `?` is followed by the field's colon, and
+  // the rule's lookahead is what keeps the two apart; rill's tokenizer
+  // separates them the same way, and the suite found the collision the first
+  // time the tokenizer claimed the character.
+  assert.ok(!scopesOfText(tokens, '?', 3).includes('keyword.operator.hole.rill'),
+    "a shape literal's `id?:` is not a hole");
+  assert.ok(scopesOfText(tokens, ':').includes('punctuation.separator.key-value.rill'),
+    'and the colon after it is still the shape field separator');
+  assert.ok(!anyScope(tokens, 'invalid.'), 'both spellings of `?` are legal');
+});
+// MUTATIONS, two:
+//   G7g        drop the `(?![:])` lookahead from #hole. `id?:` in the shape
+//              literal claims the `?`, and nothing is left to scope — the
+//              record key and the shape's type assertions go red.
+//   G7g-list   replace #hole's `([A-Za-z_]…)?` capture with an alternation of
+//              the eight built-in type words. `?mesh` stops scoping as a
+//              type, which is the hard-coded-list mutation the parser's own
+//              gate runs — one feature, two places it could be got wrong.
+
 // MUTATIONS, two:
 //   G7f        delete `{ "include": "#layout-block" }` from the top-level
 //              patterns. `layout` reads as an operator head, `demo` as its

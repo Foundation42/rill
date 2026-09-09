@@ -46,6 +46,7 @@
     { "include": "#string" },
     { "include": "#keyword" },
     { "include": "#as-binding" },
+    { "include": "#hole" },
     { "include": "#fold" },
     { "include": "#duration" },
     { "include": "#number" },
@@ -162,6 +163,32 @@
           "name": "keyword.control.as.rill"
         }
       ]
+    },
+
+    "hole": {
+      "//": [
+        "`?number`, `?light`, or a bare `?` — a SHAPED HOLE's declaration",
+        "(§3.15, 2026-09-09). One token, `?` included, exactly as `:flock` and",
+        "`$chan` are one token each: `using ?number as :tight` binds a `using`",
+        "to NOTHING and gives it a shape.",
+        "",
+        "The shape is scoped as a TYPE, because it is the same vocabulary a",
+        "`def` port declares and the same table interns it — `?mesh` is a host",
+        "type the day the host mints it, so this rule must not carry a list of",
+        "type words and does not.",
+        "",
+        "`?` also marks an OPTIONAL FIELD in a shape literal (`expect {id?:",
+        "string}`), which is where the language already spent the character.",
+        "The two never collide: a shape's `?` is followed by the field's colon",
+        "and a hole's shape is followed by a name character, so the lookahead",
+        "below refuses to claim a `?` that a colon follows. rill's tokenizer",
+        "separates them the same way."
+      ],
+      "match": "(\\?)(?![:])([A-Za-z_][\\w]*(?:[-/][\\w]+)*)?",
+      "captures": {
+        "1": { "name": "keyword.operator.hole.rill" },
+        "2": { "name": "entity.name.type.rill" }
+      }
     },
 
     "fold": {

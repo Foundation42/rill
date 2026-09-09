@@ -813,6 +813,14 @@ pub const Runtime = struct {
                 in_buf[i] = sc.slots[sid];
                 if (in_buf[i] == null) {
                     const s = prog.slot(sid);
+                    // A HOLE holds the node quiet for every row, and does so
+                    // ahead of both skips below — same rule and same reason
+                    // as `eval.markNode` (§3.15). A kernel with an open hole
+                    // sweeps every other statement at full speed.
+                    if (s.source == .hole) {
+                        ready = false;
+                        continue;
+                    }
                     if (s.source == .none) continue;
                     if (s.port < def.inputs.len and def.inputs[s.port].optional) continue;
                     ready = false;
