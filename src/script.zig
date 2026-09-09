@@ -351,18 +351,74 @@ pub const Script = struct {
 /// this beat's to do.
 const indent_canon: u32 = 4;
 
+/// The column a printed line may reach before the printer breaks it.
+///
+/// **88, and RULED** — Christian, 2026-09-09, reading two of his own lines
+/// aloud: *"We still need to do something about these long lines… These are
+/// not human friendly."* The two were `roaches`'s 234-character signature and
+/// a 128-character colour ramp.
+///
+/// The number is measured, not borrowed. `kernels/roaches.rill` is the
+/// project's exemplar and is four-fifths prose; its `//` lines sit at ~74
+/// columns because that is where Christian's hand stops. 88 leaves a stage's
+/// arguments room above that without breaking a line that reads fine today —
+/// at 80 the corpus loses six lines that nobody has ever complained about,
+/// and at 100 `beacon.rill`'s 97-character ramp stays as it is.
+///
+/// Rejected: 80 (a punched card, and it cuts lines the author is happy with),
+/// 100 and 120 (they leave the two lines that started this beat exactly where
+/// they were), and "the editor's viewport" (not a property of the file, so
+/// two machines would format it two ways).
+///
+/// Counted in BYTES. Everything a printed line can hold outside a string
+/// literal is ASCII, and a string is never broken — so the one thing a
+/// multi-byte character can do is make a `describe` sentence look wider than
+/// it is, on a line the printer would not have touched anyway.
+const width_canon: usize = 88;
+
+/// How far a construct is allowed to break to fit `width_canon`.
+///
+/// Two values and not a number of levels: every construct here breaks exactly
+/// one way (one stage per line, one port per line, one element per line), so
+/// the only question is whether it broke.
+const Lay = enum { flat, broken };
+
+/// A def's head has two things on it that can break — its signature and, when
+/// the body sat on the signature line, the body's chain — so its layout is a
+/// pair.
+///
+/// Those two are SIBLINGS on one line, not one nested in the other, so
+/// outermost-first has nothing to say about them: what decides is which half
+/// does not fit, measured. `def wobble(x: number) = x | mul 0.05 | … | mul 7`
+/// is 93 columns over a 23-column signature, and a first draft that tried the
+/// signature first broke that one port across three lines to make room for a
+/// chain it then left alone. See `Printer.def` for the order.
+const DefLay = struct { sig: Lay, body: Lay };
+
 /// The canon, chosen to read like the corpus Christian reads daily:
 ///
-///   - one statement, one line; a chain never wraps. (The corpus wraps in
-///     four ironwood rills, always with the `|` in the left margin. That is a
-///     nice shape and it is NOT recoverable from the structure — the parser
-///     skips the newline — so a printer that guessed would churn the file
-///     differently every time. One line is the stable answer.)
+///   - one statement, one line — **until the line runs past `width_canon`**,
+///     and then it breaks, one stage per line with the `|` in the
+///     continuation's left margin. That is the shape the four ironwood rills
+///     were already hand-writing; what it was NOT, before this beat, was
+///     recoverable — so the printer stopped guessing and started DECIDING.
+///     The width is the whole of the decision, and the file's own wrapping is
+///     normalised away exactly as its indentation is (Christian's ruling on
+///     indentation, applied to the same question: the printer decides).
+///   - the break is OUTERMOST FIRST. A statement breaks its chain; a stage
+///     breaks its `[…]`/`{…}` argument only if the line it landed on is
+///     STILL too long; a def breaks its signature before it breaks an inline
+///     body. Nothing breaks eagerly, and a construct that would gain nothing
+///     by breaking (no stages, no span) is left flat rather than churned.
 ///   - everything nested indents by four — a def body, a `describe` block's
-///     lines, a fan-out's branches. Christian's ruling; see `indent_canon`.
+///     lines, a fan-out's branches, and every continuation above.
+///     Christian's ruling; see `indent_canon`.
 ///   - a `describe` block also pads its keys into a column so the values line
 ///     up. `kernels/roaches.rill` hand-aligns eleven ports, and at that width
-///     the column is what makes the block readable, not decoration.
+///     the column is what makes the block readable, not decoration. Its lines
+///     are the one thing the width does NOT touch: a `describe` line is a key
+///     and one string, eleven of roaches's twelve run past 88 columns, and a
+///     string cannot be broken without changing the value it holds.
 ///   - blank runs preserved exactly as written. Preserving beats normalising
 ///     here: normalising would rewrite every file in the corpus on its first
 ///     save, which is the thing that makes a git history useless.
@@ -420,6 +476,31 @@ const Printer = struct {
         try self.w(text);
     }
 
+    /// The widest line written since `mark`, in bytes. `mark` is always taken
+    /// at the start of a line, and the tail with no newline after it counts —
+    /// it is the line still being built.
+    fn widestSince(self: *Printer, mark: usize) usize {
+        const s = self.out.items[mark..];
+        var widest: usize = 0;
+        var start: usize = 0;
+        for (s, 0..) |c, i| {
+            if (c != '\n') continue;
+            widest = @max(widest, i - start);
+            start = i + 1;
+        }
+        return @max(widest, s.len - start);
+    }
+
+    /// Where the line currently being written began.
+    fn lineStart(self: *Printer) usize {
+        const s = self.out.items;
+        var i = s.len;
+        while (i > 0) : (i -= 1) {
+            if (s[i - 1] == '\n') return i;
+        }
+        return 0;
+    }
+
     fn lead(self: *Printer, comments: []const Comment, col: u32) Oom!void {
         for (comments) |c| {
             try self.blanks(c.blank_before);
@@ -432,8 +513,32 @@ const Printer = struct {
             .stmt => |st| {
                 try self.lead(st.lead, col);
                 try self.blanks(st.blank_before);
+                // Render it flat, and if that runs past the width render it
+                // again with the chain broken; keep the first that fits, and
+                // if neither does keep the NARROWER — the earlier of equals,
+                // so a statement with nothing to break (no stages, no span)
+                // stays on the one line it was on rather than being churned
+                // into an identical shape for no gain.
+                const mark = self.out.items.len;
+                var best: Lay = .flat;
+                var best_w: usize = std.math.maxInt(usize);
+                for ([_]Lay{ .flat, .broken }) |lay| {
+                    try self.indent(col);
+                    try self.stmt(st, col, lay);
+                    try self.trail(st.trail);
+                    const wide = self.widestSince(mark);
+                    self.out.shrinkRetainingCapacity(mark);
+                    if (wide <= width_canon) {
+                        best = lay;
+                        break;
+                    }
+                    if (wide < best_w) {
+                        best = lay;
+                        best_w = wide;
+                    }
+                }
                 try self.indent(col);
-                try self.stmt(st, col);
+                try self.stmt(st, col, best);
                 try self.trail(st.trail);
                 try self.w("\n");
             },
@@ -492,13 +597,89 @@ const Printer = struct {
     fn def(self: *Printer, d: *const Def, col: u32) Oom!void {
         try self.lead(d.lead, col);
         try self.blanks(d.blank_before);
+        const inlined = d.inline_body and d.body.len == 1 and d.body[0] == .stmt;
+        const mark = self.out.items.len;
+
+        var best = DefLay{ .sig = .flat, .body = .flat };
+        try self.defHead(d, col, inlined, best);
+        var best_w = self.widestSince(mark);
+        self.out.shrinkRetainingCapacity(mark);
+
+        if (best_w > width_canon) {
+            // WHICH HALF does not fit decides which one breaks first — see
+            // `DefLay`. Measure the signature alone, up to the `=`: if that
+            // is over the width the signature is the problem, and otherwise
+            // the body is. Breaking BOTH is the second guess either way, and
+            // the other half alone is the last, for the case where the half
+            // that looked innocent turns out to have the columns.
+            try self.defSignature(d, col, .flat);
+            const sig_over = self.widestSince(mark) > width_canon;
+            self.out.shrinkRetainingCapacity(mark);
+            const order: [3]DefLay = if (sig_over) .{
+                .{ .sig = .broken, .body = .flat },
+                .{ .sig = .broken, .body = .broken },
+                .{ .sig = .flat, .body = .broken },
+            } else .{
+                .{ .sig = .flat, .body = .broken },
+                .{ .sig = .broken, .body = .broken },
+                .{ .sig = .broken, .body = .flat },
+            };
+            for (order) |cand| {
+                try self.defHead(d, col, inlined, cand);
+                const wide = self.widestSince(mark);
+                self.out.shrinkRetainingCapacity(mark);
+                if (wide <= width_canon) {
+                    best = cand;
+                    break;
+                }
+                // Nothing fits: keep the narrowest, and the flat form when
+                // breaking would gain nothing — a def with one port and a
+                // body that cannot be shortened stays the line it was.
+                if (wide < best_w) {
+                    best = cand;
+                    best_w = wide;
+                }
+            }
+        }
+        try self.defHead(d, col, inlined, best);
+        try self.w("\n");
+        if (inlined) return;
+        for (d.body) |b| try self.item(b, col + indent_canon);
+    }
+
+    /// A definition's first line: the signature, the plane, the `=`, and the
+    /// body when the body sat on it. Everything up to but not including the
+    /// newline, so the caller can render it twice and keep one.
+    fn defHead(self: *Printer, d: *const Def, col: u32, inlined: bool, lay: DefLay) Oom!void {
+        try self.defSignature(d, col, lay.sig);
+        if (inlined) {
+            try self.w(" ");
+            try self.stmt(d.body[0].stmt, col, lay.body);
+            try self.trail(if (d.trail.len > 0) d.trail else d.body[0].stmt.trail);
+            return;
+        }
+        try self.trail(d.trail);
+    }
+
+    /// `[export ]def name(ports…)[ on plane] =` — everything before the body,
+    /// which is the half whose width decides whether the SIGNATURE is what
+    /// does not fit.
+    fn defSignature(self: *Printer, d: *const Def, col: u32, lay: Lay) Oom!void {
         try self.indent(col);
         if (d.exported) try self.w("export ");
         try self.w("def ");
         try self.w(d.name);
         try self.w("(");
         for (d.ports, 0..) |port, i| {
-            if (i > 0) try self.w(", ");
+            if (lay == .broken) {
+                // The comma closes the port BEFORE the break, and the `)`
+                // takes the last one's place — so no trailing comma. The
+                // parser accepts one (see `parseDef`); the printer writes the
+                // one canon, and it is the same canon an array keeps.
+                if (i > 0) try self.w(",");
+                try self.w("\n");
+                try self.indent(col + indent_canon);
+            } else if (i > 0) try self.w(", ");
             try self.w(port.name);
             if (port.ty.len > 0) {
                 try self.w(": ");
@@ -516,76 +697,180 @@ const Printer = struct {
                 try self.w(")");
             }
         }
+        // A broken signature closes in the left margin, where the `)` and the
+        // `= body` after it read as the end of the head rather than as a
+        // twelfth port. With no ports at all there is nothing to break, and
+        // the two layouts are the same bytes.
+        if (lay == .broken and d.ports.len > 0) {
+            try self.w("\n");
+            try self.indent(col);
+        }
         try self.w(")");
         if (d.on.len > 0) {
             try self.w(" on ");
             try self.w(d.on);
         }
         try self.w(" =");
-        if (d.inline_body and d.body.len == 1 and d.body[0] == .stmt) {
-            try self.w(" ");
-            try self.stmt(d.body[0].stmt, col);
-            try self.trail(if (d.trail.len > 0) d.trail else d.body[0].stmt.trail);
-            try self.w("\n");
-            return;
-        }
-        try self.trail(d.trail);
-        try self.w("\n");
-        for (d.body) |b| try self.item(b, col + indent_canon);
     }
 
-    fn stmt(self: *Printer, st: Stmt, col: u32) Oom!void {
+    fn stmt(self: *Printer, st: Stmt, col: u32, lay: Lay) Oom!void {
+        const tail = suffix(st);
         switch (st.head) {
-            .call => |c| try self.call(c),
-            .value => |v| try self.w(v),
+            // A head with stages after it ends its line where they break, so
+            // it reserves nothing; a head that is the WHOLE statement carries
+            // the `as` names and the trailing comment on its own line.
+            .call => |c| if (lay == .broken)
+                try self.fitCall(c, col, if (st.stages.len == 0) tail else 0)
+            else
+                try self.call(c, col, .flat),
+            .value => |v| if (lay == .broken)
+                try self.fitValue(v, col, if (st.stages.len == 0) tail else 0)
+            else
+                try self.w(v),
         }
-        try self.stages(st.stages, col);
+        try self.stages(st.stages, col, lay, tail);
+        // `as` names ride the LAST line rather than getting one of their own:
+        // that is where they sit in the flat spelling and where the parser
+        // reads them, and a lone `as fade` under a chain reads like a stage.
         for (st.names, 0..) |n, i| {
             try self.w(if (i == 0) " as " else ", ");
             try self.w(n);
         }
     }
 
-    fn stages(self: *Printer, list: []const Stage, col: u32) Oom!void {
-        for (list) |sg| switch (sg) {
+    /// What the caller will still append to the last line of a statement: the
+    /// `as` names, and a trailing `// …` with the two spaces before it.
+    ///
+    /// A span is broken a construct at a time, BEFORE those are written, so a
+    /// decision that ignored them measures the wrong line. It did: the first
+    /// draft left `rills/follow.rill:19` alone at 96 columns, because the
+    /// array on it is 87 and ` as track` is the other nine.
+    fn suffix(st: Stmt) usize {
+        var n: usize = 0;
+        for (st.names, 0..) |name, i| n += @as(usize, if (i == 0) 4 else 2) + name.len;
+        if (st.trail.len > 0) n += 2 + st.trail.len;
+        return n;
+    }
+
+    /// The separator before a stage: ` | ` flat, and a break to the canon
+    /// indent with the `|` in that continuation's left margin when broken.
+    /// No statement can begin with a pipe, so a leading `|` has never had a
+    /// second meaning — `parser.continuesWithPipe` is the other half of this.
+    fn pipe(self: *Printer, lay: Lay, scol: u32) Oom!void {
+        if (lay == .flat) return self.w(" | ");
+        try self.w("\n");
+        try self.indent(scol);
+        try self.w("| ");
+    }
+
+    fn stages(self: *Printer, list: []const Stage, col: u32, lay: Lay, tail: usize) Oom!void {
+        const scol = if (lay == .broken) col + indent_canon else col;
+        for (list, 0..) |sg, i| {
+            // Only the last stage shares its line with what follows the chain.
+            const reserve = if (i + 1 == list.len) tail else 0;
+            switch (sg) {
             .call => |c| {
-                try self.w(" | ");
-                try self.call(c);
+                try self.pipe(lay, scol);
+                if (lay == .broken) try self.fitCall(c, scol, reserve) else try self.call(c, scol, .flat);
             },
             .project => |f| {
-                try self.w(" | ");
+                try self.pipe(lay, scol);
                 try self.w(f);
             },
             .fan => |f| {
-                // The head-block form has no `also`: the head IS the source.
-                try self.w(if (f.spelled_also) " | also {" else " {");
+                // The head-block form has no `also`: the head IS the source,
+                // so its `{` stays glued to the head's line and its branches
+                // measure from the head's column, not from a continuation's.
+                const own: u32 = if (f.spelled_also) scol else col;
+                if (f.spelled_also) {
+                    try self.pipe(lay, scol);
+                    try self.w("also {");
+                } else try self.w(" {");
                 if (f.branches.len == 1 and f.branches[0].lead.len == 0) {
                     try self.w(" ");
-                    try self.branch(f.branches[0], col);
+                    try self.branch(f.branches[0], own, .flat, 0);
                     try self.w(" }");
                     continue;
                 }
                 try self.w("\n");
                 for (f.branches) |b| {
-                    try self.lead(b.lead, col + indent_canon);
+                    try self.lead(b.lead, own + indent_canon);
                     try self.blanks(b.blank_before);
-                    try self.indent(col + indent_canon);
-                    try self.branch(b, col + indent_canon);
-                    try self.trail(b.trail);
+                    try self.fitBranch(b, own + indent_canon);
                     try self.w("\n");
                 }
-                try self.indent(col);
+                try self.indent(own);
                 try self.w("}");
             },
-        };
+            }
+        }
     }
 
-    fn branch(self: *Printer, b: Branch, col: u32) Oom!void {
-        try self.call(b.head);
-        try self.stages(b.stages, col);
+    /// One branch of a fan-out block, on its own line, with the statement's
+    /// own cascade over it — a branch IS a chain, and a long one wraps the
+    /// same way a top-level one does.
+    fn fitBranch(self: *Printer, b: Branch, col: u32) Oom!void {
+        const mark = self.out.items.len;
+        const tail: usize = if (b.trail.len > 0) 2 + b.trail.len else 0;
+        var best: Lay = .flat;
+        var best_w: usize = std.math.maxInt(usize);
+        for ([_]Lay{ .flat, .broken }) |lay| {
+            try self.indent(col);
+            try self.branch(b, col, lay, tail);
+            try self.trail(b.trail);
+            const wide = self.widestSince(mark);
+            self.out.shrinkRetainingCapacity(mark);
+            if (wide <= width_canon) {
+                best = lay;
+                break;
+            }
+            if (wide < best_w) {
+                best = lay;
+                best_w = wide;
+            }
+        }
+        try self.indent(col);
+        try self.branch(b, col, best, tail);
+        try self.trail(b.trail);
     }
 
-    fn call(self: *Printer, c: Call) Oom!void {
+    fn branch(self: *Printer, b: Branch, col: u32, lay: Lay, tail: usize) Oom!void {
+        if (lay == .broken)
+            try self.fitCall(b.head, col, if (b.stages.len == 0) tail else 0)
+        else
+            try self.call(b.head, col, .flat);
+        try self.stages(b.stages, col, lay, tail);
+    }
+
+    /// Emit one call, and if the line it landed on is STILL over the width,
+    /// throw it away and emit it again with its spans broken.
+    ///
+    /// This is outermost-first doing its work, and it is deliberately LOCAL:
+    /// by the time this runs the chain has already been broken, so a span is
+    /// only ever broken because the one line it is on is too long by itself.
+    /// Reached only from `.broken` layouts for the same reason.
+    fn fitCall(self: *Printer, c: Call, col: u32, reserve: usize) Oom!void {
+        const mark = self.out.items.len;
+        const start = self.lineStart();
+        try self.call(c, col, .flat);
+        if (self.out.items.len - start + reserve > width_canon) {
+            self.out.shrinkRetainingCapacity(mark);
+            try self.call(c, col, .broken);
+        }
+    }
+
+    /// The same, for a statement head that is a value rather than a call —
+    /// `[{x: 0, …}, …] as track` is a whole statement with no stages to
+    /// break, so the span is the only thing there is.
+    fn fitValue(self: *Printer, v: []const u8, col: u32, reserve: usize) Oom!void {
+        const start = self.lineStart();
+        if (self.out.items.len - start + v.len + reserve > width_canon) {
+            if (try self.breakSpan(v, col)) return;
+        }
+        try self.w(v);
+    }
+
+    fn call(self: *Printer, c: Call, col: u32, lay: Lay) Oom!void {
         if (c.sugar.len > 0) return self.w(c.sugar);
         try self.w(c.op);
         if (c.shape.len > 0) {
@@ -598,10 +883,92 @@ const Printer = struct {
                 try self.w(arg.kw);
                 try self.w(if (arg.kw_colon) ": " else " ");
             }
+            // EVERY span argument on an over-width line breaks, not the
+            // longest one: which of two arguments is "the long one" is a
+            // judgement, and a judgement here would print one file two ways
+            // depending on what else was on the line. Almost every call in
+            // the corpus has at most one.
+            if (lay == .broken and (arg.kind == .array or arg.kind == .record)) {
+                if (try self.breakSpan(arg.text, col)) continue;
+            }
             try self.w(arg.text);
         }
     }
 
+    /// `[a, b, c]` → one element per line, the closer back in `col`. Returns
+    /// false, having written nothing, when `text` is not a span this can
+    /// split — a path, a number, a `(…)` section, an empty `[]`.
+    ///
+    /// A SCAN and not a parse: `text` is what `renderTokens` produced, so the
+    /// spacing is already canonical and the only things that can hide a comma
+    /// are a nested span and a string literal. The elements come back trimmed
+    /// and are re-joined with the printer's own commas, which is what makes a
+    /// hand-written trailing comma normalise away and the second print equal
+    /// the first.
+    fn breakSpan(self: *Printer, text: []const u8, col: u32) Oom!bool {
+        if (text.len < 2) return false;
+        const close: u8 = switch (text[0]) {
+            '[' => ']',
+            '{' => '}',
+            else => return false,
+        };
+        if (text[text.len - 1] != close) return false;
+        const inner = text[1 .. text.len - 1];
+        if (std.mem.trim(u8, inner, " ").len == 0) return false;
+
+        try self.w(text[0..1]);
+        var it = SpanIter{ .text = inner };
+        var first = true;
+        while (it.next()) |piece| {
+            if (piece.len == 0) continue;
+            if (!first) try self.w(",");
+            first = false;
+            try self.w("\n");
+            try self.indent(col + indent_canon);
+            try self.w(piece);
+        }
+        try self.w("\n");
+        try self.indent(col);
+        try self.w(text[text.len - 1 ..]);
+        return true;
+    }
+};
+
+/// The top-level elements of a rendered span's interior.
+///
+/// Depth over the three bracket pairs, and a string's interior skipped: a
+/// `,` inside `"a, b"` is not a separator and a `\"` does not close the
+/// string. Nothing else can hide one, because the text this walks was
+/// rendered by the parser's own `renderTokens`.
+const SpanIter = struct {
+    text: []const u8,
+    at: usize = 0,
+
+    fn next(self: *SpanIter) ?[]const u8 {
+        if (self.at >= self.text.len) return null;
+        const start = self.at;
+        var depth: usize = 0;
+        var in_string = false;
+        while (self.at < self.text.len) : (self.at += 1) {
+            const c = self.text[self.at];
+            if (in_string) {
+                if (c == '\\') self.at += 1 else if (c == '"') in_string = false;
+                continue;
+            }
+            switch (c) {
+                '"' => in_string = true,
+                '[', '{', '(' => depth += 1,
+                ']', '}', ')' => depth -|= 1,
+                ',' => if (depth == 0) {
+                    const piece = self.text[start..self.at];
+                    self.at += 1;
+                    return std.mem.trim(u8, piece, " ");
+                },
+                else => {},
+            }
+        }
+        return std.mem.trim(u8, self.text[start..self.at], " ");
+    }
 };
 
 test "script: an empty script prints an empty file" {

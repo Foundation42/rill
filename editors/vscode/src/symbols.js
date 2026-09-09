@@ -104,6 +104,52 @@ function splitPorts(text) {
 }
 
 /**
+ * A def's port list, which may span several lines.
+ *
+ * Returns `{text, at, endLine}`: the interior of the parens with every line
+ * break turned into a space, a position `{line, col}` for each character of
+ * it, and the line the `)` closed on. The per-character map is what lets a
+ * port report the line it is really on — deriving it afterwards would mean
+ * re-finding the port in the file, which is the same scan done twice.
+ *
+ * Depth counting with the strings skipped, exactly as `splitPorts` does it: a
+ * `(` inside a default's string is not an opener, and a range's `(0..500)` is
+ * a nested pair that must not be mistaken for the end of the list.
+ */
+function signature(lines, first, firstCode, open) {
+  const chars = [];
+  const at = [];
+  let depth = 0;
+  let inString = false;
+  for (let j = first; j < lines.length; j += 1) {
+    const s = j === first ? firstCode : code(lines[j]);
+    for (let k = j === first ? open : 0; k < s.length; k += 1) {
+      const c = s[k];
+      if (inString) {
+        if (c === '\\') { chars.push(c, s[k + 1] || ' '); at.push({ line: j, col: k }, { line: j, col: k + 1 }); k += 1; continue; }
+        if (c === '"') inString = false;
+      } else if (c === '"') inString = true;
+      else if (c === '(') {
+        depth += 1;
+        if (depth === 1) continue; // the opener itself is not in the interior
+      } else if (c === ')') {
+        depth -= 1;
+        if (depth === 0) return { text: chars.join(''), at, endLine: j };
+      }
+      chars.push(c);
+      at.push({ line: j, col: k });
+    }
+    // A line break inside the parens separates two ports exactly as a space
+    // does; the comma is still the separator `splitPorts` looks for.
+    chars.push(' ');
+    at.push({ line: j, col: s.length });
+  }
+  // Unclosed — a signature half typed. Report no ports rather than guessing,
+  // and end where it started so the outline does not swallow the file.
+  return { text: '', at: [], endLine: first };
+}
+
+/**
  * Read the whole outline out of `text`.
  *
  * Returns a tree of nodes:
@@ -164,34 +210,44 @@ function outline(text) {
       const exported = Boolean(def[1]);
       const name = def[2];
       const open = src.indexOf('(', src.indexOf(name));
-      // The signature ENDS AT THE NEWLINE — a `(` claims nothing across it —
-      // so the port list is on this line or it is a parse error.
-      const close = src.lastIndexOf(')');
-      const inner = close > open ? src.slice(open + 1, close) : '';
+      // A SIGNATURE MAY WRAP (2026-09-09). The parser accepts a newline inside
+      // the parens and the printer puts one port on its own line whenever the
+      // flat form runs past 88 columns — which `kernels/roaches.rill`, the
+      // exemplar this outline exists for, does at 234 columns. Reading only
+      // this line outlines that file's one exported definition with NO ports.
+      const sig = signature(lines, i, src, open);
+      const inner = sig.text;
       const node = {
         name,
         detail: exported ? 'export def' : 'def',
         kind: KIND.def,
         line: i, col: src.indexOf(exported ? 'export' : 'def'),
-        endLine: i, endCol: raw.length,
+        endLine: sig.endLine, endCol: lines[sig.endLine].length,
         children: [],
       };
       for (const [a, b] of splitPorts(inner)) {
         const chunk = inner.slice(a, b);
         const m = new RegExp('^\\s*(' + NAME + ')').exec(chunk);
         if (!m) continue;
-        const at = open + 1 + a + m[0].length - m[1].length;
+        // Each port reports the line and the column it is ACTUALLY on, which
+        // is a line of its own once the signature wraps — so the breadcrumb
+        // jumps to the port rather than to the `def` above it.
+        const at = sig.at[a + m[0].length - m[1].length];
         node.children.push({
           name: m[1],
           detail: chunk.trim().slice(m[1].length).trim(),
           kind: KIND.port,
-          line: i, col: at,
-          endLine: i, endCol: at + m[1].length,
+          line: at.line, col: at.col,
+          endLine: at.line, endCol: at.col + m[1].length,
           children: [],
         });
       }
       top().children.push(node);
       defs.set(name, node);
+      // Skip what the signature took. Without this every port line is offered
+      // to the rules below, and one holding the word `as` in a string default
+      // would outline as a bound stream.
+      i = sig.endLine;
       continue;
     }
 

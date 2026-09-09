@@ -86,6 +86,23 @@ omitted it would be teaching a refusal), `kernel` brings a whole spray package,
 and `script.zig`'s printer agree. `//` continues onto the next line on Enter,
 and so does a leading `|`.
 
+**The wrapped forms**, because the printer breaks a line that runs past **88
+columns** and the editor has to agree with it. A signature that wraps opens
+with a bare `(` and closes on a `) =` that dedents itself and indents the body
+under it; an array that wraps opens with `[` and closes on a `]`; a chain that
+wraps puts one stage per line with the `|` in the left margin of the
+continuation, and Enter after one of those keeps the column the printer chose
+rather than stepping right. The first `|` of a chain is still yours to indent
+— no lexical rule can tell a statement that is about to be continued from one
+that is finished, and indenting after every statement in the file on the
+chance that a pipe follows would be worse than one Tab.
+
+Snippets follow the same canon in both directions: `kernel`'s six-port
+signature is written broken because it is 149 columns flat, and `exportdef`,
+`def` and `defrow` are written flat because they fit. A snippet wrapped for the
+look of it would be flattened by the first save, which is the same failure as
+one that runs long.
+
 **Formatting and diagnostics**, when a binary can back them. See below.
 
 ---
@@ -310,8 +327,8 @@ Also not attempted, and each for a reason worth stating:
 
 ```sh
 npm install     # two dev packages: vscode-textmate, vscode-oniguruma
-npm test        # 45 gates
-npm run mutate  # 39 mutations, each must break the gate that names it
+npm test        # 51 gates
+npm run mutate  # 46 mutations, each must break the gate that names it
 npm run preview -- ../../../matryoshka/kernels/roaches.rill dark
 ```
 

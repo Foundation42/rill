@@ -169,6 +169,29 @@ fn mountFixture(gpa: std.mem.Allocator, fx: *Fixture, source: []const u8, seed: 
     fx.rt = try rill.Runtime.mount(gpa, &fx.prog, fx.mock.asPlane(), .{});
 }
 
+/// Parse `src`, print it back, and compare BYTE for byte — whitespace is
+/// exactly the half `expectRoundTrip`'s three checks are blind to.
+fn expectPrinted(reg: *rill.Registry, src: []const u8, want: []const u8) !void {
+    var diag = rill.Diag{};
+    var prog = rill.parse(testing.allocator, reg, "p", src, &diag) catch |err| {
+        if (err == error.Parse) std.debug.print("source does not parse — {s} (line {d}, col {d})\n{s}\n", .{ diag.msg(), diag.line, diag.col, src });
+        return err;
+    };
+    defer prog.deinit();
+    const out = try rill.printScript(testing.allocator, prog.script.?);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings(want, out);
+}
+
+/// The same, plus the fixed point: printing what was printed must not move
+/// it. A canon that reflowed a file once per save would be worse than the
+/// long lines it replaced, and every R3 gate asserts it rather than one of
+/// them asserting it for all.
+fn expectPrintedStable(reg: *rill.Registry, src: []const u8, want: []const u8) !void {
+    try expectPrinted(reg, src, want);
+    try expectPrinted(reg, want, want);
+}
+
 fn expectParseError(source: []const u8, needle: []const u8) !void {
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
@@ -12904,13 +12927,16 @@ test "NORTHSTAR: one file carries a fold, a described pack, an @self driver and 
 // be. It is *semantically* faithful and *stable*, and the three gates below
 // say exactly that: the same program comes back, the second print is the
 // same bytes as the first, and no comment is lost on the way. Everything
-// else is a canon (one statement one line; two-space bodies; blank runs kept
-// as written), and a canon is only worth having if it does not move.
+// else is a canon (one statement one line UNTIL it runs past 88 columns and
+// then it breaks; four-space bodies; blank runs kept as written), and a canon
+// is only worth having if it does not move.
 //
 // The 47-file sibling corpus is measured by `zig build roundtrip` rather than
 // here: rill must stay buildable without matryoshka and spindrift, and 21 of
-// those files use host words rill core must not have. All 47 pass, 35 of them
-// byte-identically. See `tools/roundtrip.zig`.
+// those files use host words rill core must not have. All 47 pass, 19 of them
+// byte-identically — 39 before the width canon (R3) landed, and the 20 that
+// left the count are the 20 whose lines were over 88. See
+// `tools/roundtrip.zig`.
 //
 // Every gate below names the mutation that had to bite before it was believed.
 // ---------------------------------------------------------------------------
@@ -13116,6 +13142,32 @@ const script_fixtures = [_][]const u8{
     \\// a lead
     \\plane.hp | clamp 0 100 | write plane.ui.bar  // what's flowing
     \\plane.a | write plane.b 1  // this, because something flowed
+    ,
+    // R3, the width canon: every shape that BREAKS, written already broken,
+    // so the three checks above cover the wrapped forms as well as the flat
+    // ones. A printer that could produce a shape its own parser refuses, or
+    // that reflowed it differently on the second save, would be caught here
+    // rather than by a person reading a diff.
+    \\def spin(
+    \\    rate = 60 (0..500),
+    \\    speed = 0.15 (0..5),
+    \\    spread = 0.35 (0..3),
+    \\    life = 14000 (16..60000)
+    \\) on row =
+    \\    rate | mul speed | mul spread | mul life
+    \\
+    \\plane.input.kbd.d
+    \\    | sub plane.input.kbd.a
+    \\    | mul 0.12
+    \\    | write plane.camera.thrust.right add
+    \\
+    \\plane.t
+    \\    | over plane.life [
+    \\        {l: 1.5, a: 0.08, b: 0.14},
+    \\        {l: 1.3, a: 0.12, b: 0.12},
+    \\        {l: 0.95, a: 0.14, b: 0.08}
+    \\    ]
+    \\    | write plane.colour
     ,
 };
 
@@ -13588,4 +13640,377 @@ test "R2 G-column: an annex aligns its values, and a def body indents by four" {
     const out3 = try rill.printScript(testing.allocator, prog3.script.?);
     defer testing.allocator.free(out3);
     try testing.expectEqualStrings(restretched, out3);
+}
+
+// ---------------------------------------------------------------------------
+// R3 — the width canon (2026-09-09). `script.zig`'s `width_canon`.
+//
+// Christian, reading two of his own lines: *"We still need to do something
+// about these long lines… These are not human friendly."* The two were
+// `kernels/roaches.rill`'s 234-column signature and a 128-column colour ramp.
+// Three things had to move together, and they are one beat because a
+// formatter that disagrees with the parser is a bug and a formatter that
+// disagrees with the EDITOR is a cursor that jumps on every save:
+//
+//   1. the parser now accepts a newline inside a def signature's parens —
+//      the one place in the language that still said no;
+//   2. the printer breaks a line that runs past 88 columns, outermost first;
+//   3. `editors/vscode` learned the same shapes (its own gates, its own
+//      mutation runner).
+//
+// The gates below are the printer's. Each names the mutation that was
+// executed against it and watched go red; the fixtures were chosen by
+// measuring the corpus first, because a width mutation tested on input that
+// takes an early return proves nothing.
+// ---------------------------------------------------------------------------
+
+test "R3 G-wrap: a chain over the width breaks, one stage per line" {
+    // BOTH HALVES, and they need each other: "always break" passes the first
+    // and fails the second, "never break" the other way round. The two
+    // fixtures are `src/rills/camera.rill`'s two thrust lines, which is where
+    // the 88 was measured — one is 90 columns and one is 78.
+    //
+    // Mutations, both executed:
+    //   · in `Printer.pipe`, drop the `lay` test and always write `" | "` —
+    //     the chain never breaks and the first block goes red.
+    //   · in `Printer.item`'s stmt arm, initialise `best` to `.broken` and
+    //     skip the loop — every chain breaks and the second block goes red.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const over =
+        \\plane.input.kbd.d | sub plane.input.kbd.a | mul 0.12 | write plane.camera.thrust.right add
+        \\
+    ;
+    const broken =
+        \\plane.input.kbd.d
+        \\    | sub plane.input.kbd.a
+        \\    | mul 0.12
+        \\    | write plane.camera.thrust.right add
+        \\
+    ;
+    // …and the broken form is a fixed point: the second save does nothing.
+    try expectPrintedStable(&reg, over, broken);
+
+    // 78 columns. Under the width, so it stays the one line it was — the
+    // printer breaks because a line is too long, never because it can.
+    const under =
+        \\plane.input.kbd.w | sub plane.input.kbd.s | mul 3 | write plane.camera.fwd add
+        \\
+    ;
+    try expectPrinted(&reg, under, under);
+}
+
+test "R3 G-ports: a def signature over the width breaks, one port per line" {
+    // The line that started the beat, shortened to four ports: 109 columns.
+    // The second def in the fixture is 41 and stays inline, which is the half
+    // that refuses "always break" — a two-port signature spread over four
+    // lines would be worse than the thing being fixed.
+    //
+    // Mutations, both executed:
+    //   · in `Printer.defSignature`, drop the `lay == .broken` arm and always
+    //     write `", "` — the long signature stays on one line, red.
+    //   · in `Printer.def`, replace the whole cascade with
+    //     `best = .{ .sig = .broken, .body = .flat }` — `driver` breaks too,
+    //     red on the second def.
+    //
+    // The `describe` block is in the fixture on purpose: its lines are the
+    // one thing the width does not touch (a key and one string, and eleven of
+    // roaches's twelve run past 88), and a printer that measured them would
+    // have nothing to do but truncate prose.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\export def scatter(rate = 60 (0..500), speed = 0.15 (0..5), spread = 0.35 (0..3), life = 14000 (16..60000)) =
+        \\    rate | mul speed | mul spread | mul life
+        \\
+        \\describe scatter
+        \\    "Rows thrown outward from a point."
+        \\    rate   "How many a second."
+        \\    speed  "How fast."
+        \\    spread "How wide."
+        \\    life   "How long."
+        \\
+        \\def driver(x: number = 1 (0..9), y = 2) =
+        \\    x | mul y
+        \\
+        \\scatter | write plane.a
+        \\
+    ;
+    const want =
+        \\export def scatter(
+        \\    rate = 60 (0..500),
+        \\    speed = 0.15 (0..5),
+        \\    spread = 0.35 (0..3),
+        \\    life = 14000 (16..60000)
+        \\) =
+        \\    rate | mul speed | mul spread | mul life
+        \\
+        \\describe scatter
+        \\    "Rows thrown outward from a point."
+        \\    rate   "How many a second."
+        \\    speed  "How fast."
+        \\    spread "How wide."
+        \\    life   "How long."
+        \\
+        \\def driver(x: number = 1 (0..9), y = 2) =
+        \\    x | mul y
+        \\
+        \\scatter | write plane.a
+        \\
+    ;
+    try expectPrintedStable(&reg, src, want);
+}
+
+test "R3 G-half: a def breaks the half that does not fit, not the outer one" {
+    // The signature and an inline body are SIBLINGS on one line, so
+    // outermost-first has nothing to say about them and the printer measures
+    // instead. `wobble` is 93 columns over a 23-column signature: breaking
+    // the one port across three lines would make room for a chain it never
+    // touched, and would be churn dressed as a policy.
+    //
+    // Mutation that bites: in `Printer.def`, use the `sig_over` order
+    // unconditionally (`if (true)` in place of `if (sig_over)`). The
+    // signature-first order wins, `x: number` lands on a line of its own, and
+    // this goes red while every other R3 gate stays green — which is what
+    // makes it a gate about the ORDER rather than about the width.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\def wobble(x: number) = x | mul 0.05 | add 1 | clamp 0 100 | mul 2 | div 3 | add 0.25 | mul 7
+        \\plane.a | wobble | write plane.b
+        \\
+    ;
+    const want =
+        \\def wobble(x: number) = x
+        \\    | mul 0.05
+        \\    | add 1
+        \\    | clamp 0 100
+        \\    | mul 2
+        \\    | div 3
+        \\    | add 0.25
+        \\    | mul 7
+        \\plane.a | wobble | write plane.b
+        \\
+    ;
+    try expectPrintedStable(&reg, src, want);
+}
+
+test "R3 G-nest: the chain breaks first, and the span only if the line is still long" {
+    // OUTERMOST FIRST, and it takes two fixtures or the policy is untested:
+    // one where breaking the chain is enough, and one where it is not. Both
+    // are `over` with a colour ramp, which is the shape the corpus actually
+    // has — nine of the 47 files carry one.
+    //
+    //   · 112 columns, and the ramp is short enough that the stage line lands
+    //     at 80. The chain breaks; the span does NOT.
+    //   · 132 columns, and the same stage line would be 107. The chain
+    //     breaks, and then the span breaks too.
+    //
+    // Mutations, both executed:
+    //   · in `Printer.fitCall`, always take the rollback branch (drop the
+    //     width test) — the first fixture's ramp breaks as well, red there
+    //     and green on the second, which is the gate saying "not eagerly".
+    //   · in `Printer.call`, delete the `breakSpan` branch — the second
+    //     fixture's stage line stays at 107, red there and green on the
+    //     first.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+
+    const chain_only =
+        \\plane.t | over plane.life [{l: 1.5, a: 0.08}, {l: 1.3, a: 0.12}, {l: 0.95, a: 0.14}] | write plane.render.colour
+        \\
+    ;
+    const chain_only_want =
+        \\plane.t
+        \\    | over plane.life [{l: 1.5, a: 0.08}, {l: 1.3, a: 0.12}, {l: 0.95, a: 0.14}]
+        \\    | write plane.render.colour
+        \\
+    ;
+    try expectPrintedStable(&reg, chain_only, chain_only_want);
+
+    const and_span =
+        \\plane.t | over plane.life [{l: 1.5, a: 0.08, b: 0.14}, {l: 1.3, a: 0.12, b: 0.12}, {l: 0.95, a: 0.14, b: 0.08}] | write plane.colour
+        \\
+    ;
+    const and_span_want =
+        \\plane.t
+        \\    | over plane.life [
+        \\        {l: 1.5, a: 0.08, b: 0.14},
+        \\        {l: 1.3, a: 0.12, b: 0.12},
+        \\        {l: 0.95, a: 0.14, b: 0.08}
+        \\    ]
+        \\    | write plane.colour
+        \\
+    ;
+    try expectPrintedStable(&reg, and_span, and_span_want);
+}
+
+test "R3 G-span: a statement that is one long span breaks the span itself" {
+    // `rills/follow.rill:19` — an array of knots bound with `as track`, 96
+    // columns, and NO stages at all, so there is no chain to break and the
+    // span is the only thing there is. It is also the fixture that found a
+    // real bug: the array alone is 87 columns, so a first draft measured it
+    // as fitting and left the line at 96. What it forgot was the ` as track`
+    // that follows on the same line — hence `Printer.suffix`.
+    //
+    // Mutation that bites: in `Printer.fitValue`, drop the `+ reserve` from
+    // the width test. The line comes back flat at 96 and this goes red, while
+    // G-nest and G-wrap stay green — which is the bug, reproduced.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\[{x: 0, y: 6, z: 0}, {x: 40, y: 6, z: -30}, {x: 80, y: 14, z: 0}, {x: 40, y: 6, z: 30}] as track
+        \\plane.t | along track loop | write plane.here
+        \\
+    ;
+    const want =
+        \\[
+        \\    {x: 0, y: 6, z: 0},
+        \\    {x: 40, y: 6, z: -30},
+        \\    {x: 80, y: 14, z: 0},
+        \\    {x: 40, y: 6, z: 30}
+        \\] as track
+        \\plane.t | along track loop | write plane.here
+        \\
+    ;
+    try expectPrintedStable(&reg, src, want);
+
+    // A BRACKET INSIDE A STRING IS NOT A BRACKET. `SpanIter` is a scan over
+    // text the parser rendered, not a parse, so this is the one thing it can
+    // get wrong.
+    //
+    // The fixture took two goes and the first one was the trap this repo
+    // keeps hitting: `{a: "x, y"}` does NOT reach the string branch, because
+    // the record's own braces already hold that comma at depth 1 and the
+    // separator is found correctly by accident. Nor does `"p]q"`, whose stray
+    // `]` is absorbed by the saturating `-|=`. The mutation SURVIVED both,
+    // which is how the fixture below was found: an unbalanced OPENER inside a
+    // string (`"x{y"`) leaves the scan one deep, the comma after it stops
+    // being a separator, and two elements print on one line.
+    //
+    // Mutation that bites: delete the `if (in_string) { … }` branch from
+    // `SpanIter.next`. `{a: "x{y"}` and `{a: "p]q"}` come back on one line and
+    // this goes red — a byte comparison, because the program is the same one
+    // either way and G-roundtrip cannot see it.
+    const strings =
+        \\plane.t | over plane.life [{a: "x{y"}, {a: "p]q"}, {a: "one"}, {a: "two"}, {a: "three"}, {a: "f"}] | write plane.o
+        \\
+    ;
+    const strings_want =
+        \\plane.t
+        \\    | over plane.life [
+        \\        {a: "x{y"},
+        \\        {a: "p]q"},
+        \\        {a: "one"},
+        \\        {a: "two"},
+        \\        {a: "three"},
+        \\        {a: "f"}
+        \\    ]
+        \\    | write plane.o
+        \\
+    ;
+    try expectPrintedStable(&reg, strings, strings_want);
+}
+
+test "R3 G-multiline: a wrapped signature is the same program as its one-liner" {
+    // The PARSER's half of the beat, and the oracle is the one the round-trip
+    // gate already uses: two programs whose structural dumps are equal have
+    // the same nodes, the same wires, the same statics and the same order. A
+    // gate that only checked "it parses" would have missed a newline landing
+    // in a port's pack.
+    //
+    // The third spelling carries a TRAILING COMMA, which the language accepts
+    // — the loop's own shape does it — and which earns its keep now that the
+    // canon puts one port on each line: adding a port is a one-line diff that
+    // never touches the line above. The printer does not emit one, so the
+    // three spellings print identically, which is the second assertion.
+    //
+    // Mutation that bites: delete the `self.skipNewlines()` at the top of
+    // `parseDef`'s port loop. The multi-line source refuses with "expected
+    // port name in def signature" and this goes red on the parse. (Deleting
+    // the SECOND one, before the separator, refuses the trailing-comma
+    // spelling at the `)` — same gate, other line.)
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const one_line =
+        \\def spin(rate = 60 (0..500), speed = 0.15 (0..5)) on row =
+        \\    rate | mul speed
+        \\
+    ;
+    const wrapped =
+        \\def spin(
+        \\    rate = 60 (0..500),
+        \\    speed = 0.15 (0..5)
+        \\) on row =
+        \\    rate | mul speed
+        \\
+    ;
+    const trailing_comma =
+        \\def spin(
+        \\    rate = 60 (0..500),
+        \\    speed = 0.15 (0..5),
+        \\) on row =
+        \\    rate | mul speed
+        \\
+    ;
+    var diag = rill.Diag{};
+    var a = try rill.parse(testing.allocator, &reg, "p", one_line, &diag);
+    defer a.deinit();
+    var b = try rill.parse(testing.allocator, &reg, "p", wrapped, &diag);
+    defer b.deinit();
+    var c = try rill.parse(testing.allocator, &reg, "p", trailing_comma, &diag);
+    defer c.deinit();
+
+    const da = try structureOf(&a);
+    defer testing.allocator.free(da);
+    const db = try structureOf(&b);
+    defer testing.allocator.free(db);
+    const dc = try structureOf(&c);
+    defer testing.allocator.free(dc);
+    try testing.expectEqualStrings(da, db);
+    try testing.expectEqualStrings(da, dc);
+
+    // …and all three print as the one-liner, because 57 columns fits.
+    try expectPrinted(&reg, one_line, one_line);
+    try expectPrinted(&reg, wrapped, one_line);
+    try expectPrinted(&reg, trailing_comma, one_line);
+}
+
+test "R3 G-refuse: a signature wraps between ports, and says so when it does not" {
+    // A refusal must not get WORSE because a spelling got wider. Three of
+    // them, and the position matters as much as the words: before this beat
+    // every malformed multi-line signature refused at line 1, col 20, which
+    // reads as if the port list itself were the problem.
+    //
+    //   · a missing comma lands on the port that followed the break, not on
+    //     the `def` — the parser skips newlines but never INVENTS a
+    //     separator;
+    //   · a port broken across two lines is named as such, rather than
+    //     quoting a literal newline into the middle of the message (which is
+    //     what the general "must be a literal" arm did);
+    //   · a `(` after the break is still "expected ',' or ')'".
+    //
+    // Mutation that bites: delete the `t.kind == .newline` arm in
+    // `parseDefLiteral`. The second block's message becomes "the default must
+    // be a literal, got '<newline>'" and this goes red.
+    try expectParseErrorAt(
+        \\def r(
+        \\    rate = 60
+        \\    speed = 2
+        \\) = rate | add speed
+    , "expected ',' or ')'", 3, 5);
+
+    try expectParseErrorAt(
+        \\def r(
+        \\    rate =
+        \\    60
+        \\) = rate
+    , "a signature may wrap between ports, but a port stays on one line", 2, 11);
+
+    try expectParseErrorAt(
+        \\def r(
+        \\    rate = 60
+        \\    (0..500)
+        \\) = rate
+    , "expected ',' or ')'", 3, 5);
 }

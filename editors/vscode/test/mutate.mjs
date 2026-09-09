@@ -273,6 +273,47 @@ const MUTATIONS = [
     why: 'the manifest points at a grammar that is not there — VSCode logs it once and highlights nothing',
     from: '"path": "./syntaxes/rill.tmLanguage.json"', to: '"path": "./syntaxes/gone.json"',
   },
+  {
+    id: 'G7e', file: G, test: GRAMMAR_TEST, name: '^G7e: ',
+    why: 'the port pack does not survive a line break — every wrapped port reads as a statement head',
+    from: '      "name": "meta.parameters.rill",\n      "begin": "\\\\(",\n      "end": "\\\\)",',
+    to: '      "name": "meta.parameters.rill",\n      "begin": "\\\\(",\n      "end": "\\\\)|$",',
+  },
+  {
+    id: 'G7e-dedent', file: G, test: GRAMMAR_TEST, name: '^G7e: ',
+    why: 'a describe block does not need an indent to continue — the wrapped signature above it makes that look plausible',
+    from: '"while": "^(?=[ \\\\t]+\\\\S|[ \\\\t]*$)",', to: '"while": "^(?=[ \\\\t]*\\\\S|[ \\\\t]*$)",',
+  },
+  {
+    id: 'G9', file: G, test: GRAMMAR_TEST, name: '^G9: ',
+    why: 'head position after a `|` goes — a broken chain has no verbs, only words',
+    from: '        {\n          "match": "(?<=[|{(])([ \\\\t]*)(?!(?:def|export|describe|using|use|also|as|true|false)(?![\\\\w-]))([A-Za-z_][\\\\w]*(?:[-/][\\\\w]+)*)(?![\\\\w.:/-])",\n          "captures": {\n            "2": { "name": "entity.name.function.rill" }\n          }\n        }\n',
+    to: '',
+    also: [{ from: '          }\n        },\n      ]\n    },\n\n    "def-signature"', to: '          }\n        }\n      ]\n    },\n\n    "def-signature"' }],
+  },
+  {
+    id: 'C10d', file: S, test: CLIENT_TEST, name: '^C10d: ',
+    why: 'the port list is read from the def\'s own line again — a wrapped signature outlines with no ports',
+    from: '  for (let j = first; j < lines.length; j += 1) {',
+    to: '  for (let j = first; j < first + 1; j += 1) {',
+  },
+  {
+    id: 'L7', file: L, test: CONFIG_TEST, name: '^L7: ',
+    why: 'the `) =` that closes a wrapped signature does not indent — the body is typed in the left margin, where a def\'s dedent rule ends it',
+    from: '|\\\\)(?:\\\\s+on\\\\s+[A-Za-z_]\\\\w*)?\\\\s*=\\\\s*$', to: '',
+  },
+  {
+    id: 'L8', file: L, test: CONFIG_TEST, name: '^L8: ',
+    why: 'Enter inside a broken chain indents — the chain steps right a stage at a time and the save steps it back',
+    from: '"beforeText": "^(\\\\s*)\\\\|\\\\s.*$",\n      "action": { "indent": "none", "appendText": "| " }',
+    to: '"beforeText": "^(\\\\s*)\\\\|\\\\s.*$",\n      "action": { "indent": "indent", "appendText": "| " }',
+  },
+  {
+    id: 'L9', file: 'snippets/rill.json', test: CONFIG_TEST, name: '^L9: ',
+    why: 'the spray package teaches a 149-column signature the first save reflows',
+    from: '      "export def ${1:name}(",\n      "    rate = ${3:60} (0..500),",\n      "    speed = ${4:0.15} (0..5),",\n      "    spread = ${5:0.35} (0..3),",\n      "    life = ${6:14000} (16..60000),",\n      "    capacity = ${7:4096} (1..65536),",\n      "    blend = \\"${8|add,alpha|}\\"",\n      ") =",',
+    to: '      "export def ${1:name}(rate = ${3:60} (0..500), speed = ${4:0.15} (0..5), spread = ${5:0.35} (0..3), life = ${6:14000} (16..60000), capacity = ${7:4096} (1..65536), blend = \\"${8|add,alpha|}\\") =",',
+  },
 ];
 
 function sh(cmd, args, opts) {

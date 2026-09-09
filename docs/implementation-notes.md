@@ -4504,3 +4504,215 @@ Three measurements from building it, none of which were known before:
   The same fact that makes `tools/roundtrip.zig` take files as arguments.
 - `[rill]` sets `editor.tabSize: 4`, gated, because the editor and the printer
   must not disagree about the canon ruled this morning.
+
+---
+
+## R3 — the width canon: 88 columns, and the one place the language said no
+
+Christian, 2026-09-09, reading two of his own lines aloud:
+
+> We still need to do something about these long lines… These are not human
+> friendly.
+
+The two were `kernels/roaches.rill`'s signature at **234 columns** and a colour
+ramp at 128. Three things had to move, and they are one commit because a
+formatter that disagrees with the parser is a bug, and a formatter that
+disagrees with the EDITOR is a cursor that jumps on every save.
+
+### 1. The parser: a newline inside a def signature's parens
+
+It was the last place in the language that said no, and the measurement is
+worth keeping because it is why this was one line of code rather than a
+grammar change:
+
+- a **wrapped chain already parsed** — `continuesWithPipe` (parser.zig:1041),
+  and four ironwood rills are written that way;
+- a **newline inside `[…]` or `{…}` already parsed** — `renderTokens`, "a
+  newline inside a span is a record or array separator";
+- a **multi-line signature was REFUSED**, and refused at *line 1, col 20*,
+  which reads as if the port list itself were malformed.
+
+Two `skipNewlines()` calls, at the two points a break can fall: before a port,
+and before its separator. Nowhere else, and that is the whole of the design —
+the parser skips a break but never INVENTS a separator, so `rate = 60` and
+`speed = 2` on two lines with no comma is still refused, at **3:5**, on the
+port that followed the break. A port broken across two lines (`rate =` then
+`60`) is refused too, and got its own arm in `parseDefLiteral`: the general
+"must be a literal, got '…'" quoted the token's text, and the token was a
+newline, so the refusal printed a line break in the middle of itself.
+
+**A trailing comma is accepted**, and already was — the loop's own shape does
+it. It stops being a curiosity now that the canon puts one port on a line:
+adding a port is then a one-line diff that never touches the line above it.
+The printer does not emit one, for the same reason it emits none in an array —
+what the printer writes is the single canon, and this is a spelling the
+language accepts rather than one it teaches.
+
+### 2. The printer: 88 columns, outermost first
+
+**88, and the number is measured rather than borrowed.** `roaches.rill` is
+four-fifths prose and its `//` lines sit at ~74 columns, because that is where
+Christian's hand stops; 88 leaves a stage's arguments room above that without
+breaking a line that reads fine today. At 80 the corpus loses six lines nobody
+has complained about; at 100 `beacon.rill`'s 97-column ramp stays exactly as it
+was, and so does half of what started the beat. Rejected: 80 (a punched card),
+100 and 120 (they leave the two lines that started this where they were), and
+"the editor's viewport" (not a property of the file — two machines would format
+it two ways).
+
+Three shapes break, and only when a line runs over:
+
+- a **chain** → one stage per line, `|` in the continuation's left margin;
+- a **def signature** → one port per line, `)` and the `= body` closing it;
+- an **array or record** → one element per line.
+
+**Outermost first**, and it took two fixtures to test rather than one: a
+statement breaks its chain, and a stage breaks its `[…]` only if the line it
+landed on is STILL too long. `plane.t | over plane.life [3 short records] |
+write plane.render.colour` at 112 columns breaks the chain and leaves the ramp
+inline at 80; the same statement with three WIDER records, at 132, breaks both.
+One fixture would have passed under either policy.
+
+The def head is the exception, and it is an exception because the two things on
+it are **siblings, not nested**. A first draft tried the signature first on
+principle and produced this, which is churn dressed as a policy:
+
+    def wobble(
+        x: number
+    ) = x | mul 0.05 | add 1 | clamp 0 100 | mul 2 | div 3 | add 0.25 | mul 7
+
+93 columns over a 23-column signature. So the printer measures the signature
+alone, up to the `=`, and breaks the half that does not fit; both, if one is
+not enough; the other alone as a last resort. `roaches` takes the first branch,
+`wobble` the second.
+
+Two smaller findings, both from fixtures rather than from thinking:
+
+- **The span decision has to know what follows it on the line.**
+  `rills/follow.rill:19` is 96 columns and its array is 87, so the first draft
+  measured the array, called it fine, and left the line at 96. The other nine
+  columns are ` as track`. Hence `Printer.suffix`, and the reserve threaded
+  down to `fitCall`/`fitValue`.
+- **`describe` lines are the one thing the width does not reach.** A line is a
+  key and one string; eleven of roaches's twelve run past 88, and a string
+  cannot be broken without changing the value it holds. Said in the canon
+  comment, in the snippet gate, and in G-ports's fixture, because a printer
+  that measured them would have nothing to do but truncate prose.
+
+**Canonical, not retained**, the same call as on indentation, and it cuts both
+ways: `src/ironwood/wall.rill` is hand-wrapped over three lines and its flat
+form is 87 columns, so the printer FLATTENS it. That is the ruling working, not
+a bug, and it is the half worth naming out loud — normalising hand-wrapping
+means normalising it downward too.
+
+**Gates: seven, twelve mutations, all twelve biting the gate that names it.**
+Run per-gate with `-Dtest-filter`, which is what the flag was added for.
+
+| gate | mutations |
+| --- | --- |
+| `R3 G-wrap` | the chain never breaks; every chain breaks (the 78-column line too) |
+| `R3 G-ports` | the signature never breaks; every signature breaks |
+| `R3 G-half` | the signature is always tried first, even when the body is the long half |
+| `R3 G-nest` | a span breaks whenever the chain does; a span never breaks |
+| `R3 G-span` | the span measurement forgets the ` as track`; the span scan forgets strings |
+| `R3 G-multiline` | no newline skip before a port; none before the separator |
+| `R3 G-refuse` | the newline arm goes and the message quotes a literal newline |
+
+Two of those are worth the space, and both are the same lesson this repo keeps
+re-learning — **a mutation the code routes around has not tested the code**:
+
+- **G-nest** needs its two fixtures for the reason above; either one alone is
+  green under both policies.
+- **G-span's string mutation SURVIVED twice** before the fixture was right.
+  `{a: "x, y"}` does not reach the string branch — the record's own braces hold
+  that comma at depth 1 and the split is correct by accident. `{a: "p]q"}` does
+  not either: the stray `]` is absorbed by the saturating `-|=`. What reaches
+  it is an unbalanced OPENER inside a string, `{a: "x{y"}`, which leaves the
+  scan one deep so the comma after it stops being a separator and two elements
+  print on one line.
+
+The three broken shapes were also added to `script_fixtures`, written already
+broken, so G-roundtrip, G-idempotent and G-comments cover the wrapped forms as
+well as the flat ones.
+
+### The corpus: 39 byte-identical → 19, and that is the beat working
+
+Twenty files left the count and none joined it. Every one of the twenty had a
+line over 88 — fourteen kernels with a colour ramp, `roaches.rill`'s signature,
+five world rills with a long chain. The eight that already differed still do,
+because they differ for a mechanism this beat did not touch (cross-statement
+column alignment, and hand-wrapping that is now normalised the other way).
+
+The number that matters is the other one: **after ONE formatting pass, all 47
+are byte-identical.** Measured, not assumed — every printed file was fed back
+through and came out unchanged. The canon is complete and it is a fixed point;
+the 19 is the gap between the files as they are written today and the canon,
+and one `rill fmt` closes it. Normalising the sibling corpus is a cross-repo
+pass with its own commit per repo and was not done here.
+
+**Known and not done: rill's own manuals.** Eighteen lines inside ```rill
+fences run past 88 — sixteen in `rill-manual.md`, one in `rill-for-agents.md`,
+one in `README.md` — so the docs now teach a shape the printer does not emit,
+which is the exact argument that restretched them to four-space bodies a beat
+ago. Not done here on purpose: those are single-statement examples chosen to
+show ONE word as one thought, and breaking a 91-column `| diff |
+dropped_below` chain across four lines in the section that teaches `diff` makes
+the example harder to read, not easier. It is a judgement about teaching rather
+than about formatting, and it wants Christian rather than an agent. The grammar
+productions in the docs are unaffected — none of them ever said "one line".
+
+**Also known: a 121-element ramp becomes 123 lines.** `rills/follow.rill`,
+`rail.rill` and `rider.rill` each hold a generated array of ~120 numbers on one
+1000-column line, and "one element per line" turns each of those files from 80
+lines into 204. That is the ruling applied faithfully, and it is the one place
+where a FILL wrap (as many per line as fit) would read better. Recorded rather
+than built: it is a second policy with its own gates, and the ruling was one
+element per line.
+
+### 3. `editors/vscode` — because typing must agree with the printer
+
+Christian: *"probably the VSCode plugin needs to change as well."* It did, in
+four places, and one of them was broken rather than merely incomplete.
+
+- **The grammar needed no new rule, and that is worth writing down rather than
+  relying on.** A wrapped signature keeps its pack because `#port-pack` is
+  itself a begin/end rule, and a NESTED begin/end rule MASKS its parent's
+  `end` — so the `$` in `#def-signature`'s `"(=)|$"` is never offered while the
+  parens are open and the context survives to the `)`. The comment that said
+  "the signature ENDS AT THE NEWLINE" was true and is now false; it says this
+  instead, and `G7e` pins it so the next edit to either `end` cannot quietly
+  take it away. The `describe` block still ends at a dedent with indented
+  signature lines above it — the interaction that was flagged, checked, and
+  fine.
+- **The outline was BROKEN and the corpus gate could not see it.** `symbols.js`
+  read the port list with `src.lastIndexOf(')')` on the def's own line, on the
+  same "ends at the newline" premise — so the exemplar the outline exists for,
+  `roaches.rill`, would have outlined its one exported definition with **no
+  ports at all**. It now walks the parens across lines with a per-character
+  position map, so each port reports the line it is really on and the
+  breadcrumb jumps to the port rather than to the `def`. `C10` went red the
+  moment the showcase fixture was written in the wrapped form, which is what a
+  fixture is for.
+- **`language-configuration.json` gained one alternative**, and it is the one
+  that was actually missing: `) =` (and `) on row =`) must BOTH dedent itself
+  and indent the body under it. Without it the body of every wrapped definition
+  is typed in the left margin, where a def's dedent rule ends the body before
+  it starts. `[{\[(]\s*$` already covered the other two wrapped forms — an open
+  `(` at end of line is a wrapping signature, an open `[` is a wrapping array —
+  which is why they needed nothing.
+- **The snippets follow the canon in both directions.** The spray package's
+  signature is 149 columns flat, so it is written broken; `exportdef`, `def`
+  and `defrow` fit, so they are written flat. A snippet wrapped for the look of
+  it would be flattened by the first save, which is the same failure as one
+  that runs long. Measured: with its placeholders resolved, the whole `kernel`
+  snippet is a fixed point of `zig build roundtrip`.
+
+One thing the editor cannot do, said plainly rather than papered over: **the
+FIRST `|` of a wrapped chain is the author's Tab.** No lexical rule can tell a
+statement that is about to be continued from one that is finished, and
+indenting after every statement in the file on the chance that a pipe follows
+would be worse than one Tab. From the second continuation on, the `onEnterRule`
+holds the column the printer chose — `indent: "none"` is the load-bearing word
+there, and `L8` gates it.
+
+**`editors/vscode`: 45 gates → 51, 39 mutations → 46, all 46 biting.**

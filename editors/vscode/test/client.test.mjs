@@ -257,3 +257,52 @@ test('C10c: `//` inside a describe string is not a comment', () => {
 // from symbols.js's `code`. The scanner breaks at the `//` inside the string,
 // the describe line loses everything after it, and the `endsWith('"')`
 // assertion goes red.
+
+test('C10d: a wrapped signature outlines its ports, each on its own line', async () => {
+  // THE FAILURE THIS WAS WRITTEN FOR, and it was real: `symbols.js` read the
+  // port list with `src.lastIndexOf(')')` on the def's own line, on the
+  // grounds that "the signature ENDS AT THE NEWLINE". Since 2026-09-09 it
+  // does not — the parser accepts a break inside the parens and the printer
+  // puts one port per line past 88 columns — so the exemplar this outline
+  // exists for, `kernels/roaches.rill` at 234 columns, would have outlined
+  // its one exported definition with NO ports at all.
+  //
+  // The showcase fixture is written in the wrapped form, so C10 above already
+  // covers the NAMES. What this adds is the POSITIONS, which is the half a
+  // one-line reader could have got right by accident.
+  const text = await readFile(path.join(here, 'fixtures', 'showcase.rill'), 'utf8');
+  const lines = text.split('\n');
+  const def = find(outline(text), 'scatter');
+  assert.ok(def);
+  assert.deepEqual(def.children.map((c) => c.name), ['rate', 'speed', 'blend']);
+
+  // Three ports, three DIFFERENT lines, each of them the line the port is
+  // really on — a breadcrumb that jumped to the `def` for all three would be
+  // the bug wearing a different hat.
+  const at = def.children.map((c) => c.line);
+  assert.equal(new Set(at).size, 3, `ports landed on lines ${at.join(', ')}`);
+  for (const c of def.children) {
+    assert.equal(lines[c.line].slice(c.col, c.col + c.name.length), c.name,
+      `port '${c.name}' is not at ${c.line}:${c.col}`);
+    assert.ok(c.line > def.line, 'a wrapped port is below the `def` line');
+  }
+  // …and the pack rides along as the detail, range and all.
+  assert.equal(def.children[0].detail, ': number = 60 (0..500)');
+  // The def's range covers the whole signature, not just its first line.
+  assert.ok(def.endLine >= def.children[2].line);
+
+  // The signature is consumed, not re-read: a port line must not also outline
+  // as something of its own.
+  const flat = [];
+  (function walk(ns) { for (const n of ns) { flat.push(n); walk(n.children); } })(outline(text));
+  for (const n of flat) {
+    if (n.kind === 'field') continue;
+    assert.ok(!(n.line > def.line && n.line <= def.endLine),
+      `'${n.name}' (${n.kind}) outlined from inside a signature, line ${n.line}`);
+  }
+});
+// MUTATION: in symbols.js, replace the `signature(...)` call with the old
+// one-line read — `const close = src.lastIndexOf(')'); const inner = close >
+// open ? src.slice(open + 1, close) : ''` and `at` positions on line `i`.
+// `scatter` outlines with no children and this goes red on the first
+// deepEqual, along with C10.

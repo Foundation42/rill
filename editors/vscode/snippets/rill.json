@@ -8,7 +8,16 @@
     "kernel share one file because that is what a package IS.",
     "",
     "Bodies indent by four. Ruled 2026-09-09, and the printer emits four, so a",
-    "snippet that taught two would be wrong the first time anyone formats."
+    "snippet that taught two would be wrong the first time anyone formats.",
+    "",
+    "The same argument settles WRAPPING, and settles it both ways. The spray",
+    "package's signature is 149 columns flat, so it is written here one port",
+    "per line, exactly as the printer writes it past 88. The three smaller def",
+    "snippets are NOT wrapped, because their signatures fit — a snippet",
+    "wrapped for the look of it would be flattened on the first save, which is",
+    "the same failure in the other direction. What the width does not reach is",
+    "a `describe` line: it is a key and one string, several of them run long,",
+    "and a string cannot be broken without changing the value it holds."
   ],
 
   "export def with describe": {
@@ -91,7 +100,14 @@
       "// The body is `0` on purpose: instantiating this would bake the defaults",
       "// in as literals, and the numbers have to reach the kernel LIVE through",
       "// the `.k.` room. `export def` is here for its PACK.",
-      "export def ${1:name}(rate = ${3:60} (0..500), speed = ${4:0.15} (0..5), spread = ${5:0.35} (0..3), life = ${6:14000} (16..60000), capacity = ${7:4096} (1..65536), blend = \"${8|add,alpha|}\") =",
+      "export def ${1:name}(",
+      "    rate = ${3:60} (0..500),",
+      "    speed = ${4:0.15} (0..5),",
+      "    spread = ${5:0.35} (0..3),",
+      "    life = ${6:14000} (16..60000),",
+      "    capacity = ${7:4096} (1..65536),",
+      "    blend = \"${8|add,alpha|}\"",
+      ") =",
       "    0",
       "",
       "describe ${1:name}",

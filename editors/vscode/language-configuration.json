@@ -60,12 +60,26 @@
 
   "indentationRules": {
     "//": [
-      "Indent after the three things that open a body: a def signature's `=`,",
-      "a `describe` head, and any unclosed opener. Outdent on a closer.",
-      "A def signature ends at the newline, so `=` at end of line is the",
-      "reliable mark — `(` claims nothing across it."
+      "Indent after the four things that open a body: a def signature's `=`,",
+      "the `) =` that closes a WRAPPED signature, a `describe` head, and any",
+      "unclosed opener. Outdent on a closer.",
+      "",
+      "The `) =` alternative arrived with the width canon (2026-09-09). A",
+      "signature that runs past 88 columns is printed one port per line and",
+      "closes in the left margin, so the `=` that used to sit on the `def`",
+      "line now sits on a line beginning with `)`. Without this the body of",
+      "every wrapped definition lands in the left margin — and it is the",
+      "shape `kernels/roaches.rill` is printed in.",
+      "",
+      "That line matches BOTH patterns, which is right and not a conflict:",
+      "the `)` dedents back to the `def`'s own column, and the `=` indents",
+      "the body under it.",
+      "",
+      "`[{\\[(]\\s*$` already covered the other two wrapped forms — an open",
+      "`(` at end of line is a wrapping signature and an open `[` is a",
+      "wrapping array — which is why they need nothing new here."
     ],
-    "increaseIndentPattern": "^\\s*(?:(?:export\\s+)?def\\b.*=\\s*$|describe\\s+[A-Za-z_][\\w-]*\\s*$)|[{\\[(]\\s*$",
+    "increaseIndentPattern": "^\\s*(?:(?:export\\s+)?def\\b.*=\\s*$|\\)(?:\\s+on\\s+[A-Za-z_]\\w*)?\\s*=\\s*$|describe\\s+[A-Za-z_][\\w-]*\\s*$)|[{\\[(]\\s*$",
     "decreaseIndentPattern": "^\\s*[}\\])]"
   },
 
@@ -82,7 +96,20 @@
       "action": { "indent": "none", "appendText": "// " }
     },
     {
-      "//": "A leading `|` continues the statement above it — no statement can begin with a pipe, so it has never had a second meaning (parser.zig:1905). Enter after one keeps the branch aligned in the left margin, where the eye finds it.",
+      "//": [
+        "A leading `|` continues the statement above it — no statement can",
+        "begin with a pipe, so it has never had a second meaning",
+        "(parser.zig:1905). Enter after one keeps the pipe in the same",
+        "column, which since the width canon (2026-09-09) is the printer's:",
+        "a broken chain is one stage per line at indent 4, `|` first.",
+        "",
+        "It holds from the SECOND continuation on. The first one is typed",
+        "after an ordinary statement line, and no lexical rule can tell a",
+        "statement that is about to be continued from one that is finished —",
+        "so that one is the author's Tab, or the formatter's on save. Better",
+        "than the alternative, which is indenting after every statement in",
+        "the file on the chance that a `|` follows."
+      ],
       "beforeText": "^(\\s*)\\|\\s.*$",
       "action": { "indent": "none", "appendText": "| " }
     }

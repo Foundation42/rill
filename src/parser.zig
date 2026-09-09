@@ -1213,6 +1213,14 @@ const Parser = struct {
             if (t.kind == .colon and self.toks[self.pos + 1].kind == .name) {
                 return self.fail(t, "def '{s}' port '{s}': a fold reference needs a space before its colon here — write ': {s}' as ' :{s}'", .{ def_name, port_name, self.toks[self.pos + 1].text, self.toks[self.pos + 1].text });
             }
+            // A signature wraps BETWEEN ports, never inside one (2026-09-09).
+            // Without this arm the token's own text is quoted into the
+            // message and the reader is told the default must be a literal,
+            // "got '<a literal newline>'" — a refusal that prints a line
+            // break in the middle of itself and names nothing.
+            if (t.kind == .newline) {
+                return self.fail(t, "def '{s}' port '{s}': the {s} is missing — a signature may wrap between ports, but a port stays on one line", .{ def_name, port_name, role });
+            }
             return self.fail(t, "def '{s}' port '{s}': the {s} must be a literal, got '{s}' — a def closes over nothing, so a default cannot read a stream or a plane path", .{ def_name, port_name, role, t.text });
         }
         return self.parseLiteral(&self.program_target);
@@ -1263,6 +1271,33 @@ const Parser = struct {
         if (self.next().kind != .lparen) return self.fail(self.toks[self.pos - 1], "expected '(' after def name", .{});
         var ports = std.ArrayListUnmanaged(PortDecl).empty;
         while (true) {
+            // A NEWLINE INSIDE THE PARENS IS NOTHING (2026-09-09). This was
+            // the one place left in the language that said no: a wrapped
+            // chain already parsed (`continuesWithPipe`) and a newline inside
+            // `[…]` or `{…}` already parsed (`renderTokens`, "a newline
+            // inside a span is a separator"), while `roaches`'s 238-character
+            // signature could only ever be one line. Christian read one of
+            // those aloud — "these are not human friendly" — and the refusal
+            // it got was `expected port name in def signature (line 1,
+            // col 20)`, which reads as if the port list were malformed.
+            //
+            // The skip is at the two points a break can fall and nowhere
+            // else: before a port, and before its separator (below). A break
+            // in the MIDDLE of a port (`rate =` / `60`) is still refused, and
+            // the refusal lands on the token after the break rather than on
+            // line 1 — the parser never invents a separator either, so a
+            // forgotten comma is still "expected ',' or ')'", said at the
+            // port that followed it.
+            //
+            // A TRAILING COMMA is accepted, and already was: the loop's own
+            // shape does it (the `,` is consumed, the next token is `)`, the
+            // loop breaks). It stops being a curiosity now that the canon
+            // puts one port per line — adding a port is then a one-line diff
+            // that never touches the line above it. The PRINTER does not emit
+            // one, for the reason it emits none in an array: what the printer
+            // writes is the single canon, and this is a spelling the language
+            // accepts rather than one it teaches.
+            self.skipNewlines();
             const pt = self.next();
             if (pt.kind == .rparen) break;
             if (pt.kind != .name) return self.fail(pt, "expected port name in def signature", .{});
@@ -1347,6 +1382,11 @@ const Parser = struct {
             }
             try ports.append(self.a(), decl);
             try syn_ports.append(self.a(), syn_port);
+            // The second of the two break points — see the note at the top of
+            // the loop. Skipping here and NOT inventing a separator is what
+            // keeps `rate = 60` / `speed = 0.15` (two ports, no comma) a
+            // refusal that points at `speed`.
+            self.skipNewlines();
             const sep = self.peek();
             if (sep.kind == .comma) {
                 _ = self.next();

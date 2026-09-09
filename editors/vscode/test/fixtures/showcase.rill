@@ -29,17 +29,34 @@ plane.input.mouse.lmb | rose_above 0.5 | write plane.render/grade/exposure stops
 once 1 | cast $tilt -1.0 radius 25 at {x: -12, y: 3, z: 0}
 every 1f | delay 250ms | write plane.actuators.quintain.target 1
 lfo sine 18s phase 0.25 | mul 1.1 | add -3.15 | write plane.drift.@pour.pos.x
-row.age | over row.life [{l: 1.5, a: 0.02, b: 0.14}, {l: 0.6, a: 0.16, b: 0.08}] | write row.colour
+row.age
+    | over row.life [{l: 1.5, a: 0.02, b: 0.14}, {l: 0.6, a: 0.16, b: 0.08}]
+    | write row.colour
 plane.hour | select true false | write plane.night
 
-// ── blocks and sections ──────────────────────────────────────────────────
+// ── blocks, sections, and the wrapped forms ──────────────────────────────
+//
+// A line that runs past 88 columns breaks, outermost first: one stage per
+// line with the `|` in the continuation's left margin, one port per line in a
+// signature, one element per line in a `[…]` that is still too long. Written
+// here as `rill fmt` writes it, because a showcase of the highlighting is
+// also the picture of the canon.
 
 plane.damage | where (> 0) | inc plane.stats.hits 1
 plane.contacts | sort by (.distance) desc | first | .pos.x | write plane.hud.x
+plane.door.openness
+    | along [
+        {x: 0, y: 3, z: 0},
+        {x: 2, y: 3, z: 1},
+        {x: 4, y: 3, z: 0},
+        {x: 6, y: 3, z: 2}
+    ] loop
+    | write plane.lights.key.pos
+
 plane.orders.sally
-  | cooldown 5m
-  | also { tag @tom #in-courtyard }
-  | notify plane.signals.counter_attack { from: "sally-port" }
+    | cooldown 5m
+    | also { tag @tom #in-courtyard }
+    | notify plane.signals.counter_attack {from: "sally-port"}
 
 // ── a two-word operator ──────────────────────────────────────────────────
 //
@@ -50,7 +67,11 @@ rbf through 4 | write plane.field.value
 
 // ══ THE PACK ═════════════════════════════════════════════════════════════
 
-export def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5), blend = "add") on row =
+export def scatter(
+    rate: number = 60 (0..500),
+    speed = 0.15 (0..5),
+    blend = "add"
+) on row =
     0
 
 describe scatter

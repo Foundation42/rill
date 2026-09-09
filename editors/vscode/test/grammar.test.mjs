@@ -401,3 +401,109 @@ test('G8b: a negative number is a number, and a lone `-` is a word', () => {
 });
 // MUTATION: drop the `-?` from #number's match. `-9.8` lexes as the unbind
 // sentinel followed by `9.8` and the first assertion goes red.
+
+// ---------------------------------------------------------------------------
+// G7e / G9 — the wrapped forms (the width canon, 2026-09-09).
+//
+// The printer breaks a line that runs past 88 columns: a chain into one stage
+// per line with a leading `|`, a def signature into one port per line, an
+// array into one element per line. Every one of those puts rill tokens in
+// positions no corpus file held before, and a grammar that highlighted only
+// the flat spellings would go yellow on `kernels/roaches.rill` the first time
+// it was formatted.
+// ---------------------------------------------------------------------------
+
+test('G7e: a wrapped def signature keeps its pack, across the line breaks', () => {
+  // This works because `#port-pack` is a begin/end rule and a nested one
+  // MASKS its parent's `end` — so the `$` in `#def-signature`'s "(=)|$" is
+  // never offered while the parens are open, and the context survives to the
+  // `)` on line 5. That is a real property of how TextMate resolves rather
+  // than an accident, and it is why the grammar needed no new rule; what it
+  // needed was this gate, so the next edit to either `end` cannot quietly
+  // take it away.
+  const tokens = lex([
+    'export def roaches(',
+    '    rate = 60 (0..500),',
+    '    blend = "add",',
+    '    x: number = 1',
+    ') on row =',
+    '    0',
+    '',
+    'describe roaches',
+    '    "One sentence."',
+    '    rate  "How many."',
+    'spawn',
+    '',
+  ].join('\n'));
+
+  // A port on a line of its own is a PARAMETER, not a statement head — which
+  // is what it looks like to every rule that anchors at `^`.
+  assert.ok(scopesOfText(tokens, 'rate', 0).includes('variable.parameter.rill'));
+  assert.ok(scopesOfText(tokens, 'blend').includes('variable.parameter.rill'));
+  // …and the whole pack still scopes inside it: the range, the type, the
+  // string default.
+  assert.ok(scopesOfText(tokens, '..').includes('keyword.operator.range.rill'));
+  assert.ok(scopesOfText(tokens, '500').includes('constant.numeric.rill'));
+  assert.ok(scopesOfText(tokens, 'number').includes('entity.name.type.rill'));
+  assert.ok(anyScope(tokens, 'string.quoted'), 'the "add" default is a string');
+  // The `on row` after the closing paren is still the signature's plane.
+  assert.ok(scopesOfText(tokens, 'on').includes('keyword.control.on.rill'));
+  assert.ok(scopesOfText(tokens, 'row', 0).includes('entity.name.type.plane.rill'));
+  // …and the body is out of it again.
+  // (the first `0` is the range's minimum; the second is the body)
+  assert.ok(!scopesOfText(tokens, '0', 1).some((s) => s.startsWith('meta.parameters')));
+
+  // THE INTERACTION: a wrapped signature puts indented lines above a
+  // `describe` block that never had any. The block still ends at a DEDENT, so
+  // `spawn` is a statement again.
+  assert.ok(scopesOfText(tokens, 'describe').includes('keyword.control.describe.rill'));
+  assert.ok(scopesOfText(tokens, 'rate', 1).includes('variable.parameter.rill'));
+  assert.ok(scopesOfText(tokens, 'spawn').includes('entity.name.function.rill'));
+});
+// MUTATIONS, two, one per half:
+//   G7e         give #port-pack the end "\\)|$". The pack closes at the end
+//               of the `def` line, the signature's own `$` closes behind it,
+//               and every port below reads as a statement head — the first
+//               four assertions go red.
+//   G7e-dedent  loosen #describe-block's `while` to "^(?=[ \t]*\S|[ \t]*$)".
+//               The block swallows `spawn` and the last assertion goes red.
+//               (It takes G7d with it, which is honest: they are two gates
+//               over one rule, and this one is the wrapped-signature case.)
+
+test('G9: a broken chain and a broken span', () => {
+  // The other two shapes, in the exact bytes the printer emits — a leading
+  // `|` at the canon indent, and an array one element per line with its `]`
+  // back in the stage's column.
+  const tokens = lex([
+    'plane.t',
+    '    | over plane.life [',
+    '        {l: 1.5, a: 0.08},',
+    '        {l: 1.3, a: 0.12}',
+    '    ]',
+    '    | write plane.colour',
+    '',
+  ].join('\n'));
+
+  assert.ok(!anyScope(tokens, 'invalid.'), 'nothing in a wrapped statement is illegal');
+  // The continuation's `|` is a pipe and the word after it is the verb, even
+  // though the line no longer starts at the margin.
+  const pipes = tokens.filter((t) => t.text === '|');
+  assert.equal(pipes.length, 2);
+  for (const p of pipes) assert.ok(p.scopes.includes('keyword.operator.pipe.rill'));
+  assert.ok(scopesOfText(tokens, 'over').includes('entity.name.function.rill'));
+  assert.ok(scopesOfText(tokens, 'write').includes('entity.name.function.rill'));
+  // The head is still a store, not a verb, on its own short line.
+  assert.ok(scopesOfText(tokens, 'plane', 0).includes('support.class.plane.rill'));
+  // A record element on a line of its own keeps its keys — `l` at the head of
+  // an indented line is exactly what #operator-head would claim if the
+  // record-key rule did not get there first.
+  assert.ok(scopesOfText(tokens, 'l', 0).includes('variable.other.property.rill'));
+  assert.ok(scopesOfText(tokens, '1.5').includes('constant.numeric.rill'));
+  assert.ok(scopesOfText(tokens, '[').includes('punctuation.section.array.begin.rill'));
+  assert.ok(scopesOfText(tokens, ']').includes('punctuation.section.array.end.rill'));
+});
+// MUTATION: drop the `(?<=[|{(])` alternative from #operator-head — the whole
+// second pattern of it. `over` and `write` are no longer at the start of a
+// line, so nothing scopes them as verbs and the two operator assertions go
+// red. (At column 0 the first pattern hides this, which is why the fixture is
+// the wrapped shape and not the flat one.)
