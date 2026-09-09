@@ -67,7 +67,7 @@
         "rill.binaryPath": {
           "type": "string",
           "default": "rill",
-          "markdownDescription": "The rill binary that backs formatting and diagnostics. A bare name is looked up on `PATH`; a relative path is resolved against the workspace folder. Formatting and diagnostics need the `fmt` and `check` subcommands — see the CLI contract in the extension's README. If the binary is missing or does not understand them, both features go quietly unavailable and everything else keeps working."
+          "markdownDescription": "The rill binary that backs formatting and diagnostics. A bare name is looked up on `PATH`; a relative path is resolved against the workspace folder. It needs the `fmt` and `check` subcommands, which rill has shipped since 2026-09-09: `zig build` in the rill checkout writes `zig-out/bin/rill`, and a symlink from `~/.local/bin` puts it on `PATH`. If the binary is missing or does not understand them, both features go quietly unavailable and everything else keeps working."
         },
         "rill.format.enable": {
           "type": "boolean",
@@ -83,7 +83,7 @@
             "fmt",
             "-"
           ],
-          "markdownDescription": "Arguments for the format call. The source is written to stdin and the formatted program is read from stdout, so the last argument is normally `-`."
+          "markdownDescription": "Arguments for the format call. The source is written to stdin and the formatted program is read from stdout, so the last argument is normally `-`.\n\n**Add your host's words here too.** `fmt` has to PARSE the file before it can print it, so a spray kernel that uses `spawn` or `near` does not format at all with the bare default — 21 of the 47 `.rill` programs in this checkout are that case. In a spindrift or matryoshka workspace set this to `[\"fmt\", \"--host-row\", \"-\"]`, the same way `rill.diagnostics.args` is set."
         },
         "rill.diagnostics.enable": {
           "type": "boolean",
@@ -132,7 +132,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/grammar.test.mjs test/client.test.mjs test/config.test.mjs test/extension.test.mjs",
+    "test": "node --test test/grammar.test.mjs test/client.test.mjs test/config.test.mjs test/extension.test.mjs test/e2e.test.mjs",
     "mutate": "node test/mutate.mjs",
     "preview": "node test/preview.mjs"
   },

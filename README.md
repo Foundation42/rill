@@ -127,10 +127,23 @@ no engine required.
 
 ## Build
 
-`zig build test` — 347 gates · `zig build run` (mounts a HUD rill on the mock
+`zig build test` — 501 gates · `zig build run` (mounts a HUD rill on the mock
 plane and narrates four ticks) · `zig build run-file -- prog.rill` (mounts a
 file, ticks it, and says "(nothing)" out loud if it writes nothing) · Zig
 0.14.1, sibling of `struple` / `radix` / `matryoshka`.
+
+`zig build` also writes **`rill`**, the command line an editor talks to:
+
+```sh
+rill fmt -                  # program on stdin, formatted program on stdout
+rill check --json -         # {"ok": bool, "diagnostics": [...]}, 1-based
+rill fmt --host-row -       # …with a host's row words registered as stubs
+```
+
+Exit `0` ok, `64` the command line was not understood, `65` it did not parse
+(with an empty stdout, so a truncated program can never reach a file), `70`
+internal. That is the whole interface `editors/vscode` needs; see its README
+for the contract in full.
 
 ## License
 

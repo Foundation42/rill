@@ -128,18 +128,56 @@ pub fn build(b: *std.Build) void {
     // would make the library unbuildable on its own, and 21 of those 47 files
     // use host words rill core must not have. See `tools/roundtrip.zig`. The
     // gates over programs rill owns are in `src/tests.zig`.
+    //
+    // Its `--host-row` stubs are shared with the CLI's, below — ONE
+    // definition (`tools/host_row.zig`), because a stub whose arity differs
+    // parses the same file differently, and two copies that drift make the
+    // two tools disagree about what a legal program is while both stay green.
+    // Kept out of `rill_mod` on purpose: exporting spindrift's fifteen words
+    // from the library would make a host's private vocabulary part of rill's
+    // public API.
+    const host_row_mod = b.createModule(.{
+        .root_source_file = b.path("tools/host_row.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    host_row_mod.addImport("rill", rill_mod);
+
     const rt_mod = b.createModule(.{
         .root_source_file = b.path("tools/roundtrip.zig"),
         .target = target,
         .optimize = optimize,
     });
     rt_mod.addImport("rill", rill_mod);
+    rt_mod.addImport("host_row", host_row_mod);
     const rt_exe = b.addExecutable(.{ .name = "rill-roundtrip", .root_module = rt_mod });
     b.installArtifact(rt_exe);
     const rt_cmd = b.addRunArtifact(rt_exe);
     if (b.args) |args| rt_cmd.addArgs(args);
     b.step("roundtrip", "Round-trip .rill files: zig build roundtrip -- [--host-row] <files…>")
         .dependOn(&rt_cmd.step);
+
+    // `rill` — THE binary. Not a demo and not a tool: it is what an editor
+    // runs, and the extension's default `rill.binaryPath` is the bare name
+    // `rill`, so this artifact's NAME is part of the contract. `fmt` and
+    // `check` only; the dispatch in `src/cli.zig` is a switch on one word so
+    // a third subcommand is a case rather than a rewrite.
+    //
+    //     zig build && ln -sf "$PWD/zig-out/bin/rill" ~/.local/bin/rill
+    const cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cli_mod.addImport("rill", rill_mod);
+    cli_mod.addImport("host_row", host_row_mod);
+    const cli_exe = b.addExecutable(.{ .name = "rill", .root_module = cli_mod });
+    b.installArtifact(cli_exe);
+    const cli_cmd = b.addRunArtifact(cli_exe);
+    cli_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| cli_cmd.addArgs(args);
+    b.step("cli", "Run the rill CLI: zig build cli -- fmt - < f.rill")
+        .dependOn(&cli_cmd.step);
 
     // Tests: src/rill.zig pulls in the acceptance-gate suite from src/tests.zig.
     //
@@ -162,4 +200,11 @@ pub fn build(b: *std.Build) void {
     // program that had stopped being valid. `zig build test` parses it now.
     const demo_tests = b.addTest(.{ .root_module = exe_mod });
     test_step.dependOn(&b.addRunArtifact(demo_tests).step);
+    // …and the CLI's own module, for the same reason: its gates execute the
+    // CONTRACT — the exit code, and what is on stdout when it is 65 — and
+    // nothing in `rill_mod` can reach them, because the binary imports the
+    // library rather than the other way round. `-Dtest-filter=F5` reaches
+    // them, so mutation attribution still works.
+    const cli_tests = b.addTest(.{ .root_module = cli_mod, .filters = filters });
+    test_step.dependOn(&b.addRunArtifact(cli_tests).step);
 }

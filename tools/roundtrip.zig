@@ -18,12 +18,11 @@
 //!     zig build roundtrip -- ../matryoshka/src/rills/*.rill
 //!     zig build roundtrip -- --host-row ../spindrift/kernels/*.rill
 //!
-//! `--host-row` registers stubs for spindrift's fifteen row words. They are
-//! declared here rather than imported, with the port shapes copied from
-//! `spindrift/src/words.zig` — a stub whose arity differs would parse the
-//! file differently and measure the wrong thing, so the shapes are the load-
-//! bearing part and drift in them is a real (loud) failure mode: a file that
-//! stops parsing here is the signal.
+//! `--host-row` registers stubs for spindrift's fifteen row words. They live
+//! in `tools/host_row.zig` — ONE definition, shared with `rill check
+//! --host-row`, because a stub whose arity differs parses the file
+//! differently and two copies that drift make the two tools disagree about
+//! what a legal program is, silently and in whichever was edited second.
 //!
 //! The oracle is `Runtime.restore` + `serialize.dump`, not `mount`: restore
 //! subscribes and does NOT tick, so the dump is the program's STRUCTURE with
@@ -34,64 +33,14 @@
 const std = @import("std");
 const rill = @import("rill");
 
-const Tag = rill.Tag;
-
-fn planeRefuse(_: *rill.EvalCtx) rill.registry.EvalError!rill.Emit {
-    return error.BadValue;
-}
-fn rowStub(_: *rill.row.Ctx) rill.row.Error!void {}
-
-fn rowOnly() rill.row.Row {
-    return .{ .exact = true, .only = true, .eval = rowStub };
-}
-
-/// spindrift's fifteen, by shape. See the header: the SHAPES matter, the
-/// behaviour does not — nothing is evaluated here.
-const host_row = [_]rill.OpDef{
-    .{ .name = "spawn", .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "gravity", .inputs = &.{.{ .name = "g", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "perish", .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "relax", .inputs = &.{
-        .{ .name = "in", .ty = Tag.number },
-        .{ .name = "target", .ty = Tag.number },
-        .{ .name = "rate", .ty = Tag.number },
-    }, .outputs = &.{.{ .name = "step", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "near", .inputs = &.{.{ .name = "radius", .ty = Tag.number }}, .outputs = &.{.{ .name = "count", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "push", .inputs = &.{.{ .name = "k", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "align", .inputs = &.{.{ .name = "k", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "sync", .statics = &.{.{ .name = "field", .kind = .path }}, .inputs = &.{
-        .{ .name = "drift", .ty = Tag.number },
-        .{ .name = "couple", .ty = Tag.number },
-    }, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "infect", .statics = &.{.{ .name = "field", .kind = .path }}, .inputs = &.{.{ .name = "rate", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "deposit", .statics = &.{.{ .name = "channel", .kind = .channel }}, .inputs = &.{.{ .name = "amount", .ty = Tag.number }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "hear", .statics = &.{
-        .{ .name = "channel", .kind = .channel },
-        .{ .name = "grad", .kind = .word, .flag = true, .optional = true },
-    }, .inputs = &.{.{ .name = "at", .ty = Tag.any, .kw = true }}, .outputs = &.{.{ .name = "out", .ty = Tag.any }}, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    // the tracer four
-    .{ .name = "collide", .outputs = &.{
-        .{ .name = "at", .ty = Tag.any },
-        .{ .name = "normal", .ty = Tag.any },
-        .{ .name = "t", .ty = Tag.number },
-        .{ .name = "material", .ty = Tag.number },
-    }, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "ground", .outputs = &.{
-        .{ .name = "distance", .ty = Tag.number },
-        .{ .name = "normal", .ty = Tag.any },
-    }, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "slide", .publishes = &.{"contact"}, .inputs = &.{ .{ .name = "at", .ty = Tag.any }, .{ .name = "normal", .ty = Tag.any } }, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-    .{ .name = "stick", .publishes = &.{"contact"}, .inputs = &.{ .{ .name = "at", .ty = Tag.any }, .{ .name = "normal", .ty = Tag.any } }, .help = "stub", .routes = .anywhere, .row = rowOnly(), .eval = planeRefuse },
-};
+const host_row = @import("host_row");
 
 fn makeRegistry(gpa: std.mem.Allocator, host: bool) !rill.Registry {
     var reg = try rill.Registry.init(gpa);
     errdefer reg.deinit();
     try rill.registerCore(&reg);
     try rill.registerRbf(&reg);
-    if (host) for (host_row) |def| {
-        _ = try reg.register(def);
-    };
+    if (host) try host_row.register(&reg);
     return reg;
 }
 

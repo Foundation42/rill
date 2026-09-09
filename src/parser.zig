@@ -115,8 +115,39 @@ pub const ParseError = error{Parse} || std.mem.Allocator.Error;
 /// Structured diagnostic, filled on error.Parse. The message buffer is owned
 /// by the caller so it survives the failed Program's teardown.
 pub const Diag = struct {
+    /// Why the parse refused, as a name a PROGRAM can branch on.
+    ///
+    /// Paid for by the editor (2026-09-09). **The operator registry is
+    /// open**: the host injects its words at startup, so a `rill check`
+    /// built from rill core alone does not know spindrift's `spawn` or
+    /// matryoshka's `drift`, and a plain parse of the 47-file corpus reports
+    /// "unknown operator" on 21 of them — every one a correct program. An
+    /// editor has to tell that from a real syntax error before it decides
+    /// whether to paint the file red, and reading the MESSAGE TEXT to find
+    /// out would break the first time someone improves a sentence.
+    ///
+    /// **Two values, deliberately, and not a taxonomy.** There are 184
+    /// refusal sites in this file; coding all of them is a beat of its own
+    /// and would be invented rather than paid for, because exactly one
+    /// consumer exists and it asks exactly one question. `parse` is the
+    /// DEFAULT, so a site nobody has asked about answers honestly ("the
+    /// parser refused") instead of claiming a kind it was never taught.
+    pub const Code = enum {
+        /// Everything the parser refuses that is not one of the below.
+        parse,
+        /// `unknown operator or name '<x>'` — `Registry.find` answered null
+        /// and no better-worded door matched. THE one an open registry makes
+        /// ambiguous, and the only reason this enum exists.
+        unknown_operator,
+
+        pub fn name(self: Code) []const u8 {
+            return @tagName(self);
+        }
+    };
+
     line: u32 = 0,
     col: u32 = 0,
+    code: Code = .parse,
     buf: [512]u8 = undefined,
     len: usize = 0,
 
@@ -778,7 +809,20 @@ const Parser = struct {
         return t;
     }
 
+    /// The ordinary refusal: `Diag.Code.parse`. One hundred and eighty-odd
+    /// sites reach the parser through here and none of them has been asked a
+    /// question finer than "did it parse", so none of them claims to have
+    /// been.
     fn fail(self: *Parser, tok: Token, comptime fmt: []const u8, args: anytype) ParseError {
+        return self.failCode(tok, .parse, fmt, args);
+    }
+
+    /// A refusal that says WHICH KIND it is. See `Diag.Code`: only the open
+    /// registry's "I have never heard that word" needs one today, because
+    /// only that one can be a correct program in a host rill core has never
+    /// met.
+    fn failCode(self: *Parser, tok: Token, code: Diag.Code, comptime fmt: []const u8, args: anytype) ParseError {
+        self.diag.code = code;
         self.diag.line = tok.line;
         self.diag.col = tok.col;
         const written = std.fmt.bufPrint(&self.diag.buf, fmt, args) catch &self.diag.buf;
@@ -2783,7 +2827,12 @@ const Parser = struct {
             // mutating them and watching the suite stay green.
             if (std.mem.eql(u8, op_name, "export") or std.mem.eql(u8, op_name, "describe"))
                 return self.fail(op_tok, "'{s}' is a statement keyword and stands at the top level of a program — it cannot appear in a chain or inside a def body", .{op_name});
-            return self.fail(op_tok, "unknown operator or name '{s}'", .{op_name});
+            // THE coded one. Every door above this line is a word rill core
+            // knows and is refusing on purpose, so they stay `.parse`; this
+            // is the only refusal that a HOST's registry could have answered,
+            // and it is what `rill check --json` hands an editor as
+            // `unknown_operator` so a kernel does not come back red.
+            return self.failCode(op_tok, .unknown_operator, "unknown operator or name '{s}'", .{op_name});
         };
         const def = self.reg.get(op_id);
         // Read off the TARGET since 2026-09-08: a row word binds inside a

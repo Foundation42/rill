@@ -53,6 +53,22 @@ switch (mode) {
     process.exit(64);
     break;
 
+  // A CORE-ONLY `rill` meeting a spray kernel. The probe — a comment-only
+  // program — formats fine, so the extension switches formatting on; then
+  // every real statement exits 65, because `near` and `spawn` belong to the
+  // host and were never registered. This is exactly what all 21 kernels in
+  // this checkout do with the shipped `rill.format.args`, and it is the mode
+  // E8 stands over: the document must be left alone AND the reason said.
+  case 'no-host': {
+    const code = input.split('\n').filter((l) => l.trim() && !/^\s*\/\//.test(l));
+    if (code.length === 0) {
+      out(input);
+      break;
+    }
+    err("2:1: unknown operator or name 'near'\n");
+    process.exit(65);
+  }
+
   // "Your file does not parse." sysexits EX_DATAERR.
   case 'dataerr':
     err('4:12: unknown operator or name \'fooo\'\n');

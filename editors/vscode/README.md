@@ -4,9 +4,10 @@ Syntax, outline, snippets, formatting and diagnostics for `.rill`.
 
 Highlighting, the outline, the snippets and the indent rules work with nothing
 installed but this folder. Formatting and diagnostics need a `rill` binary that
-speaks the contract in [The CLI contract](#the-cli-contract), which **rill does
-not ship yet** — until it does they turn themselves off with one message, and
-nothing else changes.
+speaks the contract in [The CLI contract](#the-cli-contract) — **rill has
+shipped one since 2026-09-09**; see [Get the binary](#get-the-binary). If it is
+not on `PATH` they turn themselves off with one message, and nothing else
+changes.
 
 ---
 
@@ -29,6 +30,32 @@ the window, see the change. A packaged `.vsix` would be a copy that silently
 stops tracking the tree.
 
 To uninstall: `rm ~/.vscode/extensions/foundation42.rill-0.1.0`.
+
+### Get the binary
+
+Formatting and diagnostics shell out to `rill`, which `zig build` produces in
+the rill checkout. `rill.binaryPath` defaults to the bare name, so it has to be
+on `PATH`:
+
+```sh
+cd ~/dev/rill && zig build && ln -sf "$PWD/zig-out/bin/rill" ~/.local/bin/rill
+```
+
+A symlink for the same reason the extension itself is one: `zig build` then
+updates what the editor runs, with nothing to reinstall. Check it with
+`rill version`, or from inside VSCode with **rill: Check the rill binary**.
+
+**In a spindrift or matryoshka workspace, name your host's words.** rill core
+does not know `spawn` or `near` and must not — the registry is the host's — so
+without `--host-row` a fifth of the files in this checkout do not format and
+report false unknown operators. Both settings, in `.vscode/settings.json`:
+
+```jsonc
+{
+  "rill.format.args": ["fmt", "--host-row", "-"],
+  "rill.diagnostics.args": ["check", "--json", "--host-row", "-"]
+}
+```
 
 If you would rather have a package to hand to someone else:
 
@@ -110,12 +137,15 @@ one that runs long.
 
 ## The CLI contract
 
-This is what the extension needs from `rill`. It is written as a spec because
-implementing it is a rill change, not an editor change.
+This is what the extension needs from `rill`, and **as of 2026-09-09 `rill`
+provides it** — `src/cli.zig`, gated by `F1`..`F11` in the same file. It is
+still written as a spec rather than as documentation of an implementation,
+because it is the contract that binds: an editor and a compiler are two
+programs, and the thing between them is the interface, not either one's code.
 
-The printer landed on 2026-09-09 (`script.print`) and `Diag` has carried line,
-column and message since the beginning, so both subcommands are a front door
-onto machinery that already exists.
+Both subcommands are a front door onto machinery that already existed: `fmt` is
+`parse` + `script.print` (the printer landed the same day), `check` is `parse`
+and the `Diag` it fills.
 
 ### `rill fmt -`
 
@@ -130,7 +160,7 @@ stderr  anything it needs to say
 | `0` | formatted; stdout is the program |
 | `64` | the command line was not understood — unknown subcommand, unknown flag |
 | `65` | the input did not parse; stdout is **empty** |
-| other | an internal failure |
+| `70` | an internal failure |
 
 Four requirements, and the first is the one the extension refuses to work
 without:
@@ -143,6 +173,9 @@ without:
 3. **Empty in, empty out, exit 0.** A program with no statements is a program.
 4. **Nothing but the program on stdout.** A log line on stdout is written into
    the file.
+
+Gated as `F1`..`F5` in `src/cli.zig`, and `X1` here: `rill fmt` over all 47
+`.rill` programs in this checkout returns every one of them byte-identical.
 
 `64` and `65` have to be told apart. `64` means the feature is not there and
 the extension says so once and goes quiet; `65` means the file does not parse,
@@ -187,11 +220,26 @@ stdout  exactly one JSON object
 | `0` | `"ok": true`, `diagnostics` empty |
 | `64` | the command line was not understood |
 | `65` | it did not parse; `"ok": false` and at least one diagnostic |
-| other | an internal failure — the client leaves existing squiggles alone rather than clearing them on a guess |
+| `70` | an internal failure — the client leaves existing squiggles alone rather than clearing them on a guess |
 
-The parser stops at the first refusal, so `diagnostics` will hold one entry
+The parser stops at the first refusal, so `diagnostics` holds exactly one entry
 today. It is an array because that shape survives a parser that later reports
 more, and a client written against a bare object would not.
+
+**`end_line`/`end_col` are not sent**, and that is a choice rather than a gap:
+`Diag` carries no end, and the client derives a better one than a token length
+would be — it widens the caret over the whole dotted run, so a refusal on
+`plane.drift.@self` underlines all twenty characters instead of the five that
+are `plane`. Sending a token-shaped end would make the squiggle worse. See
+`spanFor`, gate `E7`.
+
+**`prog.warnings` is dropped.** The parser has one non-fatal diagnostic today
+("block discards a value") and `check` does not report it, because a warning
+carries no `code` and a client that cannot name what it is looking at cannot
+decide what to do with it — which is the exact argument that put `code` on
+`Diag`. Recorded, not built. The trigger is a second `warn` site in the parser,
+or a request for that one in the editor; building it means a `code` on
+`graph.Warning` first.
 
 #### `code` is required, and here is why
 
@@ -200,6 +248,11 @@ more, and a client written against a bare object would not.
 `drift` — those are spindrift's and matryoshka's — and it will report
 `unknown operator or name 'spawn'` on 21 of the 47 corpus programs. Every one
 of those is a lie.
+
+That is a measurement, not an estimate. `rill check --json -` over the corpus:
+**26 clean, 21 `unknown_operator`, 0 anything else.** With `--host-row`:
+**47 clean.** So spindrift's fifteen cover the whole of it today — matryoshka's
+own words are all two-word verbs its `.rill` files do not reach for.
 
 With a `code`, the client can tell that diagnostic from a real syntax error and
 downgrade it (`rill.diagnostics.unknownNames`, a warning by default). Without
@@ -217,28 +270,53 @@ Anything finer is welcome (`reserved_name`, `already_defined`,
 `undescribed_port`, `unknown_described_port`, `def_reach`, `row_word_on_world`)
 and the client passes unknown codes straight through as errors.
 
+**Two is what rill sends**, deliberately. `Diag.Code` has exactly those two
+values because there are 184 refusal sites in `parser.zig` and one consumer
+asking one question; `parse` is the DEFAULT, so a site nobody has asked about
+answers honestly rather than claiming a kind it was never taught. A finer
+taxonomy is a beat of its own, and it is additive: this client already passes
+a code it does not recognise straight through.
+
 ### Host vocabulary
 
-`tools/roundtrip.zig` already has the right shape: `--host-row` registers
-spindrift's fifteen row words as stubs, which is what lets it measure the
-kernels without rill depending on spindrift. Both subcommands should take it,
-and the extension already has the setting to pass it:
+`--host-row` registers spindrift's fifteen row words as stubs, which is what
+lets rill's own tools read a kernel without rill depending on spindrift. Both
+subcommands take it, and the stubs have ONE definition — `tools/host_row.zig`,
+shared with `tools/roundtrip.zig` — because a stub whose arity differs parses
+the same file differently, and two copies that drift make the two tools
+disagree about what a legal program is while both stay green.
+
+Set BOTH args in a host workspace. `fmt` has to parse a file before it can
+print it, so without the flag a spray kernel does not format at all — and
+unlike a diagnostic, which arrives downgraded to a warning with its sentence
+attached, that failure is silent by design ("the squiggle already said it").
+The extension says one status line about it (`E8`); the setting is the fix:
 
 ```jsonc
 // .vscode/settings.json in spindrift or matryoshka
 {
+  "rill.format.args": ["fmt", "--host-row", "-"],
   "rill.diagnostics.args": ["check", "--json", "--host-row", "-"]
 }
 ```
 
-### Not required, but wanted later
+### Not required, and still not built
 
-- `--stdin-name <path>`, so a message can say which file it means.
-- More than one diagnostic per run.
+Each recorded with the trigger that would build it, because recorded-not-built
+without one is a wish.
+
+- `--stdin-name <path>`, so a message can say which file it means. Trigger: a
+  diagnostic that has to name a file, which needs more than one file first.
+- More than one diagnostic per run. Trigger: the parser learning to recover;
+  it stops at the first refusal today and the array shape is already right.
 - `rill fmt --check -` (exit non-zero if reformatting would change anything),
-  for CI. The extension does not use it.
+  for CI. Trigger: a CI job. The extension does not use it, and the 47-file
+  no-op claim it would serve is gated here as `X1` without it.
+- Human-readable `check` output. `check` without `--json` exits 64 naming the
+  flag, because a second reply shape invented with no reader is a second thing
+  to keep in step. Trigger: someone reading `check` at a shell.
 
-### What the extension does when none of this exists
+### What the extension does when the binary is missing or older
 
 Nothing bad, and it says so once.
 
@@ -250,6 +328,9 @@ Nothing bad, and it says so once.
 - Exit 0 with an empty stdout, or a reply with fewer `//` lines than went in →
   the format is refused and the document is untouched. The second is an error
   popup.
+- Exit `65` → the document is untouched and no popup: the squiggle already
+  said it. One status line names `--host-row`, because a spray kernel checked
+  without the host's words is the commonest reason Format does nothing.
 
 `rill: Check the rill binary` in the command palette runs both calls and prints
 what came back.
@@ -262,7 +343,7 @@ what came back.
 | --- | --- | --- |
 | `rill.binaryPath` | `rill` | bare name → `PATH`; a relative path → resolved against the workspace |
 | `rill.format.enable` | `true` | |
-| `rill.format.args` | `["fmt", "-"]` | |
+| `rill.format.args` | `["fmt", "-"]` | add `--host-row` in a spindrift or matryoshka workspace, or kernels do not format |
 | `rill.diagnostics.enable` | `true` | |
 | `rill.diagnostics.args` | `["check", "--json", "-"]` | add `--host-row` in a spindrift or matryoshka workspace |
 | `rill.diagnostics.run` | `onType` | or `onSave`, or `off` |
@@ -328,8 +409,8 @@ Also not attempted, and each for a reason worth stating:
 
 ```sh
 npm install     # two dev packages: vscode-textmate, vscode-oniguruma
-npm test        # 51 gates
-npm run mutate  # 46 mutations, each must break the gate that names it
+npm test        # 57 gates
+npm run mutate  # 49 mutations, each must break the gate that names it
 npm run preview -- ../../../matryoshka/kernels/roaches.rill dark
 ```
 
@@ -339,6 +420,22 @@ npm run preview -- ../../../matryoshka/kernels/roaches.rill dark
 | `test/client.test.mjs` | `rillcli.js` and `symbols.js` — the decisions (`C*`) |
 | `test/config.test.mjs` | `language-configuration.json` and the manifest (`L*`) |
 | `test/extension.test.mjs` | the providers, over a stub `vscode` — the layer that touches a document (`E*`) |
+| `test/e2e.test.mjs` | the REAL `rill` binary, and the seam between it and the client (`X*`) |
+
+`test/e2e.test.mjs` is the half that was missing until the binary existed.
+Every other suite runs against `test/stubs/rill.mjs`, a stand-in written to
+behave badly in one named way per gate — the right shape for the client's
+guards, since you cannot ask a real binary to eat your comments on demand, but
+it means the stub answers whatever it was told to and never looks at its
+arguments. So a wrong default in `package.json` shipped green. `X4` is that
+gate now; `X1` is the one to read, and it is the strongest sentence in this
+document: **`rill fmt` over all 47 `.rill` programs returns every one of them
+byte-identical.**
+
+The binary is found at `../../zig-out/bin/rill` or at `RILL_BINARY`. If it is
+not there the `X*` gates SKIP — loudly, by name, with the command that builds
+it, on stderr as well as in the report. A silent skip is a gate that watches
+nothing.
 
 `test/extension.test.mjs` exists because `client.test.mjs` stops at a status,
 and the way to empty a file is to be right about the status and wrong about the
@@ -356,6 +453,13 @@ library the siblings embed and must not depend on either, which is why
 names the mutation that must break it; `test/mutate.mjs` applies every one of
 them to a copy of the tree and fails if any gate stays green. A mutation that
 survives is reported as `SURVIVED`, which means the gate is watching nothing.
+
+The `X*` gates stand over the BINARY, so most of their mutations live in
+`rill/src/cli.zig` as the `F` series and were run there. What is mutable here
+is the manifest — `X4` and `E6b` mutate a shipped default — and those bite only
+because `test/fake-vscode.cjs` now DERIVES its defaults from `package.json`
+instead of keeping a second copy. It kept a copy until 2026-09-09, which meant
+every gate that read a setting read a value this repo made up.
 
 The tokenizer under the gates is `vscode-textmate` + `vscode-oniguruma` — the
 exact two packages VSCode loads to highlight a buffer — so what runs is the

@@ -4853,3 +4853,229 @@ Sixteen more ```rill fences live in `rill-spec.md`, `namespaces.md`,
 `slate.md` and the campaign notes. They are NOT gated: they are not embedded
 in the build, and they are records of decisions rather than things a reader
 copies. Named here so it is a decision.
+
+---
+
+## `rill`, the binary — the plugin's dark half switched on
+
+The entry above ends "the Zig half is a separate beat in this repo's own
+source." This is that beat. `editors/vscode` shipped a formatter and a
+diagnostics provider that were built, gated and **dark**, because rill had no
+`fmt` and no `check`. It has both now, and Format Document and squiggles work.
+
+The contract was not invented here: it was written down in
+`editors/vscode/README.md` first, as a spec, by the beat that could not
+implement it. That order paid for itself — three of the decisions below were
+already made and argued in that document, and the job was to satisfy them
+rather than to negotiate with them.
+
+### One artifact, named `rill`, because the name is the contract
+
+`zig build` produced `rill-demo`, `rill-run` and `rill-roundtrip`. The
+extension's default `rill.binaryPath` is the bare word `rill`, so the NAME is
+part of the interface, not a preference. `src/cli.zig` is that artifact.
+
+    cd ~/dev/rill && zig build && ln -sf "$PWD/zig-out/bin/rill" ~/.local/bin/rill
+
+A symlink for the same reason the extension is installed as one: `zig build`
+then updates what the editor runs, with nothing to reinstall. `~/.local/bin` is
+already on his `PATH`.
+
+Dispatch is a switch on one word with per-subcommand flags, so a third
+subcommand is a case and a struct rather than a rewrite. `fmt` and `check` are
+what there is; `help` and `version` are the two words a person types at a shell
+before believing any of it.
+
+**`check` without `--json` exits 64 naming the flag.** A second, human-readable
+reply shape invented with no reader is a second thing to keep in step with the
+first, and the only consumer is a program. Recorded, not built; the trigger is
+someone reading `check` at a shell.
+
+### The row-word stubs: `tools/host_row.zig`, one definition
+
+`tools/roundtrip.zig` declared spindrift's fifteen row words as stubs. A second
+copy in the CLI would be a copy that drifts, and the failure mode is silent and
+nasty: **the SHAPES are load-bearing and the behaviour is not** — nothing is
+ever evaluated — so a stub whose arity or static-kind differs parses the same
+file *differently*. Two copies that drift make `check` and `roundtrip` disagree
+about what a legal program is, both stay green, and the one that is wrong is
+whichever was edited second.
+
+So: one file, `tools/host_row.zig`, a module both executables import through
+`build.zig`. It is deliberately NOT in `src/` and NOT re-exported from
+`rill.zig` — exporting spindrift's private vocabulary from the library would
+make a host's word list part of rill's public API and ship a stale copy into
+every consumer, and matryoshka would be linking a `spawn` it already defines.
+This is tooling vocabulary; it lives with the tools.
+
+Rejected names: `src/host_words.zig` (puts a host's vocabulary in the library's
+directory and invites an `@import` from `rill.zig`), `tools/stubs.zig` (says
+nothing about which stubs), `tools/spindrift_words.zig` (the flag is
+`--host-row`, and a second host with row words would need the same list under a
+wrong name).
+
+### `Diag.code` — two values, and `parse` is the default
+
+The extension README argued this one before the binary existed and it was
+right: deriving a code by matching the message text breaks the first time
+someone improves a sentence, so the refusal site has to say which kind it is.
+
+`Diag` grew a `code: Code = .parse` field. `Code` has exactly two values —
+`parse` and `unknown_operator` — and **one refusal site out of 184 sets the
+second one**. Everything else in `parser.zig` is `.parse` and says so honestly,
+because `fail` now routes through `failCode(tok, .parse, …)`.
+
+Two values rather than a taxonomy because there are 184 refusal sites, exactly
+one consumer, and it asks exactly one question: *is this word one my registry
+has never met, or is it a mistake?* The failure mode of a bigger enum written
+speculatively is a site that claims a kind it was never taught. Left as `parse`
+deliberately: `set` became `write`, `use` retired, `export`/`describe` in a
+chain, the row-word-on-world refusal, and every arity, type and binding
+refusal. `row_word_on_world` is the one with a real customer waiting — the
+client would show it differently from a syntax error — and the trigger is the
+editor asking for it.
+
+**Blast radius: small and additive.** `Diag` is public (`rill.Diag`), and a
+field with a default keeps `rill.Diag{}` compiling — `src/main.zig`,
+`src/run.zig`, `src/c_api.zig` and `tools/roundtrip.zig` all construct one and
+none needed a line changed. The tokenizer's two `diag.* = .{ .line = tl, .col =
+tc }` assignments reset the code to `.parse`, which is the right answer for an
+unterminated string. Nothing serialises a `Diag`, so the wire format is
+untouched and the C-ABI seam did not move.
+
+### Two parses, and which diagnostic wins
+
+A `.rill` file does not say which plane it is for, and a spray kernel's
+top-level statements are row words that refuse on the world plane. So `fmt` and
+`check` both try `parse` and then `parseKernel` — the same order and the same
+reason as `tools/roundtrip.zig`.
+
+What is new is the choice when BOTH fail. `further()` reports the diagnostic
+that reached further into the file, because the parse that got further
+understood more of it: a kernel with a real mistake on line 30 fails the world
+parse at its first row word on line 4, a line that is perfectly correct.
+Reporting the world parse puts the squiggle on good code and tells the author
+their kernel is not a kernel. `F10` is that gate.
+
+### `end_line`/`end_col` are NOT sent, and that is the better answer
+
+The contract makes them optional. `Diag` has no end, and the obvious
+substitute — the refusing token's length — is *worse* than what the client
+already does: `spanFor` widens the caret over the whole dotted run, so a
+refusal on `plane.drift.@self` underlines twenty characters where a token end
+would have underlined the five that are `plane`. Gate `E7` in the extension is
+the one that pins it. Sending a field to look complete would have degraded the
+squiggle.
+
+### `prog.warnings` is dropped, on purpose
+
+The parser has one non-fatal diagnostic ("block discards a value; end with a
+sink or drop the tail") and `check` does not report it. A warning carries no
+`code`, and a client that cannot name what it is looking at cannot decide what
+to do with it — which is the exact argument that put `code` on `Diag`.
+Recorded, not built. Trigger: a second `warn` site, or a request for that one
+in the editor. Building it means a `code` on `graph.Warning` first, and the
+README's exit-code table changes with it.
+
+### Gates: F1–F11 in `src/cli.zig`, twelve mutations, all twelve biting
+
+The whole binary is one function over buffers — `execute(gpa, argv, src, out,
+err) u8` — so a gate executes the CONTRACT (the exit code, and what is on
+stdout when it is 65) rather than a helper the contract is assembled from.
+`main` is the four lines that give it real file descriptors. `build.zig` adds
+`cli_mod` to the test step with the same `-Dtest-filter` wiring, so mutation
+attribution works: `zig build test -Dtest-filter=F5`.
+
+| gate | the mutation, executed |
+| --- | --- |
+| `F1 G-canon` | print a `// formatted` banner before the program — a tool that says hello on stdout, and stdout is written into the file |
+| `F2 G-idempotent` | `fmt` echoes its input. A canonical file is still a fixed point, so F1, F3 and F4 stay GREEN and only F2 sees it |
+| `F3 G-comments` | strip `//` lines on the way out — the failure that eats four-fifths of `roaches.rill` |
+| `F4 G-empty` | `if (text.len == 0) return EX_DATAERR` — "a program that formats to nothing must be broken", the plausible wrong guard |
+| `F5 G-refuse` | write the partial program to stdout before returning 65. **The exit code stays 65**, so a gate reading only the code would have stayed green |
+| `F6 G-usage` | (a) ignore an unrecognised flag; (b) fall an unknown subcommand through to `fmt` |
+| `F7 G-json` | emit `d.line + 1` — the 0-based reading, every squiggle one line below the fault |
+| `F8 G-code` | revert the coded refusal in `parser.zig` to plain `fail` — every code becomes `parse` |
+| `F9 G-hostrow` | register the stubs unconditionally — the flag stops meaning anything |
+| `F10 G-further` | always report the world parse — the author is sent to fix a line that is right |
+| `F11 G-escape` | emit a `"` raw, so the reply stops being JSON — which the client reads as "the checker crashed" and leaves stale squiggles up |
+
+**Two of these were not mutations on the first run and the harness said so
+wrongly.** `F9`'s first form deleted the `if (opts.host_row)` guard and left
+`opts` unused; `F6b`'s left `is_fmt` unused. Both are compile errors, both made
+`zig build` exit non-zero, and the harness counted a non-zero exit as a bite —
+which is the house rule's own warning arriving in person. **A mutation that
+does not compile is not a mutation**, and a harness that reads the exit code
+cannot tell the difference. It now requires a test ASSERTION naming the gate
+under filter; the two mutations were rewritten with an explicit `_ =` and both
+bite for real.
+
+### The 47-file no-op — the strongest sentence available
+
+`X1` in `editors/vscode/test/e2e.test.mjs`: every `.rill` program in this
+checkout, through the real binary, byte-identical.
+
+    47/47 unchanged  ·  `rill fmt --host-row -`
+
+That is a stronger claim than idempotence, which a formatter can have about the
+wrong thing. It says his files do not move, which is the only question
+format-on-save asks. It lives in the extension's suite rather than in
+`src/tests.zig` for the reason `tools/roundtrip.zig` exists at all: the corpus
+is in the sibling repos and rill must build standalone. That suite already
+requires both siblings and already sweeps all 47 for the grammar.
+
+Two more measurements from the same sweep, and they confirm the extension
+README's claim exactly:
+
+    rill check --json -             26 clean · 21 unknown_operator · 0 other
+    rill check --json --host-row -  47 clean
+
+So spindrift's fifteen cover the entire corpus today — matryoshka's own words
+are all two-word verbs its `.rill` files do not reach for. And
+`zig build roundtrip` over the same 47 still reports **26 world, 21 kernel**,
+the same split, which is a second instrument agreeing with the first.
+
+### `editors/vscode`, switched on — and one real hole found
+
+The client needed no change to work: `formatSource`, `probeFormat` and
+`checkSource` met the real binary and every status came back the one they were
+written for. What DID need changing was found by looking at the defaults with a
+real binary behind them.
+
+- **`test/fake-vscode.cjs` kept its OWN copy of the manifest's defaults.** So
+  every gate that read a setting read a value this repo made up, and a wrong
+  default in `package.json` would have shipped green. It derives them from
+  `package.json` now. Two mutations (`X4`, `E6b`) mutate a shipped default and
+  bite only because of that.
+- **`rill.format.args` had a silent failure on 21 of 47 files.** `fmt` must
+  PARSE before it can print, so without `--host-row` a spray kernel exits 65
+  and the provider returns no edits and — by design, "the squiggle already said
+  it" — says nothing. Pressing Format on `kernels/roaches.rill`, the exemplar
+  the extension was built around, did nothing and gave no reason. The default
+  is unchanged (making it `--host-row` everywhere would have rill's own editor
+  assert fifteen words rill core refuses to know), but the provider now says
+  one status line, once, naming the setting. `E8`, with a new `no-host` stub
+  mode — a core-only binary that formats the probe and refuses every real
+  statement, which is exactly what all 21 kernels do today.
+- `rill.diagnostics.unknownNames: warning` and `rill.diagnostics.args` are
+  unchanged and now measured rather than argued: 21 of 47, exactly.
+
+**Extension gates: 51 → 57, mutations 46 → 49, all 49 biting.** New: `X1`–`X5`
+(the real binary; they SKIP loudly by name and print the command that builds
+it, on stderr, if it is not there) and `E8`. New mutations: `X4`, `E6b`, `E8`.
+
+`X4` is the one worth naming. Every other suite in that folder runs against
+`test/stubs/rill.mjs`, which answers by mode and **never looks at its
+arguments** — the right shape for the client's guards, and the reason a typo in
+a shipped default was invisible. `X4` runs the manifest's own defaults through
+the real binary; its mutation writes `"format"` for `"fmt"` and it goes red
+while every stub-backed gate stays green.
+
+### Docs in the same commit
+
+`editors/vscode/README.md`'s contract section now describes something that
+exists — a `Get the binary` block with the one command, both `--host-row`
+settings for a host workspace, `70` named in both exit tables, the two
+deliberate omissions (`end_*`, warnings) written down as decisions, and the
+wanted-later list rewritten so each entry carries the trigger that would build
+it. The manifest's own descriptions carry the same two facts.

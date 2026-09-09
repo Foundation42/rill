@@ -153,3 +153,27 @@ test('E7: the squiggle covers the token, not one character of it', () => {
 // MUTATION: drop the `(?:\\.${NAME})*` continuation from spanFor's regex. The
 // squiggle stops at the first dot, so a refusal on a twenty-character path
 // underlines five characters of it and the eye goes to the wrong place.
+
+test('E8: a file that will not parse leaves the document alone — and says why, once', async () => {
+  // Added the day the binary became real (2026-09-09), because that is the
+  // day this stopped being hypothetical: with the SHIPPED `rill.format.args`
+  // a `rill` built from core alone exits 65 on all 21 spray kernels in this
+  // checkout, `kernels/roaches.rill` included. The document must not move —
+  // and the person must not be left pressing a key that does nothing.
+  activate({ binaryPath: process.execPath, 'format.args': [STUB, 'no-host', 'fmt', '-'] });
+  const doc = fake.document('// prose worth keeping\nnear 0.5\n');
+  const edits = await fake.log.formatProviders[0].provideDocumentFormattingEdits(doc);
+  assert.deepEqual(edits, [], 'a file that does not parse is a file left alone');
+  assert.equal(fake.log.errors.length, 0, 'and not a popup — the squiggle already said it');
+  assert.equal(fake.log.warnings.length, 0);
+  assert.equal(fake.log.status.length, 1, `one line, once: ${fake.log.status.join(' | ')}`);
+  assert.match(fake.log.status[0], /--host-row/, 'and it names the setting that fixes it');
+
+  // Twice, because `told` is what keeps this from becoming a wall.
+  await fake.log.formatProviders[0].provideDocumentFormattingEdits(doc);
+  assert.equal(fake.log.status.length, 1, 'still once');
+});
+// MUTATION: delete the `say(...)` from the format provider's 'parse-error'
+// case. Format Document on a spray kernel does nothing, silently, for ever —
+// which is the state the extension shipped in this morning and the reason
+// nobody would have found the missing flag.

@@ -36,7 +36,8 @@ const GRAMMAR_TEST = 'test/grammar.test.mjs';
 const CLIENT_TEST = 'test/client.test.mjs';
 const CONFIG_TEST = 'test/config.test.mjs';
 const EXT_TEST = 'test/extension.test.mjs';
-const TESTS = [GRAMMAR_TEST, CLIENT_TEST, CONFIG_TEST, EXT_TEST];
+const E2E_TEST = 'test/e2e.test.mjs';
+const TESTS = [GRAMMAR_TEST, CLIENT_TEST, CONFIG_TEST, EXT_TEST, E2E_TEST];
 
 /**
  * id      the gate it must break
@@ -309,6 +310,28 @@ const MUTATIONS = [
     to: '"beforeText": "^(\\\\s*)\\\\|\\\\s.*$",\n      "action": { "indent": "indent", "appendText": "| " }',
   },
   {
+    id: 'E8', file: 'src/extension.js', test: EXT_TEST, name: '^E8: ',
+    why: 'Format Document on a spray kernel does nothing, silently, for ever — the state the extension shipped in this morning',
+    from: "        say(\n          `format:parse:${binary}`,\n          'the file did not parse, so it was left alone. If it is a spray kernel, add --host-row to rill.format.args.',\n        );\n",
+    to: '',
+  },
+  // ── the manifest's DEFAULTS, which nothing could reach until 2026-09-09 ──
+  //
+  // `test/fake-vscode.cjs` used to hold its own copy of them, so every gate
+  // that read a setting read a value this repo made up rather than the value
+  // it ships. Both of these now bite because the fake derives its defaults
+  // from `package.json`.
+  {
+    id: 'X4', file: P, test: E2E_TEST, name: '^X4: ',
+    why: 'the shipped format args say `format` where the binary says `fmt` — silently off on every machine',
+    from: '            "fmt",', to: '            "format",',
+  },
+  {
+    id: 'E6b', file: P, test: EXT_TEST, name: '^E6: ',
+    why: 'the shipped unknownNames default is `error` — every host word in every kernel opens as a red squiggle',
+    from: '"default": "warning",', to: '"default": "error",',
+  },
+  {
     id: 'L9', file: 'snippets/rill.json', test: CONFIG_TEST, name: '^L9: ',
     why: 'the spray package teaches a 149-column signature the first save reflows',
     from: '      "export def ${1:name}(",\n      "    rate = ${3:60} (0..500),",\n      "    speed = ${4:0.15} (0..5),",\n      "    spread = ${5:0.35} (0..3),",\n      "    life = ${6:14000} (16..60000),",\n      "    capacity = ${7:4096} (1..65536),",\n      "    blend = \\"${8|add,alpha|}\\"",\n      ") =",',
@@ -383,7 +406,10 @@ async function main() {
     const res = await sh(
       process.execPath,
       ['--test', '--test-name-pattern', m.name, m.test],
-      { cwd: MUTANT, env: { ...process.env, RILL_SIBLINGS: SIBLINGS } },
+      // RILL_ROOT as well as RILL_SIBLINGS: the mutant tree is one level
+      // deeper than the real one, so the e2e suite's walk up to the rill
+      // checkout (for the binary and the corpus) lands in `editors/`.
+      { cwd: MUTANT, env: { ...process.env, RILL_SIBLINGS: SIBLINGS, RILL_ROOT: path.resolve(EXT_ROOT, '..', '..') } },
     );
     if (res.code === 0) {
       console.log(`  SURVIVED ${m.id.padEnd(5)} ${m.why}`);

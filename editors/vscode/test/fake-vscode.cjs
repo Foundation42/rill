@@ -67,15 +67,18 @@ function reset(settings) {
   log.settings = settings || {};
 }
 
-const DEFAULTS = {
-  binaryPath: 'rill',
-  'format.enable': true,
-  'format.args': ['fmt', '-'],
-  'diagnostics.enable': true,
-  'diagnostics.args': ['check', '--json', '-'],
-  'diagnostics.run': 'onType',
-  'diagnostics.unknownNames': 'warning',
-};
+// The SHIPPED defaults, read off the manifest rather than copied from it.
+//
+// This was a hardcoded duplicate until 2026-09-09, and the duplicate is what
+// let `rill.format.args` be wrong in `package.json` while every gate that
+// reads a setting stayed green: E6 asserted the unknown-name downgrade
+// against a default this file made up. A gate over a value nobody ships is a
+// gate over nothing.
+const MANIFEST = require('../package.json');
+const DEFAULTS = Object.fromEntries(
+  Object.entries(MANIFEST.contributes.configuration.properties)
+    .map(([key, spec]) => [key.replace(/^rill\./, ''), spec.default]),
+);
 
 const vscode = {
   Position,
