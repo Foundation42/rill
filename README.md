@@ -127,7 +127,7 @@ no engine required.
 
 ## Build
 
-`zig build test` — 501 gates · `zig build run` (mounts a HUD rill on the mock
+`zig build test` — 523 gates · `zig build run` (mounts a HUD rill on the mock
 plane and narrates four ticks) · `zig build run-file -- prog.rill` (mounts a
 file, ticks it, and says "(nothing)" out loud if it writes nothing) · Zig
 0.14.1, sibling of `struple` / `radix` / `matryoshka`.
@@ -138,12 +138,41 @@ file, ticks it, and says "(nothing)" out loud if it writes nothing) · Zig
 rill fmt -                  # program on stdin, formatted program on stdout
 rill check --json -         # {"ok": bool, "diagnostics": [...]}, 1-based
 rill fmt --host-row -       # …with a host's row words registered as stubs
+rill ops                    # the vocabulary, each word with its help
+rill ops --tag curve        # one tag
+rill ops --tag time --tag gate   # both — the tags AND
+rill ops --name lerp        # by name, case-insensitively
+rill ops --json             # …with ports, statics, class and routing
 ```
 
-Exit `0` ok, `64` the command line was not understood, `65` it did not parse
-(with an empty stdout, so a truncated program can never reach a file), `70`
-internal. That is the whole interface `editors/vscode` needs; see its README
-for the contract in full.
+`ops` reads no stdin — its input is the registry this binary was built with.
+`OpDef.tags` says what an operator is FOR, which is a different question from
+`class` (purity), `routes` (thread) and `row` (evaluator): **a tag is
+descriptive and refuses nothing, while those refuse programs.** Tags are
+Christian's own framing — *"think of them as #tags"* — so an operator carries
+several and is found under each; the FIRST one is its home, and that is where
+a listing files it. Tags sorted, words sorted inside a tag, so the output
+diffs cleanly:
+
+```
+source (10) — a value out of the clock, a seed, or nothing at all
+  clock  Fed real time in seconds since mount, as a value. …
+         also: time
+  const  Emit a constant once at mount.
+         also: constant
+  …
+```
+
+A two-word name is at home under its first word, so `rbf bump` lands in `rbf`
+and a host's `(verb, subop)` vocabulary organises itself; a one-word name with
+nothing declared lands in `untagged`, and `rill ops --tag untagged` lists
+everyone who has not said.
+
+Exit `0` ok, `64` the command line was not understood (an unknown `--tag`
+included, named rather than answered with an empty page), `65` it did not
+parse (with an empty stdout, so a truncated program can never reach a file),
+`70` internal. That is the whole interface `editors/vscode` needs; see its
+README for the contract in full.
 
 ## License
 

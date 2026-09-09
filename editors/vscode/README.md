@@ -138,14 +138,18 @@ one that runs long.
 ## The CLI contract
 
 This is what the extension needs from `rill`, and **as of 2026-09-09 `rill`
-provides it** — `src/cli.zig`, gated by `F1`..`F11` in the same file. It is
+provides it** — `src/cli.zig`, gated by `F1`..`F19` in the same file. It is
 still written as a spec rather than as documentation of an implementation,
 because it is the contract that binds: an editor and a compiler are two
 programs, and the thing between them is the interface, not either one's code.
 
-Both subcommands are a front door onto machinery that already existed: `fmt` is
-`parse` + `script.print` (the printer landed the same day), `check` is `parse`
-and the `Diag` it fills.
+All three subcommands are a front door onto machinery that already existed:
+`fmt` is `parse` + `script.print` (the printer landed the same day), `check` is
+`parse` and the `Diag` it fills, `ops` is the registry read out.
+
+**The extension uses two of the three.** `ops` is documented here because this
+is where the CLI's contract lives, not because the client calls it — see
+"`rill ops`", below, for why it does not.
 
 ### `rill fmt -`
 
@@ -277,11 +281,82 @@ answers honestly rather than claiming a kind it was never taught. A finer
 taxonomy is a beat of its own, and it is additive: this client already passes
 a code it does not recognise straight through.
 
+### `rill ops [--host-row] [--tag <name>]... [--name <substring>] [--json]`
+
+Landed 2026-09-09 with `OpDef.tags`. It prints the operator vocabulary — each
+word with its `help`, filed under its **home tag**, with a short noun and a
+sentence per tag.
+
+```
+stdin   NOT READ — the input is the registry this binary was built with
+stdout  the listing, or one JSON object with --json
+```
+
+| exit | meaning |
+| --- | --- |
+| `0` | the listing is on stdout — **or the filter matched nothing**, which is said on stderr |
+| `64` | the command line was not understood — including an unknown `--tag`, refused BY NAME with the list |
+| `70` | an internal failure |
+
+`65` is unreachable: `ops` parses no program, so there is no program for it to
+refuse. **It reads no stdin at all**, which is a contract and not an
+implementation note — a build that read it would sit at a terminal waiting for
+a program nobody is going to type. Gated as `X6` here, because this suite is
+the only one in the repo that runs the binary as a process.
+
+**A typo and an empty result are different answers**, and under a filter model
+that matters more than under a tree: `--tag maths` is `64` naming the typo and
+listing the tags that exist, while `--tag math --tag space` — two real tags
+nothing carries together — is `0` with an empty stdout and `rill: nothing
+matches …` on stderr. An empty page alone cannot tell those apart.
+
+Ordering is part of the contract, so the output can be diffed and gated
+byte-exactly: **headings sorted, operators sorted under them**, and the name
+column padded to the widest name IN THAT HEADING — so `--tag record` prints the
+same bytes whether or not a host registered something long.
+
+```
+record (3) — named fields: build one, read one, merge two
+  merge    Merge two records; b's fields win.
+  project  Field access on a record stream (`stats.mana`).
+  record   Record construction { field: stream, … } — a live tuple with named fields.
+```
+
+An operator carries several tags and is found under every one; the FIRST is
+its home, which is where a listing files it, and the rest print as an `also:`
+line under the word. `--tag` is repeatable and **ANDs**.
+
+A tag is what an operator is FOR. It is emphatically *not* `class` (purity),
+`routes` (thread) or `row` (evaluator): those are checked by the parser and
+the mount and refuse programs, a tag is descriptive and refuses nothing, and
+folding one into the other would degrade a real refusal into a label. They
+ride side by side in `--json`, so a client wanting "row-legal AND tagged
+`space`" asks both columns.
+
+Tags are declared at registration; a two-word name is at home under its FIRST
+WORD, so `rbf bump` lands in `rbf` and a host's `(verb, subop)` console
+vocabulary organises itself with no change over there; a one-word name with
+nothing declared lands in `untagged`, and `rill ops --tag untagged --host-row`
+is how you see who has not said yet.
+
+`--json` carries what a palette needs to build a filter bar and draw a box: a
+whole `tags` dictionary with each tag's sentence (**not** filtered with the
+listing, or a palette would only ever learn about tags it had already asked
+for), and per operator its `home`, `tags`, `class`, `routes`, `ticks`, `row`,
+`inputs`, `outputs` and `statics` with names and types.
+
+**The extension does not call it, and that is deliberate.** There is no
+palette to feed. Completion here is a static snippet file and a symbol
+provider over the open document; wiring a subprocess call into either would be
+a feature with no customer, and the reason to build it is the graph editor,
+not this. Trigger: a completion provider that wants live host words, or the
+canvas.
+
 ### Host vocabulary
 
 `--host-row` registers spindrift's fifteen row words as stubs, which is what
-lets rill's own tools read a kernel without rill depending on spindrift. Both
-subcommands take it, and the stubs have ONE definition — `tools/host_row.zig`,
+lets rill's own tools read a kernel without rill depending on spindrift. All
+three subcommands take it, and the stubs have ONE definition — `tools/host_row.zig`,
 shared with `tools/roundtrip.zig` — because a stub whose arity differs parses
 the same file differently, and two copies that drift make the two tools
 disagree about what a legal program is while both stay green.

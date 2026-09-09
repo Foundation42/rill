@@ -306,6 +306,17 @@ fn evalBump(ctx: *EvalCtx) EvalError!Emit {
 
 // ── registration ──────────────────────────────────────────────────────────
 
+/// **Neither entry declares `tags`, and that is deliberate.**
+///
+/// `register` prepends the FIRST WORD of a two-word name, so both of these are
+/// at home under `rbf` for nothing — `rill ops --tag rbf`. Declaring it here
+/// would be refused outright (the name already says it), and declaring
+/// anything ELSE would still leave `rbf` as the home while adding tags this
+/// pack has no customer for. The pack's whole argument, in the header above,
+/// is that a two-word name is one operator; the home tag is that argument's
+/// dividend, and Christian's observation that his RBF words all prefix `rbf`
+/// while only core rill is naked is where the rule came from. See
+/// `registry.OpDef.tags`.
 const PACK = [_]registry.OpDef{
     .{
         .name = "rbf through",
@@ -339,5 +350,10 @@ const PACK = [_]registry.OpDef{
 /// simply never calls this, and for that host the language does not have
 /// these words at all — which is the point (see the header).
 pub fn register(reg: *registry.Registry) !void {
+    // The pack describes its OWN tag. The name comes free from the two-word
+    // prepend; the sentence cannot, and a filter with no tooltip is what the
+    // `TagDoc` pair exists to prevent. A host that never calls this has
+    // neither the words nor the tag.
+    try reg.describeTag(.{ .name = "rbf", .doc = "radial basis functions: a sum of Gaussians, read at a point or authored one bump at a time" });
     for (PACK) |def| _ = try reg.register(def);
 }

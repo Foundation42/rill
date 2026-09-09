@@ -5384,3 +5384,321 @@ Asked, and the answer is no — twice over.
 
 The reasoning is written into `#layout-block`'s own note, where the next
 person to add a third block will meet it.
+
+## `tags` — the palette's missing column (2026-09-09)
+
+Christian, raising the next gap after the editor beat: *"We are going to need
+a palette by the way. With functional groups... Right now we have no way to
+drag new operators on to the graph."*
+
+There was nowhere for a group to live. `OpDef` carried `name`, ports,
+`statics`, `help`, `routes`, `class` and `row` — and **`class` is purity**, not
+what an operator is for. `mul` shares a class with `distance` and `nth`; a
+person dragging a box onto a canvas wants to know that one is arithmetic and
+the other is about space.
+
+Built before the canvas because it pays in things that exist today: `rill
+ops`, the console's `help` and tab-complete, and the LLM-facing vocabulary
+Christian wants so a local model can ask for things inside the engine.
+
+### It started as one string. He turned it into tags, and he was right.
+
+The field shipped a `group: []const u8` and was half-gated before he said:
+
+> *"I guess we could view them as filters huh. So an operator could exist in
+> multiple groups. Think of them as #tags. That way you can find stuff
+> globally by tag or by name and tag or whatever."*
+
+`tags: []const []const u8`. A filter model, not a tree. Three things fell out
+immediately, and the first is the one worth recording:
+
+**A dilemma dissolved.** The brief had asked me to *weigh* Blade3D's type axis
+(`Float`, `Integer`, `Matrix`) against a function axis, warning they might not
+both carry. Under tags that was a false choice — an operator could be `math`
+and `number` both. But the type axis still did not survive, and the honest
+reason turned out to be a different one from the one I had been given:
+**`number` would be true of some sixty of these 109 words, and a filter that
+matches most of the table filters nothing.** Blade3D needed `Float Add` and
+`Integer Add` because it had one operator per type; rill has ONE `add`, whose
+ports are `number` and whose output is declared `any` *because broadcast makes
+the answer follow the input*. Where a type IS the subject and the set is
+narrow — `array`, `record`, `space` — it earns a tag, and those three are what
+was left standing.
+
+**The first tag is the home**, carried by declaration order rather than a
+second field. A palette still needs a default view and a flat tag cloud is a
+poor first impression; `rill ops` groups by first tag, `--tag` finds across all
+of them. One concept, no extra column.
+
+**Nothing enforced became a tag.** `class`, `routes`, `row` and the port types
+are checked by the parser and the mount and REFUSE programs; a tag is
+descriptive and refuses nothing. Moving one in would degrade a real refusal
+into a label — the exact failure this repo spent the morning removing from a
+gate. They ride side by side in `--json`, so a palette wanting "row-legal AND
+tagged `space`" asks two columns and the registry never confuses them. The
+same rule kills a family of *tempting* tags: `boolean`, `number` and `ticking`
+are all derivable from columns the registry already carries, and a tag
+restating one is a second answer free to drift from the first.
+
+### Where it lives, and why it is not a side table
+
+On `OpDef`, declared at registration, resolved once in `Registry.register`.
+The registry's own header is the argument: *built-in, host-injected and
+def-minted operators are indistinguishable once registered*. A side table keyed
+by name would have to be maintained by everyone who registers, and would drift
+from the thing it describes on the first host that forgot.
+
+**Resolution, in order.** A two-word name PREPENDS its first word and declared
+tags follow; otherwise whatever was declared, in order; otherwise `UNTAGGED`.
+
+The prepend is not a convenience — it is Christian's own observation from
+Monday, that his RBF words all prefix `rbf` while only core rill is naked.
+**The prefix was already a group; nobody had read it as one.** And because
+matryoshka spells a console verb `verb ++ " " ++ subop` in `seedRegistry`, its
+*whole vocabulary organises itself with no change over there*. That property is
+what made this beat cheap, and it is why `ops_rbf.zig` deliberately declares
+nothing: declaring `rbf` there would be refused outright (the name already says
+it), and declaring anything else would leave the only two-word pack in the repo
+not exercising the derivation.
+
+**One consequence to rule on:** a two-word operator can never have a home other
+than its first word. Checked against the real table and it produces no bad
+listing anywhere — `rbf through`/`rbf bump` under `rbf` is right, and every
+matryoshka console verb under its verb is right. But it *is* a law rather than
+a default, and declaring your own first word is refused as a duplicate rather
+than silently collapsed. If a host ever wants `drift spawn` at home somewhere
+other than `drift`, this is the line to change.
+
+### Why the last rule is a fallback and not a refusal
+
+The brief offered "a refusal where neither — or a default you can defend", and
+the refusal is the wrong half. `register` is **the one door every host walks
+through**: refusing a one-word name with no declared tags would fail
+spindrift's fifteen row words and matryoshka's single-word console verbs at
+registry init, taking down every program in both hosts, at startup, for a
+palette that does not exist yet.
+
+The precedent in this file settles which way to go, and it is `ticks`, not
+`routes`. `routes` has no default because a wrong answer computes on the wrong
+thread — a safety fact. `ticks` defaults and is audited exhaustively because a
+wrong answer shows a wrong badge — a display fact. **A tag is a display fact.**
+So the registry defaults it, and an exhaustive audit closes the set over rill's
+own table, where rill's table is the only thing in scope.
+
+`UNTAGGED` is spelled `untagged` and is sayable on the command line, because
+`rill ops --tag untagged --host-row` **is the to-do list** — it prints exactly
+the fifteen row words nobody has tagged. `misc` and `other` were rejected for
+the reason the brief gave: a drawer things go into and never come back out of.
+
+### A tag is a name AND a sentence — Blade3D's shape
+
+Found mid-beat, and it changed the design. Christian: *"naming things is hard.
+I think I had groups in Blade3D iirc"*. He did, and the attribute is
+`OperatorGroup(DisplayName = "Input", Description = "Operators for Input
+Devices")` — the palette shows the noun, the tooltip explains it. That is the
+same split `describe` settled this morning for a def's ports.
+
+So `registry.TagDoc` is `{name, doc}`, registered through
+`Registry.describeTag`, and `ops.TAGS` carries rill's seventeen. It cannot live
+on `OpDef`: the fact is per-TAG, so twenty-two ops would restate `math`'s
+sentence twenty-two times and the twenty-third would say something slightly
+different.
+
+Two more things from that list:
+
+- **Short nouns.** `Logical`, `Curve`, `Noise`, `FlowControl` — not "logic and
+  comparison", not "select/gate". The starting cut in the brief had
+  `select/gate` and `plane I/O`, which are neither nouns nor read-aloud-able.
+  All seventeen here are one word. His are plural (`Constants`,
+  `Oscillators`); these are singular, because a **tag** reads singular — an
+  operator IS `#constant`, not `#constants`.
+- **The list has visibly drifted**, and that is evidence FOR the audit:
+  `Physics` is declared in two places, `Constraints` is misspelled
+  `Contraints` — his own reaction, *"that's fast finger typing at work"* — and
+  several groups carry a Description with no DisplayName. Every one of those is
+  now a refusal here: `DuplicateTagDoc`, the exhaustive roster check, and
+  `BadTagName` on a half-filled pair. Under tags the audit matters *more*, not
+  less: a typo on a SECOND tag is quieter than one on a first, because the
+  operator still files correctly and only its findability is gone.
+
+### The seventeen, and what did not fit
+
+Read off the table, not invented. Thirteen are somebody's home; four are pure
+cross-cuts; `time` is both. Counts are over the 109 core ops.
+
+| tag | n | home to | the sentence |
+| --- | --- | --- | --- |
+| `math` | 22 | 22 | arithmetic and the elementary functions |
+| `time` | 19 | 7 | fed time: how often, how long, and everything that moves because the clock did |
+| `array` | 14 | 14 | many values at once: build one, walk it, fold it, order it |
+| `source` | 10 | 10 | a value out of the clock, a seed, or nothing at all |
+| `logic` | 9 | 9 | comparison, and the booleans that combine it |
+| `gate` | 9 | — | may swallow an arrival: the wave can die here |
+| `event` | 8 | 8 | noticing that something happened, and counting it |
+| `flow` | 8 | 8 | which way a value goes, and whether it goes at all |
+| `curve` | 7 | 7 | give it t, it gives you a value along a shape |
+| `sink` | 7 | 7 | where a value leaves the program |
+| `envelope` | 6 | 6 | a value in motion over fed time |
+| `space` | 6 | 6 | positions and directions |
+| `constant` | 3 | — | a value that never changes |
+| `oscillator` | 3 | — | goes up and down on its own, or shapes something that does |
+| `random` | 3 | — | variation you did not author: seeded, and identical on every machine |
+| `record` | 3 | 3 | named fields |
+| `contract` | 2 | 2 | a shape, promised |
+
+The four cross-cuts are what the tag model bought, and none of them could be a
+tree node:
+
+- **`gate`** — `where`, `arm`, `disarm`, `once` (home `flow`) and `sample`,
+  `debounce`, `throttle`, `cooldown`, `hold` (home `time`). "Stop this firing
+  so often" is one question asked in two neighbourhoods. `partition` is
+  deliberately NOT tagged: it routes to one side or the other and never eats.
+- **`oscillator`** — `wave` (home `curve`), `lfo`, `pulse` (home `source`).
+  Blade3D has `Oscillators` and it is a name worth keeping.
+- **`random`** — `noise`, `rand` (home `source`), `shuffle` (home `array`).
+  `step`'s `random`/`shuffle` flags are optional and it is sequential by
+  default, so it is left off; arguable.
+- **`time`** — home to the seven rate gates and buffers, and carried by every
+  word whose behaviour is a function of fed time: the six time sources and all
+  six envelopes. "Time is fed, never read" is the language's own rule, and
+  this is the list of words it binds.
+- **`constant`** is the deliberate exception and is pinned as one in the gate:
+  all three of `const`, `pi` and `tau` are at home in `source`, so it is a
+  NARROWING rather than a cross-cut. It earns its place because `source` also
+  holds `clock`, `lfo` and `noise`, which are anything but constant.
+
+**Names rejected**, recorded so they are not re-proposed: `arithmetic` (→
+`math`, the file's own word and shorter); `compare` (→ `logic`, which had to
+hold `and`/`or`/`not` too); `shape` for `curve` (it is *the name of an
+operator* — `rill ops --tag shape` would be ambiguous to read); `interpolation`
+(a mouthful, and it does not cover `along`/`nearest`); `temporal` (→ `time`,
+the word the house rule already uses); `register` for `envelope` (the
+codebase's own word for ease/ramp/hold, and opaque in a palette); `motion`
+(spindrift owns motion on the row plane — two meanings, one word); `plane` for
+`sink` (a reserved path head: a tray called "plane" beside `plane.` paths reads
+as the store); `effect` for `sink` (it would restate the `class` column, and
+`tap` is `.reads`, so the two would disagree on day one); `vector` for `space`
+(`within`/`inside` are predicates about positions, not vector algebra);
+`number` and `boolean` (derivable from a column, and `number` would match sixty
+of 109); `state` (fuzzy, and no customer scene); `debug` for `tap` alone (a
+one-member tag; `tap` joined `sink`); and `misc`/`other` outright — **nothing
+is filed there.**
+
+**What still sat awkwardly.** Tags absorbed most of what a tree could not
+carry, but not all of it:
+
+- `step` — a sequencer. `flow` by what drives it (a rousing), `array` by its
+  subject. Home `flow`, and the strongest candidate for a second tag nobody has
+  named yet.
+- `toggle`, `tally` — driven by occurrences, emitting values. `event` by what
+  wakes them, `flow` by what they are. Home `event`.
+- `integrate`, `diff` — calculus over fed time. Home `envelope` because they
+  belong to the same value-in-motion family; **neither is an envelope**, and
+  this is the placement most likely to be ruled the other way.
+- `pi`, `tau` — `source` by what they do, `math` by what they mean. Home
+  `source`, tagged `constant`; the tag model makes this the least painful of
+  the awkward ones.
+- `above`, `below` — hysteresis levels. `logic` by their output, `event` by
+  their purpose (stop a threshold chattering). Home `event`.
+- `tap` — a `.reads` op in a tag otherwise made of `.effect`s. Home `sink`
+  because it is where a value leaves the program, and because every sink now
+  emits its input unchanged, so it is structurally one of them.
+- `stats` — sits among the temporal ops in the file because `window | stats` is
+  the idiom. Home `array` by its subject.
+
+### `rill ops` — the customer, today
+
+A new field needs a customer scene, not a declaration. Third subcommand, same
+dispatch shape as `fmt` and `check`, same exit codes.
+
+    rill ops [--host-row] [--tag <name>]... [--name <substring>] [--json]
+
+`--tag` is repeatable and **ANDs**. Union would answer a question nobody asks:
+two tags are how you narrow, and `--tag time --tag gate` means "the rate
+gates" (5 words), not "everything temporal plus everything that can swallow a
+value" (23). `--name` is a case-insensitive substring and ANDs with the rest.
+
+**Ordering is the contract**: headings sorted, operators sorted under them, and
+the name column padded to the widest name IN THAT HEADING — so `--tag record`
+prints the same bytes whether or not a host registered something long. That is
+what lets `F12` be a byte-exact golden that does not have to be re-typed every
+time an unrelated help line is improved.
+
+**A typo and an empty result are different answers**, and under a filter model
+that matters more than it did under a tree, because an empty page cannot say
+"no such tag" apart from "nothing carries all of these" — and only one of those
+is the reader's mistake. So an unknown `--tag` is `64`, named, with the list;
+two real tags that nothing carries together is `0` with an empty stdout and
+`rill: nothing matches …` on **stderr**, which a caller piping stdout still
+sees. `65` is unreachable from `ops`: it parses no program.
+
+`--json` is optional here where it is *mandatory* on `check`, and the asymmetry
+is deliberate: `check`'s only consumer is a program, so a second human-readable
+shape had no reader; `ops`'s primary consumer today is a person at a terminal,
+and the JSON is the palette's form. It carries the whole `tags` dictionary with
+each sentence — **not filtered with the listing**, or a palette would only ever
+learn about the tags it had already asked for — and per operator its `home`,
+`tags`, and the enforced columns beside them.
+
+**It reads no stdin**, and that is a contract rather than an implementation
+note: a build that read it sits at a terminal waiting for a program nobody is
+going to type. `main` puts `.ops` in the same arm as `help` and `version`.
+
+### Gates, and the mutation each was paid for
+
+Every one executed 2026-09-09 and watched go red. The trap this repo has hit
+all day — *a mutation the code routes around has tested nothing* — is why the
+derivation fixtures declare nothing, why the AND fixture uses two tags whose
+union differs loudly from their intersection, and why the home fixture is
+`noise`, whose home is NOT its alphabetically-first tag.
+
+| gate | mutation | observed |
+| --- | --- | --- |
+| `registry: tags are resolved at the one door` | drop the two-word prepend | red: `rbf sample` → `untagged` |
+| ” | prepend the LAST word | red: `through` where `rbf` was expected |
+| ” | the fallback is an empty list | red: `home()` answers `untagged` from a bare list, and the len assertion goes |
+| ” | **sort the resolved tag list** — the tidying edit | red: `rbf bump`'s home moves to `curve` |
+| ” | allow duplicate tags on one op | red: `expectError(BadTagName)` fails |
+| `every core op carries tags…` | `.tags = &.{"mathh"}` on `add` (the HOME tag) | red: *'add' carries tag 'mathh', which is not one of the seventeen* |
+| ” | `.tags = &.{"array", "randon"}` on `shuffle` (a SECOND tag — the quieter typo) | red: same message, `shuffle`/`randon` |
+| ” | delete `.tags` from `merge` entirely | red: *'merge' is untagged — rill's own table declares* |
+| ” | re-tag BOTH `contract` ops as `logic` | red: *tag 'contract' is on the roster and nothing carries it* |
+| `the cross-cutting tags cut across` | drop `random` from `shuffle`, leaving it inside one home | red: *'random' is carried only by operators at home in one place — it is a sub-name, not a cross-cut* |
+| `every tag rill declares has a sentence` | delete `gate`'s entry from `ops.TAGS` | red: *tag 'gate' (from 'where') has no sentence* |
+| `the rbf pack tags itself` | declare `.tags = &.{"curve"}` on `rbf through` | red: 2 tags where 1 was expected |
+| `F12 G-ops-tag` | delete the `std.mem.sort` before the render | red: registration order — `record` first where `merge` was expected |
+| `F13 G-ops-order` | `opBefore` compares names only, ignoring the home | red: *headings out of order: 'logic' then 'event'* |
+| `F14 G-ops-home` | sort the resolved tag list, seen from the CLI | red: `noise` prints under `random (1)` where `source (1)` was expected |
+| `F15 G-ops-and` | `--tag` unions instead of intersecting | red: 23 where 5 was expected |
+| `F16 G-ops-stdin` | give `.ops` `doFmt`'s treatment — parse `src` first | red: 65 where 0 was expected |
+| `F17 G-ops-unknown` | drop the known-tag loop; let the filter answer an empty page | red: 0 where 64 was expected |
+| ” | the nothing-matches note is silent | red: *'nothing matches' not found in stderr* |
+| `F18 G-ops-json` | help written through `print`, not `writeJsonString` | **SURVIVED** the filtered half; red on the whole listing |
+| ” | the `tags` dictionary is filtered with the listing | red: `gate` is not in the dictionary |
+| `F19 G-ops-usage` | `--tag` at the end of argv silently means every tag | red: 0 where 64 was expected |
+| `X6` (extension e2e) | `main`'s src arm back to `.help, .version => ""` | red: the child never exits, *`rill ops` blocked on stdin* |
+
+**`F18`'s survival is the entry to read.** The gate was written against
+`--tag record`, whose three help lines carry no `"` — so an emitter that
+escaped nothing satisfied it. The mutation was run, SURVIVED, and the gate grew
+a second half that parses the whole 126-word listing, where `above` and `below`
+quote their own idiom. Verified afterwards on the built binary, both ways:
+`rill ops --tag record --json` parses under the mutant and `rill ops --json`
+fails at character 24266. Recorded rather than quietly fixed, because it is the
+exact shape of the trap — the mutation was routed around by the FIXTURE, not by
+the code.
+
+Two other mutations were thrown away for not being mutations at all: one that
+re-tagged only `expect` (leaving `match` in `contract`, so the tag was not
+actually emptied and the gate was right to stay green) and one that left an
+unused local and did not compile. *A mutation that does not compile is not a
+mutation*, and one the fixture cannot reach is not one either.
+
+### The claim that turned out not to be true
+
+The brief said `src/ops_rbf.zig` holds nine operators. It holds **two** —
+`rbf through` and `rbf bump` — and the file's own header explains why exactly
+two. 109 in `ops.zig`, not ~115. The counts above are the measured ones.
+
+**Suite 510 → 523. Extension 59 → 60 tests, 54 mutations, 54 bit, 0 stale.
+Corpus 47/47 round-trip and 47/47 `rill fmt` no-op, byte-identical.**

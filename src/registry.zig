@@ -436,12 +436,112 @@ pub const Routing = enum { anywhere, main };
 /// should be publishing a record.
 pub const MAX_PUBLISHES: usize = 4;
 
+/// The tag an operator carries when its registrant declared none and its name
+/// has no first word to borrow — see `OpDef.tags`.
+///
+/// Sayable on the command line (`rill ops --tag untagged`) on purpose: that
+/// listing IS the to-do list. A word that names its own absence beats `misc`,
+/// which is a drawer things go into and never come back out of.
+pub const UNTAGGED = "untagged";
+
+/// The sentence that goes with `UNTAGGED`. Seeded by `Registry.init`, so the
+/// fallback explains itself the moment anything lands in it.
+pub const UNTAGGED_DOC = "nobody said: a word whose registrant has declared no tags, and whose name has no first word to borrow";
+
+/// The one-element slice every untagged operator points at. Module-level so
+/// the fallback costs no allocation and no per-registry bookkeeping.
+const untagged_tags = [_][]const u8{UNTAGGED};
+
+/// **A tag is a short name AND a sentence** — `{name, doc}`, declared apart
+/// from the operators that carry it (2026-09-09).
+///
+/// Two reasons it is a pair rather than a bare string, and the second is the
+/// one that decided it.
+///
+///   - The prose cannot live on `OpDef`: it is per-TAG, so twenty-two ops
+///     would restate `math`'s sentence twenty-two times and the twenty-third
+///     would say something slightly different. That is the same argument
+///     `describe` settled this morning for a def's ports — prose separated
+///     from the declaration, with the burden on whoever writes it.
+///   - **Christian's own prior art says so.** Blade3D's `OperatorGroup`
+///     attribute is `(DisplayName = "Input", Description = "Operators for
+///     Input Devices")`: the palette shows the noun, the tooltip explains it.
+///     A palette with seventeen one-word filters and no way to say what each
+///     one means makes the reader guess, and `curve` versus `envelope` is
+///     exactly the guess they would get wrong.
+///
+/// The doc is what `rill ops` prints beside a heading and what a vocabulary
+/// document uses for its section text.
+pub const TagDoc = struct {
+    name: []const u8,
+    doc: []const u8,
+};
+
 pub const OpDef = struct {
     name: []const u8,
     inputs: []const Port = &.{},
     outputs: []const Port = &.{},
     statics: []const StaticDecl = &.{},
     help: []const u8,
+    /// **What this operator is FOR** — free-form tags, and what `rill ops`
+    /// lists it under (2026-09-09, on Christian's *"We are going to need a
+    /// palette… With functional groups"*, then his own reframe: *"I guess we
+    /// could view them as filters huh. So an operator could exist in multiple
+    /// groups. Think of them as #tags."*).
+    ///
+    /// It is NOT `class`, which is purity: `mul` shares a class with
+    /// `distance` and `nth`, and a person dragging a box onto a canvas wants
+    /// to know that one is arithmetic and the other is about space. Nor is it
+    /// `routes`, `row` or the port types — **a tag is descriptive and refuses
+    /// nothing**, while those are checked by the parser and the mount and DO
+    /// refuse programs. Never move an enforced property in here: a real
+    /// refusal would quietly degrade into a label. A palette filtering on
+    /// "row-legal AND tagged `space`" is a query over two different kinds of
+    /// fact, and that is fine as long as the registry never confuses them.
+    ///
+    /// A tag that merely restates a column the registry already carries — the
+    /// output port's type, `ticks`, `class` — is a second answer that can
+    /// drift from the first. Say something the table does not.
+    ///
+    /// **THE FIRST TAG IS THE HOME.** A filter model still needs a default
+    /// view, and a flat tag cloud is a poor first impression, so declaration
+    /// order carries the primary: `rill ops` groups by first tag, `--tag`
+    /// finds across all of them. One concept, no second field.
+    ///
+    /// **Resolved once, here at `register`**, so a registered op always has at
+    /// least one tag and no reader re-derives it into a second answer:
+    ///
+    ///   1. a two-word name PREPENDS its first word — `rbf bump` is at home
+    ///      under `rbf`, and a host's `drift spawn` under `drift`. A host's
+    ///      `(verb, subop)` pair is already one operator with a space in its
+    ///      name (Matryoshka's `seedRegistry` spells it `verb ++ " " ++
+    ///      subop`), so its whole console vocabulary organises itself with no
+    ///      change over there. Christian's own observation, from the RBF beat:
+    ///      his words all prefix `rbf` while only core rill is naked. **The
+    ///      prefix was already a group**; nobody had read it as one. Declared
+    ///      tags follow it, in declaration order — and declaring the first
+    ///      word yourself is refused as a duplicate, because the name already
+    ///      says it;
+    ///   2. else whatever was declared, in order;
+    ///   3. else `UNTAGGED`.
+    ///
+    /// Step 3 rather than a refusal, and the precedent chosen deliberately:
+    /// this follows `ticks`, not `routes`. Routing has no default because a
+    /// wrong answer computes on the wrong thread; a tag is a DISPLAY fact —
+    /// a wrong answer shows a wrong tray — so the registry defaults it and an
+    /// exhaustive audit (`src/tests.zig`) holds rill's OWN table to a declared
+    /// set. Refusing an untaggable name here would instead fail spindrift's
+    /// and Matryoshka's registry init at startup, taking every program in
+    /// those hosts down for a palette that does not exist yet; `register` is
+    /// the one door every host walks through, which is exactly why it must not
+    /// grow a new way to say no.
+    ///
+    /// Free-form rather than an enum because the registry is OPEN — a host
+    /// interns its own vocabulary, and rill may not hold a closed set over
+    /// words it has never heard. What keeps rill's own table honest is the
+    /// audit; what keeps a host honest is that `rill ops --tag untagged`
+    /// names everyone who has not said yet.
+    tags: []const []const u8 = &.{},
     class: OpClass = .pure,
     routes: Routing,
     /// May re-arm itself and evaluate with no input change — see `ticks`
@@ -517,11 +617,27 @@ pub const OpDef = struct {
     /// See `row.zig`.
     row: row.Row = .{},
     eval: *const fn (ctx: *EvalCtx) EvalError!Emit,
+
+    /// The HOME tag — where a grouped listing files this operator. Always
+    /// present on a registered op (`register` guarantees `tags.len > 0`), so
+    /// this is a read and never a decision; an unregistered `OpDef` literal
+    /// has not been through that door and answers `UNTAGGED`.
+    pub fn home(self: *const OpDef) []const u8 {
+        return if (self.tags.len > 0) self.tags[0] else UNTAGGED;
+    }
+
+    /// Does this operator carry `tag`? The whole filter model in one line.
+    pub fn tagged(self: *const OpDef, tag: []const u8) bool {
+        for (self.tags) |t| {
+            if (std.mem.eql(u8, t, tag)) return true;
+        }
+        return false;
+    }
 };
 
 pub const OpId = u32;
 
-pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName, AmbiguousOptionals, TooManyPublishes, BadPublishName } || std.mem.Allocator.Error;
+pub const RegistryError = error{ DuplicateOp, BadTailPort, BadEnumPort, BadStatic, ReservedName, AmbiguousOptionals, TooManyPublishes, BadPublishName, BadTagName, DuplicateTagDoc } || std.mem.Allocator.Error;
 
 /// Words the *syntax* claims, which therefore may not name an operator, an
 /// `as` binding, or a `using` fold. The list lives here because the registry owns the
@@ -568,15 +684,58 @@ pub const Registry = struct {
     types: types.TypeTable,
     ops: std.ArrayListUnmanaged(OpDef) = .empty,
     by_name: std.StringHashMapUnmanaged(OpId) = .empty,
+    /// Tag name → its sentence (`TagDoc`). A side table because the fact is
+    /// per-TAG and not per-op; borrowed slices, like every other string in
+    /// here. Undocumented tags are legal — a host may register words before it
+    /// has written the prose — and `tagDoc` answers null, which is what
+    /// `rill ops` prints nothing for.
+    tag_docs: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// Tag slices this registry ALLOCATED, for the two-word prepend — the one
+    /// case where an op's tags are not the registrant's own memory. Freed in
+    /// `deinit`; nothing else in here owns a byte.
+    owned_tags: std.ArrayListUnmanaged([]const []const u8) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) !Registry {
-        return .{ .gpa = gpa, .types = try types.TypeTable.init(gpa) };
+        var r = Registry{ .gpa = gpa, .types = try types.TypeTable.init(gpa) };
+        errdefer r.deinit();
+        // The fallback explains itself. The registry defines `UNTAGGED`, so
+        // the registry is what says what it means — otherwise every host would
+        // have to describe a tag it never chose.
+        try r.describeTag(.{ .name = UNTAGGED, .doc = UNTAGGED_DOC });
+        return r;
     }
 
     pub fn deinit(self: *Registry) void {
         self.ops.deinit(self.gpa);
         self.by_name.deinit(self.gpa);
+        self.tag_docs.deinit(self.gpa);
+        for (self.owned_tags.items) |t| self.gpa.free(t);
+        self.owned_tags.deinit(self.gpa);
         self.types.deinit();
+    }
+
+    /// Say what a tag means. Same door for rill's own seventeen, a pack's one,
+    /// and a host's — `registerCore` calls it in a loop.
+    ///
+    /// **A second description of the same tag is refused**, and that refusal is
+    /// paid for by evidence: Blade3D's operator groups, left free-form and
+    /// unaudited for years, ended up declaring `Physics` in two places with two
+    /// descriptions, and nothing anywhere said so. Two sentences for one word
+    /// means the palette shows whichever it happened to read last.
+    pub fn describeTag(self: *Registry, t: TagDoc) RegistryError!void {
+        if (t.name.len == 0 or std.mem.indexOfAny(u8, t.name, ". \t") != null) return error.BadTagName;
+        // An empty sentence is worse than no entry: it prints as a heading with
+        // a dash and nothing after it, which reads as a bug rather than as a
+        // gap. Blade3D has groups carrying a Description and no DisplayName,
+        // and vice versa; a half-filled pair is the shape that rots.
+        if (t.doc.len == 0) return error.BadTagName;
+        if (self.tag_docs.contains(t.name)) return error.DuplicateTagDoc;
+        try self.tag_docs.put(self.gpa, t.name, t.doc);
+    }
+
+    /// The tag's sentence, or null when nobody has written one.
+    pub fn tagDoc(self: *const Registry, tag_name: []const u8) ?[]const u8 {
+        return self.tag_docs.get(tag_name);
     }
 
     pub fn register(self: *Registry, def: OpDef) RegistryError!OpId {
@@ -656,8 +815,47 @@ pub const Registry = struct {
                 if (a.optional and !a.kw and b.optional and !b.kw) return error.AmbiguousOptionals;
             }
         }
+        // Tags are resolved HERE and nowhere else — see `OpDef.tags`. One
+        // answer, computed at the one door, so a palette, `rill ops` and a
+        // host's own inventory cannot disagree about where a word lives.
+        var resolved = def;
+        for (resolved.tags, 0..) |t, i| {
+            // One bare word each: `rill ops --tag <name>` takes a single
+            // token and a dot would read as a path. Refused at registration
+            // for the same reason a bad slate name is — this is the last
+            // moment it can be said out loud.
+            if (t.len == 0 or std.mem.indexOfAny(u8, t, ". \t") != null) return error.BadTagName;
+            // …and said ONCE. A repeat doubles the word in every listing and
+            // in every count, for nothing.
+            for (resolved.tags[i + 1 ..]) |u| {
+                if (std.mem.eql(u8, t, u)) return error.BadTagName;
+            }
+        }
+        if (std.mem.indexOfScalar(u8, resolved.name, ' ')) |sp| {
+            // A two-word name is at HOME under its first word, always — the
+            // property that makes a host's whole `(verb, subop)` vocabulary
+            // organise itself. Declared tags follow, so a word can still be
+            // found by what it does as well as by whose family it is in.
+            //
+            // Declaring the first word yourself is refused rather than
+            // silently collapsed: the name already says it, and a registrant
+            // who wrote it meant something the prepend is about to do anyway.
+            const first = resolved.name[0..sp];
+            for (resolved.tags) |t| {
+                if (std.mem.eql(u8, t, first)) return error.BadTagName;
+            }
+            const buf = try self.gpa.alloc([]const u8, resolved.tags.len + 1);
+            errdefer self.gpa.free(buf);
+            buf[0] = first;
+            @memcpy(buf[1..], resolved.tags);
+            try self.owned_tags.append(self.gpa, buf);
+            resolved.tags = buf;
+        } else if (resolved.tags.len == 0) {
+            resolved.tags = &untagged_tags;
+        }
+
         const id: OpId = @intCast(self.ops.items.len);
-        try self.ops.append(self.gpa, def);
+        try self.ops.append(self.gpa, resolved);
         errdefer _ = self.ops.pop();
         try self.by_name.put(self.gpa, def.name, id);
         return id;
@@ -692,6 +890,67 @@ test "registry: tail ports keep their closed shape — last only, string, requir
 
     const optional_prefix = [_]Port{ .{ .name = "gain", .ty = types.Tag.number, .optional = true }, .{ .name = "locator", .ty = str, .tail = true } };
     try std.testing.expectError(error.BadTailPort, reg.register(.{ .name = "c", .inputs = &optional_prefix, .help = "", .routes = .anywhere, .eval = noopEval }));
+}
+
+test "registry: tags are resolved at the one door — the first word is home, declared tags follow, else untagged" {
+    // `OpDef.tags`'s rules, each on a fixture the OTHERS cannot answer. That
+    // separation is the whole gate: a default-derivation checked only against
+    // an op that declares its own tags proves nothing, because the code routes
+    // around the derivation before it is reached.
+    var reg = try Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    const noopEval = struct {
+        fn f(_: *EvalCtx) EvalError!Emit {
+            return Emit.none;
+        }
+    }.f;
+
+    // 1. The two-word default, DECLARING NOTHING — the rbf pack's whole
+    //    story, and Matryoshka's `(verb, subop)` console vocabulary with it.
+    const two = try reg.register(.{ .name = "rbf sample", .help = "", .routes = .anywhere, .eval = noopEval });
+    try std.testing.expectEqual(@as(usize, 1), reg.get(two).tags.len);
+    try std.testing.expectEqualStrings("rbf", reg.get(two).home());
+
+    // 2. Declared tags FOLLOW the derived one, and the first word stays home.
+    //    The fixture declares a tag that would sort BEFORE `rbf`, so a
+    //    resolution that sorted the list instead of preserving order would
+    //    move the home and this would go red.
+    const both = try reg.register(.{ .name = "rbf bump", .tags = &.{ "curve", "space" }, .help = "", .routes = .anywhere, .eval = noopEval });
+    try std.testing.expectEqualStrings("rbf", reg.get(both).home());
+    try std.testing.expectEqual(@as(usize, 3), reg.get(both).tags.len);
+    for ([_][]const u8{ "rbf", "curve", "space" }, reg.get(both).tags) |want, got| {
+        try std.testing.expectEqualStrings(want, got);
+    }
+    // …and it is found by every one of them, which is the filter model.
+    try std.testing.expect(reg.get(both).tagged("rbf"));
+    try std.testing.expect(reg.get(both).tagged("curve"));
+    try std.testing.expect(reg.get(both).tagged("space"));
+    try std.testing.expect(!reg.get(both).tagged("math"));
+
+    // 3. One word, several tags declared: the first is home, in DECLARATION
+    //    order — not alphabetical, or `noise`'s home would be `random` rather
+    //    than `source`.
+    const many = try reg.register(.{ .name = "noise", .tags = &.{ "source", "random" }, .help = "", .routes = .anywhere, .eval = noopEval });
+    try std.testing.expectEqualStrings("source", reg.get(many).home());
+    try std.testing.expect(reg.get(many).tagged("random"));
+
+    // 4. One word, nothing declared: the fallback, named rather than empty.
+    //    A host that has not adopted tags lands its whole vocabulary here and
+    //    `rill ops --tag untagged` is how it finds out.
+    const one = try reg.register(.{ .name = "spawn", .help = "", .routes = .anywhere, .eval = noopEval });
+    try std.testing.expectEqualStrings(UNTAGGED, reg.get(one).home());
+
+    // …and a registered op ALWAYS has at least one. No reader re-derives this.
+    for (reg.ops.items) |def| try std.testing.expect(def.tags.len > 0);
+
+    // A tag is one bare word — a space or a dot is refused where it is said,
+    // not discovered by a palette drawing a filter with a dot in it.
+    try std.testing.expectError(error.BadTagName, reg.register(.{ .name = "a", .tags = &.{"two words"}, .help = "", .routes = .anywhere, .eval = noopEval }));
+    try std.testing.expectError(error.BadTagName, reg.register(.{ .name = "b", .tags = &.{"row.motion"}, .help = "", .routes = .anywhere, .eval = noopEval }));
+    // …said once…
+    try std.testing.expectError(error.BadTagName, reg.register(.{ .name = "c", .tags = &.{ "math", "math" }, .help = "", .routes = .anywhere, .eval = noopEval }));
+    // …and a two-word name may not restate its own first word.
+    try std.testing.expectError(error.BadTagName, reg.register(.{ .name = "rbf fit", .tags = &.{"rbf"}, .help = "", .routes = .anywhere, .eval = noopEval }));
 }
 
 test "registry: register/find, duplicate rejected" {

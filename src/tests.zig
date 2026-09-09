@@ -3249,6 +3249,242 @@ test "a ticking op is never pure" {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The tag audit (2026-09-09, on Christian's *"We are going to need a palette…
+// With functional groups"*, then his reframe: *"I guess we could view them as
+// filters huh. So an operator could exist in multiple groups. Think of them as
+// #tags."*). `OpDef.tags` says what an operator is FOR; the FIRST tag is its
+// home, and a grouped listing files it there.
+//
+// Defaulted plus audited, like `ticks` and unlike `routes`: a wrong tag shows
+// a wrong tray, not a wrong answer, so the registry resolves at least one for
+// every op and this holds RILL'S OWN table to a closed set. The registry may
+// not close it — a host interns its own vocabulary — so the closure lives
+// here, where rill's table is the only thing in scope.
+//
+// **Over every tag on every op, not just the home**, and both ways. Free-form
+// strings with several per operator is precisely how Blade3D ended up with
+// `Contraints` sitting unnoticed for years — Christian's own reaction to it
+// was *"that's fast finger typing at work"* — and a typo on a SECOND tag is
+// even quieter than one on a first, because the operator still files
+// correctly and only its findability is gone.
+// ---------------------------------------------------------------------------
+
+/// The seventeen. Thirteen are somebody's home; `constant`, `gate`,
+/// `oscillator` and `random` are pure cross-cuts, and `time` is both. Read
+/// aloud before naming; the rejected names and the ops that sat awkwardly are
+/// in `docs/implementation-notes.md`.
+const core_tags = [_][]const u8{
+    "array", // over many values at once
+    "constant", // a value that never changes
+    "contract", // a shape, promised
+    "curve", // given t, give me a value along a shape
+    "envelope", // a value in motion, over fed time
+    "event", // noticing that something happened, and counting it
+    "flow", // which way does this value go, and does it go at all
+    "gate", // may swallow an arrival
+    "logic", // comparison, and the booleans that combine it
+    "math", // arithmetic and the elementary functions
+    "oscillator", // goes up and down on its own
+    "random", // variation you did not author
+    "record", // named fields
+    "sink", // where a value leaves the program
+    "source", // makes a value out of the clock, a seed, or nothing
+    "space", // positions and directions
+    "time", // fed time, in every form
+};
+
+test "every core op carries tags, and only these seventeen exist" {
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    // One way: every registered op has at least one tag, none of them fell
+    // through to the host fallback, and EVERY tag it carries is on the roster.
+    for (reg.ops.items) |def| {
+        if (def.tags.len == 0) {
+            std.debug.print("'{s}' carries no tags — `register` must never leave an op bare\n", .{def.name});
+            return error.TestUnexpectedResult;
+        }
+        for (def.tags) |t| {
+            if (std.mem.eql(u8, t, rill.registry.UNTAGGED)) {
+                std.debug.print("'{s}' is untagged — rill's own table declares, it does not fall back\n", .{def.name});
+                return error.TestUnexpectedResult;
+            }
+            const listed = for (core_tags) |g| {
+                if (std.mem.eql(u8, g, t)) break true;
+            } else false;
+            if (!listed) {
+                std.debug.print("'{s}' carries tag '{s}', which is not one of the seventeen\n", .{ def.name, t });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    // The other way: every tag on the roster is carried by at least one op. A
+    // tag emptied by a re-tagging is a heading `rill ops` would never print
+    // and a filter a palette would offer that finds nothing.
+    for (core_tags) |g| {
+        var n: usize = 0;
+        for (reg.ops.items) |def| {
+            if (def.tagged(g)) n += 1;
+        }
+        if (n == 0) {
+            std.debug.print("tag '{s}' is on the roster and nothing carries it\n", .{g});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    // …and the roster is sorted, because `rill ops` prints tags in sorted
+    // order and a reader comparing the two should not have to re-sort one.
+    for (core_tags[0 .. core_tags.len - 1], core_tags[1..]) |a, b| {
+        if (!std.mem.lessThan(u8, a, b)) {
+            std.debug.print("the tag roster is out of order at '{s}' / '{s}'\n", .{ a, b });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "the cross-cutting tags cut across, and the home is declaration order" {
+    // The filter model's own claim, which the roster audit above cannot make:
+    // a tag that only ever appears on operators sharing a home is a sub-name
+    // for that home, not a cross-cut, and it should have been prose in the
+    // home's sentence instead. Each of these is checked to span at least two
+    // homes — measured, not asserted from the table it is auditing.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    for ([_][]const u8{ "gate", "oscillator", "random", "time" }) |cross| {
+        var homes: usize = 0;
+        var seen: [8][]const u8 = undefined;
+        for (reg.ops.items) |def| {
+            if (!def.tagged(cross)) continue;
+            const known = for (seen[0..homes]) |h| {
+                if (std.mem.eql(u8, h, def.home())) break true;
+            } else false;
+            if (!known and homes < seen.len) {
+                seen[homes] = def.home();
+                homes += 1;
+            }
+        }
+        if (homes < 2) {
+            std.debug.print("'{s}' is carried only by operators at home in one place — it is a sub-name, not a cross-cut\n", .{cross});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    // `constant` is the deliberate exception and is pinned as one: all three
+    // of `const`, `pi` and `tau` are at home in `source`. It earns its place
+    // by answering a question `source` cannot — `source` also holds `clock`,
+    // `lfo` and `noise`, which are anything but constant — so it is a
+    // NARROWING, not a cross-cut, and the loop above must not be relaxed to
+    // let it through.
+    var homes: usize = 0;
+    for (reg.ops.items) |def| {
+        if (def.tagged("constant") and !std.mem.eql(u8, def.home(), "source")) homes += 1;
+    }
+    try testing.expectEqual(@as(usize, 0), homes);
+
+    // The home is DECLARATION order and never alphabetical: `noise` declares
+    // `source` then `random`, and a resolution that sorted would file it
+    // under `random` — where a reader looking for a noise source would not
+    // think to look. The sharpest single fixture for the ordering rule.
+    const noise = reg.get(reg.find("noise").?);
+    try testing.expectEqualStrings("source", noise.home());
+    try testing.expect(noise.tagged("random"));
+    try testing.expect(std.mem.lessThan(u8, "random", "source")); // …and it WOULD have moved
+
+    // …and an operator is found by every tag it carries, which is the whole
+    // model: `lfo` answers to `source`, to `oscillator` and to `time`.
+    const lfo = reg.get(reg.find("lfo").?);
+    try testing.expect(lfo.tagged("source") and lfo.tagged("oscillator") and lfo.tagged("time"));
+    try testing.expectEqualStrings("source", lfo.home());
+}
+
+test "every tag rill declares has a sentence, and the two tables agree" {
+    // The `{name, doc}` half, and the evidence it was paid for is Christian's
+    // own: Blade3D's `OperatorGroup` list, free-form and unaudited for years,
+    // ended up with `Physics` declared twice, `Constraints` misspelled
+    // `Contraints`, and several groups carrying a Description with no
+    // DisplayName. Every one of those is a drift this gate refuses.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+
+    // Every tag an operator CARRIES has a sentence — a filter with no tooltip
+    // is the failure the pair exists to prevent.
+    for (reg.ops.items) |def| {
+        for (def.tags) |t| {
+            const doc = reg.tagDoc(t) orelse {
+                std.debug.print("tag '{s}' (from '{s}') has no sentence\n", .{ t, def.name });
+                return error.TestUnexpectedResult;
+            };
+            if (doc.len == 0) {
+                std.debug.print("tag '{s}' has an EMPTY sentence\n", .{t});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    // …and the two tables in `ops.zig` name the same seventeen. The roster
+    // above is what the audit closes over; `ops.TAGS` is what the registry is
+    // told. Two lists that could disagree are a `Contraints` waiting to
+    // happen, so they are checked against each other, both ways.
+    try testing.expectEqual(core_tags.len, rill.ops.TAGS.len);
+    for (core_tags) |g| {
+        const listed = for (rill.ops.TAGS) |gd| {
+            if (std.mem.eql(u8, gd.name, g)) break true;
+        } else false;
+        if (!listed) {
+            std.debug.print("tag '{s}' is on the audit roster and `ops.TAGS` does not describe it\n", .{g});
+            return error.TestUnexpectedResult;
+        }
+    }
+    for (rill.ops.TAGS) |gd| {
+        const listed = for (core_tags) |g| {
+            if (std.mem.eql(u8, gd.name, g)) break true;
+        } else false;
+        if (!listed) {
+            std.debug.print("`ops.TAGS` describes '{s}', which is not on the audit roster\n", .{gd.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    // A second sentence for one tag means the palette shows whichever it read
+    // last — Blade3D's two `Physics` groups, exactly. Refused at the door, so
+    // a copy-pasted entry cannot land quietly.
+    try testing.expectError(error.DuplicateTagDoc, reg.describeTag(.{ .name = "math", .doc = "something else" }));
+    // …and a half-filled pair is refused too, in both directions.
+    try testing.expectError(error.BadTagName, reg.describeTag(.{ .name = "brandnew", .doc = "" }));
+    try testing.expectError(error.BadTagName, reg.describeTag(.{ .name = "", .doc = "a sentence" }));
+    try testing.expectError(error.BadTagName, reg.describeTag(.{ .name = "two words", .doc = "a sentence" }));
+}
+
+test "the rbf pack tags itself: two words, nothing declared" {
+    // The prepend earning its keep on the only pack in the repo with a
+    // two-word name. `registerRbf` declares NO tags; both words must still be
+    // at home under `rbf`, because that is the property that makes
+    // matryoshka's whole `(verb, subop)` console vocabulary organise itself
+    // with no change over there. Checked against the PACK rather than a
+    // fixture, so a `.tags` added to `ops_rbf.zig` would route around the
+    // derivation and this gate would stop watching it — see the note there.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    try rill.registerRbf(&reg);
+    for ([_][]const u8{ "rbf through", "rbf bump" }) |name| {
+        const id = reg.find(name) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings("rbf", reg.get(id).home());
+        try testing.expectEqual(@as(usize, 1), reg.get(id).tags.len);
+    }
+    // …and `rbf` is deliberately NOT one of the seventeen: the audit above
+    // covers `registerCore` only, and a pack is a separate registration call
+    // for a host that wants it. If this ever fails, the pack has been folded
+    // into the core table and the audit needs to say so.
+    for (core_tags) |g| try testing.expect(!std.mem.eql(u8, g, "rbf"));
+}
+
 test "an op that emits occurrences is never cacheable" {
     // The structural half of the audit, which needs no table: emitting an
     // occurrence means the answer depends on arrival or history, and neither

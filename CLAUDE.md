@@ -27,14 +27,17 @@ words — a second copy drifts, and a drifted stub makes two tools
 disagree about what a legal program is while both stay green.
 
     zig build cli -- fmt --host-row -          # or just `rill`, on PATH
+    rill ops --tag curve                       # the vocabulary, by tag
 
 `zig build` also produces **`rill`** (`src/cli.zig`), the binary the
 VSCode extension in `editors/vscode` calls for Format Document and for
 squiggles. `rill fmt -` prints the canon; `rill check --json -` prints
-one diagnostics object. Exit 0 / 64 (bad command line) / 65 (does not
-parse, with EMPTY stdout — writing a partial program is how a formatter
-corrupts a file). Install it the way the extension is installed, as a
-symlink, so `zig build` updates what the editor runs:
+one diagnostics object; `rill ops` prints the registry by tag, reads no
+stdin, and is the third subcommand as of 2026-09-09. Exit 0 / 64 (bad
+command line, an unknown `--tag` included) / 65 (does not parse, with
+EMPTY stdout — writing a partial program is how a formatter corrupts a
+file). Install it the way the extension is installed, as a symlink, so
+`zig build` updates what the editor runs:
 
     ln -sf "$PWD/zig-out/bin/rill" ~/.local/bin/rill
 

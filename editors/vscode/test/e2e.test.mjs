@@ -208,3 +208,37 @@ test('X5: a file that does not parse is left alone — 65, and no text', { skip:
   assert.equal(chk.status, 'diagnostics');
   assert.equal(chk.diagnostics[0].code, 'parse');
 });
+
+test('X6: `rill ops` answers with stdin still open — it reads no program', { skip: SKIP }, async () => {
+  // `ops`'s input is the REGISTRY, so `main` puts it in the same arm as
+  // `help` and `version` and never reads stdin. That arm is unreachable from
+  // rill's own unit tests — `execute` is handed whatever `main` already read
+  // — and this suite is the only harness in the repo that runs the binary as
+  // a PROCESS, which is the only way to observe a blocking read.
+  //
+  // So: stdin is a pipe left open and empty. A build that read it sits here
+  // forever, which at a terminal is `rill ops` appearing to hang.
+  const { spawn } = await import('node:child_process');
+  const child = spawn(BINARY, ['ops', '--tag', 'record'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  const code = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('`rill ops` blocked on stdin — it must not read a program'));
+    }, 5000);
+    child.on('exit', (c) => { clearTimeout(timer); resolve(c); });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+  child.stdin.destroy();
+  assert.equal(code, 0);
+  // …and it really printed the group, so a build that exited 0 saying nothing
+  // could not pass this by being fast about it.
+  assert.match(out, /^record \(3\) — named fields/);
+  assert.equal(out.split('\n').filter((l) => l.startsWith('  ')).length, 3);
+});
+// MUTATION: this gate stands over the BINARY, like X1/X2/X3/X5, so its
+// mutation is in `rill/src/cli.zig` — `main`'s `const src = switch (cmd)`
+// arm goes back to `.help, .version => ""`, dropping `.ops`.
+// OBSERVED: red — the child never exits and the gate fails on the 5 s
+// timeout with "`rill ops` blocked on stdin".
