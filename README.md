@@ -42,7 +42,11 @@ lane**, so the colourist's slider is untouched and comes back — two writers on
 one lane sum rather than race:
 
 ```rill
-plane.input.mouse.lmb | rose_above 0.5 | kick 15ms 150ms | mul 2 | write plane.mod.render.grade.exposure
+plane.input.mouse.lmb
+    | rose_above 0.5
+    | kick 15ms 150ms
+    | mul 2
+    | write plane.mod.render.grade.exposure
 ```
 
 And a camera that tows itself back onto a spline is seven lines. `along` walks

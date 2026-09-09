@@ -9967,10 +9967,21 @@ const shared_rows = [_][]const u8{
 };
 
 /// Split rill source into STATEMENTS — a line plus any continuation lines
-/// (`| …` at the head), blanks and comments dropped, every line trimmed.
-/// Trimmed because indentation is layout: the manual indents a continued
-/// pipeline under its head and the book does not, and they are still the same
-/// program.
+/// (`| …` at the head), blanks and comments dropped, every line trimmed, and
+/// the continuations JOINED BACK ONTO ONE LINE.
+///
+/// Layout is not identity. Indentation was the first half of that: the manual
+/// indents a continued pipeline under its head and the book does not, and
+/// they are still the same program. The WIDTH CANON (2026-09-09) made the
+/// line break the second half — the printer breaks a statement past 88
+/// columns and leaves it alone under, so the same program is one line here
+/// and four there depending on how long its paths happen to be. Joining with
+/// a space rebuilds the flat spelling exactly, because a continuation always
+/// begins `| ` and the canon puts one space either side of a pipe.
+///
+/// (Before this, a `\n` was kept and `shared_rows` held flat one-liners — so
+/// bringing the manual to the canon would have "drifted" every wrapped row
+/// away from a book cell that had not changed at all.)
 fn addStatements(arena: std.mem.Allocator, src: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
     var cur: std.ArrayListUnmanaged(u8) = .empty;
     var have = false;
@@ -9979,7 +9990,7 @@ fn addStatements(arena: std.mem.Allocator, src: []const u8, out: *std.ArrayListU
         const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0 or std.mem.startsWith(u8, line, "//")) continue;
         if (line[0] == '|' and have) {
-            try cur.append(arena, '\n');
+            try cur.append(arena, ' ');
             try cur.appendSlice(arena, line);
             continue;
         }
@@ -14013,4 +14024,257 @@ test "R3 G-refuse: a signature wraps between ports, and says so when it does not
         \\    (0..500)
         \\) = rate
     , "expected ',' or ')'", 3, 5);
+}
+
+test "R3 G-stack: eight elements stay stacked, nine pack" {
+    // THE THRESHOLD, and both halves of it, because either alone survives a
+    // one-sided policy: "always stack" passes the first block and fails the
+    // second, "always pack" the other way round.
+    //
+    // Eight is Christian's *"five you wouldn't"* with headroom. The two
+    // fixtures are the same numbers to the same width, one element apart, so
+    // nothing but the COUNT can be what decides — which is the claim.
+    //
+    // Mutations, both executed:
+    //   · `span_stack_max = 0` — the eight pack, first block red.
+    //   · `span_stack_max = 1000` — the nine stack, second block red.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const stack8 =
+        \\[0.0000000000, 0.1250000000, 0.2500000000, 0.3750000000, 0.5000000000, 0.6250000000, 0.7500000000, 0.8750000000] as curve
+        \\
+    ;
+    const stack8_want =
+        \\[
+        \\    0.0000000000,
+        \\    0.1250000000,
+        \\    0.2500000000,
+        \\    0.3750000000,
+        \\    0.5000000000,
+        \\    0.6250000000,
+        \\    0.7500000000,
+        \\    0.8750000000
+        \\] as curve
+        \\
+    ;
+    const pack9 =
+        \\[0.0000000000, 0.1111111111, 0.2222222222, 0.3333333333, 0.4444444444, 0.5555555556, 0.6666666667, 0.7777777778, 0.8888888889] as curve
+        \\
+    ;
+    const pack9_want =
+        \\[
+        \\    0.0000000000, 0.1111111111, 0.2222222222,
+        \\    0.3333333333, 0.4444444444, 0.5555555556,
+        \\    0.6666666667, 0.7777777778, 0.8888888889
+        \\] as curve
+        \\
+    ;
+    try expectPrintedStable(&reg, stack8, stack8_want);
+    try expectPrintedStable(&reg, pack9, pack9_want);
+}
+
+test "R3 G-grid: the shape follows the count — a square, then a divisor, then a fill" {
+    // Christian, 2026-09-09: *"A hundred records you'd want to pack, five you
+    // wouldn't, and maybe if we know the denominator, we can be smart about
+    // how many per row. a series of 16 looks good as 4x4, or 9 look good as
+    // 3x3."* So the axis is the COUNT, and the three branches are tried in
+    // that order — a square beats a fill because 16 IS 4×4, not because four
+    // is the most that happened to fit.
+    //
+    // Every fixture is chosen so the branch under test actually decides. At
+    // this width sixteen six-wide numbers fit TEN to a row, so 4×4 is a real
+    // choice over the fill and not the same answer twice; twelve seven-wide
+    // fit nine to a row, so 6×2 is a real choice over 9+3. A grid mutation
+    // tested on a count that takes the ragged path proves nothing.
+    //
+    // Mutations, three, all executed:
+    //   · delete the perfect-square branch from `gridFor` — 16 comes back
+    //     ten to a row and the first block goes red.
+    //   · delete the divisor loop — 12 comes back nine-and-three, ragged, and
+    //     the third block goes red.
+    //   · ignore `Grid.pad` in `breakSpan` — the varying-width block loses
+    //     its column and the last block goes red.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+
+    // A PERFECT SQUARE: 16 → 4×4, 9 → 3×3. His two examples, both of them.
+    const square16 =
+        \\[0.0000, 0.0625, 0.1250, 0.1875, 0.2500, 0.3125, 0.3750, 0.4375, 0.5000, 0.5625, 0.6250, 0.6875, 0.7500, 0.8125, 0.8750, 0.9375] as curve
+        \\
+    ;
+    const square16_want =
+        \\[
+        \\    0.0000, 0.0625, 0.1250, 0.1875,
+        \\    0.2500, 0.3125, 0.3750, 0.4375,
+        \\    0.5000, 0.5625, 0.6250, 0.6875,
+        \\    0.7500, 0.8125, 0.8750, 0.9375
+        \\] as curve
+        \\
+    ;
+    const square9 =
+        \\[0.000000, 0.111111, 0.222222, 0.333333, 0.444444, 0.555556, 0.666667, 0.777778, 0.888889] as curve
+        \\
+    ;
+    const square9_want =
+        \\[
+        \\    0.000000, 0.111111, 0.222222,
+        \\    0.333333, 0.444444, 0.555556,
+        \\    0.666667, 0.777778, 0.888889
+        \\] as curve
+        \\
+    ;
+    try expectPrintedStable(&reg, square16, square16_want);
+    try expectPrintedStable(&reg, square9, square9_want);
+
+    // NOT SQUARE: the largest exact divisor that fits, so the block closes
+    // square with no ragged tail. Twelve fit nine to a row; six is the
+    // largest divisor under that, and 6×2 is what a reader can count.
+    const divisor12 =
+        \\[0.00000, 0.08333, 0.16667, 0.25000, 0.33333, 0.41667, 0.50000, 0.58333, 0.66667, 0.75000, 0.83333, 0.91667] as curve
+        \\
+    ;
+    const divisor12_want =
+        \\[
+        \\    0.00000, 0.08333, 0.16667, 0.25000, 0.33333, 0.41667,
+        \\    0.50000, 0.58333, 0.66667, 0.75000, 0.83333, 0.91667
+        \\] as curve
+        \\
+    ;
+    try expectPrintedStable(&reg, divisor12, divisor12_want);
+
+    // PRIME: nothing divides it, so it fills as far as it fits — and NOT to
+    // one per line, which is the absurd answer a divisor-only rule gives (13
+    // is prime, so its only divisors are 1 and 13).
+    const prime13 =
+        \\[0.00000, 0.07692, 0.15385, 0.23077, 0.30769, 0.38462, 0.46154, 0.53846, 0.61538, 0.69231, 0.76923, 0.84615, 0.92308] as curve
+        \\
+    ;
+    const prime13_want =
+        \\[
+        \\    0.00000, 0.07692, 0.15385, 0.23077, 0.30769, 0.38462, 0.46154, 0.53846, 0.61538,
+        \\    0.69231, 0.76923, 0.84615, 0.92308
+        \\] as curve
+        \\
+    ;
+    try expectPrintedStable(&reg, prime13, prime13_want);
+    try testing.expect(std.mem.indexOf(u8, prime13_want, "0.00000, 0.07692") != null);
+
+    // PADDING is what makes a grid a grid, and it is RIGHT-aligned: a ramp's
+    // numbers line up on the digit that says how big they are, and the comma
+    // stays glued to the value it closes. Padding on the right would put
+    // `0.5      ,` in the file — a column of commas nobody asked for.
+    //
+    // Nothing in the 47-file corpus reaches this: its three ramps are all 121
+    // elements, whose only divisors are 11 and 121, and eleven columns do not
+    // fit — so all three take the ragged path and would leave this branch
+    // untested. Hence a fixture with twelve elements of eight different
+    // widths.
+    const varying =
+        \\[0.500000, 0.2500000, 0.12500000, 0.062500, 0.03125, 0.015625, 0.0078125, 0.00390625, 0.5, 0.25, 0.125, 0.0625] as curve
+        \\
+    ;
+    const varying_want =
+        \\[
+        \\      0.500000,  0.2500000, 0.12500000,   0.062500,    0.03125,   0.015625,
+        \\     0.0078125, 0.00390625,        0.5,       0.25,      0.125,     0.0625
+        \\] as curve
+        \\
+    ;
+    try expectPrintedStable(&reg, varying, varying_want);
+}
+
+// ---------------------------------------------------------------------------
+// R3 G-doc — every printed example is a fixed point of the printer.
+//
+// The manuals already PARSE (see "the manuals parse", above). That gate says
+// an example compiles; this one says it is written the way `rill fmt` writes
+// it — parse it, print it, get the same bytes back.
+//
+// The argument is the one that restretched these files to four-space bodies a
+// beat ago, and the width canon re-opened it: a reader who copies an example
+// into a file and saves it must not watch it move. A doc that teaches a shape
+// the printer will not emit is wrong the first time anyone round-trips it.
+// ---------------------------------------------------------------------------
+
+/// A fence that is deliberately NOT a canonical program, and why.
+///
+/// Named, never silent: a skipped example is an example nobody is checking,
+/// and the whole point of this gate is that "I looked at it" is not a gate.
+/// `needle` must appear in exactly one fence of `doc`.
+const DocFragment = struct {
+    doc: []const u8,
+    needle: []const u8,
+    why: []const u8,
+};
+
+const doc_fragments = [_]DocFragment{};
+
+fn expectDocCanon(doc: []const u8, reg: *rill.Registry, doc_name: []const u8) !usize {
+    var count: usize = 0;
+    var bad: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, doc, pos, "```rill\n")) |start| {
+        const body_start = start + "```rill\n".len;
+        const end = std.mem.indexOfPos(u8, doc, body_start, "```") orelse return error.TestUnexpectedResult;
+        const src = doc[body_start..end];
+        pos = end;
+
+        var exempt = false;
+        for (doc_fragments) |f| {
+            if (!std.mem.eql(u8, f.doc, doc_name)) continue;
+            if (std.mem.indexOf(u8, src, f.needle) != null) exempt = true;
+        }
+        if (exempt) continue;
+        count += 1;
+
+        var diag = rill.Diag{};
+        var prog = rill.parse(testing.allocator, reg, "doc", src, &diag) catch |err| {
+            std.debug.print("{s}: example does not parse — {s} ({d}:{d})\n{s}\n", .{ doc_name, diag.msg(), diag.line, diag.col, src });
+            return err;
+        };
+        defer prog.deinit();
+        const out = try rill.printScript(testing.allocator, prog.script.?);
+        defer testing.allocator.free(out);
+        if (!std.mem.eql(u8, src, out)) {
+            bad += 1;
+            // Line number of the fence, so the fix is one jump away.
+            var line: usize = 1;
+            for (doc[0..start]) |c| {
+                if (c == '\n') line += 1;
+            }
+            std.debug.print("\n--- {s}:{d} is not what the printer writes ---\n{s}--- printed ---\n{s}", .{ doc_name, line, src, out });
+        }
+    }
+    if (bad > 0) {
+        std.debug.print("\n{s}: {d} of {d} fences are not fixed points\n", .{ doc_name, bad, count });
+        return error.TestUnexpectedResult;
+    }
+    return count;
+}
+
+test "R3 G-doc: every printed example is written the way the printer writes it" {
+    // Mutation that bites: put a 90-column chain back into `rill-manual.md`'s
+    // §6 — any of the ones this beat shortened. It parses, so the older gate
+    // stays green; this one reports the fence and its line and goes red.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const human = try expectDocCanon(@embedFile("rill-manual.md"), &reg, "rill-manual.md");
+    const agent = try expectDocCanon(@embedFile("rill-for-agents.md"), &reg, "rill-for-agents.md");
+    const readme = try expectDocCanon(@embedFile("README.md"), &reg, "README.md");
+    const rbf_doc = try expectDocCanon(@embedFile("rbf-words.md"), &reg, "rbf-words.md");
+    // Counted, both ways, for the reason the parse gate counts: a fence
+    // rename would make this pass vacuously. The same four numbers the parse
+    // gate pins, and deliberately the same four docs — those are the ones a
+    // reader copies from. `docs/rill-spec.md`, `namespaces.md`, `slate.md`
+    // and the campaign notes hold sixteen more fences between them and are
+    // NOT gated: they are not embedded in the build, and they are records of
+    // decisions rather than teaching material.
+    try testing.expectEqual(@as(usize, 56), human);
+    try testing.expectEqual(@as(usize, 8), agent);
+    try testing.expectEqual(@as(usize, 4), readme);
+    try testing.expectEqual(@as(usize, 3), rbf_doc);
+    // NOTHING is exempt. `doc_fragments` is empty and that is a measurement:
+    // all 71 fences in the four docs are whole programs, so not one of them
+    // needed the escape hatch.
+    try testing.expectEqual(@as(usize, 0), doc_fragments.len);
 }

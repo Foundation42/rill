@@ -117,7 +117,7 @@ A bare name in argument position pulls that stream in (fan-in), and
 ```rill
 plane.player.health as hp
 plane.player.mana as mp
-{ health: hp, mana: mp } | write plane.ui.vitals
+{health: hp, mana: mp} | write plane.ui.vitals
 ```
 
 Records project with `.field` — `vitals.health` — and the sugar
@@ -159,12 +159,12 @@ value decides **what**:
 > because something flowed.**
 
 ```rill
-plane.hp | clamp 0 100 | write plane.ui.bar                // what's flowing
-plane.signals.horn | write plane.gate.drawbridge_target 1  // this, because something flowed
+plane.hp | clamp 0 100 | write plane.ui.bar  // what's flowing
+plane.signals.horn | write plane.gate.drawbridge_target 1  // this, because it flowed
 ```
 
 ```rill
-plane.enemies | rose_above 0 | notify plane.signals.horn { kind: "approach" }
+plane.enemies | rose_above 0 | notify plane.signals.horn {kind: "approach"}
 ```
 
 (Two blocks = two programs, and the rule is worth learning right here:
@@ -206,9 +206,7 @@ To do a side effect *and* continue, branch with `also { … }`:
 ```rill
 using plane.defense as :d
 
-plane.gate.enemy_count | rose_above 0
-  | also { inc :d.sightings 1 }
-  | notify :d.alerts
+plane.gate.enemy_count | rose_above 0 | also { inc :d.sightings 1 } | notify :d.alerts
 ```
 
 The block's branches are fed the in-flowing value; the main stream
@@ -438,7 +436,10 @@ operator's own state is not a path.
 plane.sensors.hearth.heat | ease 400ms | write plane.lights.hearth.level
 plane.render.grade.exposure_target | ramp 2s | write plane.render.grade.exposure
 once 1 | ramp 2s from 0 | write plane.render.grade.exposure
-plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
+plane.sensors.gate.nearest_distance
+    | diff
+    | dropped_below -2
+    | notify plane.signals.charge
 plane.field.rumble | abs | ease 20ms down 400ms | write plane.ui.vu
 ```
 
@@ -472,7 +473,11 @@ plane.events.hit | kick 20ms 400ms | write plane.ui.hit_flash
 plane.events.impact | kick 10ms 300ms | mul 0.4 | write plane.camera.shake_amount
 plane.events.hit | kick 20ms 400ms | shape out | write plane.ui.hit_flash
 plane.input.key_c | adsr 10ms 80ms 0.7 400ms | write plane.audio.voice.gain
-plane.sensors.gate.contacts | len | > 0 | adsr 200ms 400ms 0.6 2s | write plane.lights.alert.level
+plane.sensors.gate.contacts
+    | len
+    | > 0
+    | adsr 200ms 400ms 0.6 2s
+    | write plane.lights.alert.level
 ```
 
 **A retrigger restarts from where it is, never from zero.** Hits arriving
@@ -532,8 +537,14 @@ emits one and `stats` consumes one, so the literal is the missing half
 of something that existed rather than a new thing.
 
 ```rill
-plane.world.hour | div 6 | floor | choose [0.2, 1, 1, 0.4] | write plane.render.grade.exposure
-plane.stage.leg | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] | write plane.lights.key.pos
+plane.world.hour
+    | div 6
+    | floor
+    | choose [0.2, 1, 1, 0.4]
+    | write plane.render.grade.exposure
+plane.stage.leg
+    | choose [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}]
+    | write plane.lights.key.pos
 plane.gpu.traversal_ms | window 10s | nth 0 | write plane.ui.oldest_sample
 ```
 
@@ -573,7 +584,9 @@ One thing, one spelling.
 *walks*. Each rousing emits the next element:
 
 ```rill
-plane.input.key_up | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] loop | write plane.lights.key.pos
+plane.input.key_up
+    | step [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}] loop
+    | write plane.lights.key.pos
 plane.music.beat | step [60, 64, 67, 72] loop | notify plane.audio.note
 plane.events.idle | step plane.ui.hints random seed 3 max 5 | write plane.ui.hint
 ```
@@ -656,8 +669,10 @@ argument or is a field read.
 array-valued stream and they mean different things:
 
 ```rill
-plane.gpu.traversal_ms | window 10s | where plane.debug.on   // the window, while debug is on
-plane.gpu.traversal_ms | window 10s | keep (> 0)             // the readings above zero
+// the window, while debug is on
+plane.gpu.traversal_ms | window 10s | where plane.debug.on
+// the readings above zero
+plane.gpu.traversal_ms | window 10s | keep (> 0)
 ```
 
 That is why there are two words: one word dispatched by input kind would
@@ -669,7 +684,9 @@ have to guess between two independent questions.
 plane.sensors.gate.contacts | sort by (.distance) | first | .id | write plane.ui.nearest
 plane.sensors.gate.contacts | sort by (.threat) desc | take 3 | write plane.ui.threats
 plane.player.{health, mana} | window 10s | transpose | write plane.ui.vitals
-plane.door.openness | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}] | write plane.lights.key.pos
+plane.door.openness
+    | along [{x: 0, y: 3, z: 0}, {x: 2, y: 3, z: 1}, {x: 4, y: 3, z: 0}]
+    | write plane.lights.key.pos
 ```
 
 | op | does |
@@ -740,7 +757,9 @@ assertion, not a branch. Two words, because there are two different
 promises and you should say which one you are buying.
 
 ```rill
-plane.sensors.gate.nearest | match {id: string, distance: number} | write plane.ui.threat
+plane.sensors.gate.nearest
+    | match {id: string, distance: number}
+    | write plane.ui.threat
 plane.render.grade | expect {exposure: number, contrast: number} | write plane.ui.grade
 plane.window.samples | match [number] | stats | write plane.ui.load
 ```
@@ -798,7 +817,9 @@ plane.entities.raider.pos | within plane.gate.pos 10 | write plane.signals.alarm
 plane.car.pos | nearest plane.track.knots | write plane.ui.lap_progress
 plane.guard.facing | dot plane.guard.to_player | above 0.87 0.8 | write plane.guard.sees
 plane.guard.facing | angle plane.guard.to_player | write plane.guard.off_axis
-plane.player.pos | inside {x: -20, y: 0, z: -20} {x: 20, y: 8, z: 20} | write plane.signals.in_courtyard
+plane.player.pos
+    | inside {x: -20, y: 0, z: -20} {x: 20, y: 8, z: 20}
+    | write plane.signals.in_courtyard
 ```
 
 | op | does |
@@ -938,7 +959,7 @@ of trusting a counter:
 
 ```rill
 plane.signals.horn | tag @tom #in-courtyard
-plane.tags.in-courtyard.count | rose_above 29 | notify plane.signals.wall_formed { n: 30 }
+plane.tags.in-courtyard.count | rose_above 29 | notify plane.signals.wall_formed {n: 30}
 ```
 
 Unpiped, `tag @tom #garrison` fires once at tick 0 — the console
@@ -957,9 +978,10 @@ takes one, naming the population.
 A **field** is a scalar over space. A **cast** deposits into it:
 
 ```rill
-plane.gate.enemy_count | rose_above 0
-  | also { cast $alarm 1.0 radius 30 at plane.sensors.gate.pos decay 2s }
-  | notify plane.defense.alerts
+plane.gate.enemy_count
+    | rose_above 0
+    | also { cast $alarm 1.0 radius 30 at plane.sensors.gate.pos decay 2s }
+    | notify plane.defense.alerts
 ```
 
 The model, in three sentences. Every caster owns a bag of deposits;
@@ -1273,7 +1295,9 @@ plane.damage | where (> 0) | inc plane.stats.hits 1
 **The sentinel** — sound the horn when the watch sees anyone:
 
 ```rill
-plane.sensors.tower.visible_enemies | rose_above 0 | notify plane.signals.horn { kind: "approach" }
+plane.sensors.tower.visible_enemies
+    | rose_above 0
+    | notify plane.signals.horn {kind: "approach"}
 ```
 
 **The tally** — count events without reading what you write:
@@ -1332,7 +1356,9 @@ plane.sensors.gate.contacts | len | write plane.ui.contacts
 and pin what a program reads:
 
 ```rill
-plane.sensors.gate.contacts | match [{id: string, distance: number}] | write plane.ui.threats
+plane.sensors.gate.contacts
+    | match [{id: string, distance: number}]
+    | write plane.ui.threats
 ```
 
 **Flash on hit** — an event into a shape, with nothing invented in
@@ -1345,7 +1371,10 @@ plane.events.hit | kick 20ms 400ms | write plane.ui.hit_flash
 **The camera shake** — three independent axes from one seed each:
 
 ```rill
-{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)} | sub {x: 0.5, y: 0.5, z: 0.5} | mul 0.2 | write plane.camera.shake
+{x: (noise 40ms seed 1), y: (noise 40ms seed 2), z: (noise 40ms seed 3)}
+    | sub {x: 0.5, y: 0.5, z: 0.5}
+    | mul 0.2
+    | write plane.camera.shake
 ```
 
 **The supervisor** — a rill watching the machines:
@@ -1376,22 +1405,29 @@ sighting | where dark | write plane.keep.braziers.lit 1
 
 ```rill
 // gatehouse
-plane.sensors.gate.$alarm | rose_above 0.2
-  | also { write plane.keep.gate.portcullis_target 0 }
-  | write plane.keep.gate.drawbridge_target 1
+plane.sensors.gate.$alarm
+    | rose_above 0.2
+    | also { write plane.keep.gate.portcullis_target 0 }
+    | write plane.keep.gate.drawbridge_target 1
 plane.sensors.gate.nearest_distance | dropped_below 50 | notify plane.keep.archers.loose
 ```
 
 ```rill
 // muster — `delay` stands in for the muster action until R3
-plane.sensors.courtyard.$alarm | rose_above 0.2 | delay 90s | write plane.keep.garrison.formed 1
+plane.sensors.courtyard.$alarm
+    | rose_above 0.2
+    | delay 90s
+    | write plane.keep.garrison.formed 1
 ```
 
 ```rill
 // sally port — its own program: it reads what muster writes
 // (seed plane.keep.garrison.formed 0 before mounting)
 plane.keep.garrison.formed | > 0.5 as wall_up
-plane.sensors.gate.nearest_velocity | dropped_below 0.1 | where wall_up | write plane.keep.sally_port.open_target 1
+plane.sensors.gate.nearest_velocity
+    | dropped_below 0.1
+    | where wall_up
+    | write plane.keep.sally_port.open_target 1
 ```
 
 ## 12. The operator index

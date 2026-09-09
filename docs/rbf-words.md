@@ -40,9 +40,9 @@ un-escapes the whole body into a fresh allocation.
 
 ```rill
 rbf bump at [0, 0, 0] width 0.30 value [1.00, 0.85, 0.35]
-  | rbf bump at [1, 0, 0] width 0.45 value [0.20, 0.20, 0.22]
-  | rbf bump at [1, 1, 1] width 0.60 value [0.05, 0.05, 0.06]
-  | write plane.fire.coat
+    | rbf bump at [1, 0, 0] width 0.45 value [0.20, 0.20, 0.22]
+    | rbf bump at [1, 1, 1] width 0.60 value [0.05, 0.05, 0.06]
+    | write plane.fire.coat
 ```
 
 Three kernels of a flame's appearance manifold, placed by hand down the page.
@@ -59,7 +59,7 @@ same way.
 
 ```rill
 [plane.ember.cooled, plane.ember.sooted, plane.ember.thinned]
-  | rbf through plane.fire.coat as look
+    | rbf through plane.fire.coat as look
 look | nth 0 | write plane.look.r
 look | nth 1 | write plane.look.g
 look | nth 2 | write plane.look.b
@@ -87,7 +87,7 @@ the word useless for the four-channel set somebody authors next week.
 
 ```rill
 rbf bump at [0, 0, 0] width plane.knob.hot value [1.0, plane.knob.green, 0.35]
-  | write plane.fire.coat
+    | write plane.fire.coat
 ```
 
 Feed `plane.knob.hot` a new number and the manifold changes shape while the

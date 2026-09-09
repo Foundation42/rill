@@ -308,7 +308,10 @@ than restarting.
 
 ```rill
 lfo sine 4s | range 0.5 1.5 | write plane.render.grade.exposure
-plane.sensors.gate.nearest_distance | diff | dropped_below -2 | notify plane.signals.charge
+plane.sensors.gate.nearest_distance
+    | diff
+    | dropped_below -2
+    | notify plane.signals.charge
 ```
 
 ---

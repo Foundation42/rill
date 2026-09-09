@@ -407,9 +407,12 @@ const DefLay = struct { sig: Lay, body: Lay };
 ///     indentation, applied to the same question: the printer decides).
 ///   - the break is OUTERMOST FIRST. A statement breaks its chain; a stage
 ///     breaks its `[…]`/`{…}` argument only if the line it landed on is
-///     STILL too long; a def breaks its signature before it breaks an inline
-///     body. Nothing breaks eagerly, and a construct that would gain nothing
-///     by breaking (no stages, no span) is left flat rather than churned.
+///     STILL too long; a def breaks the half of its head that does not fit.
+///     Nothing breaks eagerly, and a construct that would gain nothing by
+///     breaking (no stages, no span) is left flat rather than churned.
+///   - a span that does break is laid out by its COUNT, not by its contents
+///     — a few stack one per line, many pack into a grid, and a perfect
+///     square packs into a square. See `gridFor`; Christian ruled it.
 ///   - everything nested indents by four — a def body, a `describe` block's
 ///     lines, a fan-out's branches, and every continuation above.
 ///     Christian's ruling; see `indent_canon`.
@@ -895,9 +898,10 @@ const Printer = struct {
         }
     }
 
-    /// `[a, b, c]` → one element per line, the closer back in `col`. Returns
-    /// false, having written nothing, when `text` is not a span this can
-    /// split — a path, a number, a `(…)` section, an empty `[]`.
+    /// `[a, b, c]` → a broken span, laid out by `gridFor`, with the closer
+    /// back in `col`. Returns false, having written nothing, when `text` is
+    /// not a span this can split — a path, a number, a `(…)` section, an
+    /// empty `[]`.
     ///
     /// A SCAN and not a parse: `text` is what `renderTokens` produced, so the
     /// spacing is already canonical and the only things that can hide a comma
@@ -905,6 +909,11 @@ const Printer = struct {
     /// and are re-joined with the printer's own commas, which is what makes a
     /// hand-written trailing comma normalise away and the second print equal
     /// the first.
+    ///
+    /// Two passes: one to count the elements and find the widest, one to lay
+    /// them out. Both are scans over text the printer already has, and the
+    /// layout is a pure function of it — which is what keeps the second print
+    /// equal to the first.
     fn breakSpan(self: *Printer, text: []const u8, col: u32) Oom!bool {
         if (text.len < 2) return false;
         const close: u8 = switch (text[0]) {
@@ -916,16 +925,40 @@ const Printer = struct {
         const inner = text[1 .. text.len - 1];
         if (std.mem.trim(u8, inner, " ").len == 0) return false;
 
+        var count: usize = 0;
+        var widest: usize = 0;
+        var scan = SpanIter{ .text = inner };
+        while (scan.next()) |piece| {
+            if (piece.len == 0) continue;
+            count += 1;
+            widest = @max(widest, piece.len);
+        }
+        if (count == 0) return false;
+
+        const at = col + indent_canon;
+        const grid = gridFor(count, widest, if (width_canon > at) width_canon - at else 0);
+
         try self.w(text[0..1]);
         var it = SpanIter{ .text = inner };
-        var first = true;
+        var i: usize = 0;
         while (it.next()) |piece| {
             if (piece.len == 0) continue;
-            if (!first) try self.w(",");
-            first = false;
-            try self.w("\n");
-            try self.indent(col + indent_canon);
+            if (i > 0) try self.w(",");
+            if (i % grid.cols == 0) {
+                try self.w("\n");
+                try self.indent(at);
+            } else {
+                try self.w(" ");
+            }
+            // RIGHT-ALIGNED, when there is a column to align in. Two reasons
+            // and the second is the one that decided it: a ramp's numbers
+            // line up on the digit that says how big they are, and the comma
+            // stays glued to the value it closes. Padding on the right puts
+            // `0      ,` in the file, which is a column of commas nobody
+            // asked for.
+            if (grid.pad and piece.len < widest) try self.indent(@intCast(widest - piece.len));
             try self.w(piece);
+            i += 1;
         }
         try self.w("\n");
         try self.indent(col);
@@ -933,6 +966,68 @@ const Printer = struct {
         return true;
     }
 };
+
+/// The most elements a broken span keeps stacked one to a line.
+///
+/// Eight — Christian's *"five you wouldn't"* with headroom. It is not a
+/// guess about taste: every record array in the 47-file corpus is three to
+/// seven elements and every one of them reads better stacked, while the
+/// arrays that want packing are the three generated ramps at 121. Nothing in
+/// the corpus sits between 8 and 121, so the threshold is a wide gap rather
+/// than a line drawn through the evidence.
+const span_stack_max: usize = 8;
+
+/// How a span that must break is laid out.
+const Grid = struct {
+    /// Elements to a line. `1` is "one per line" — not a special case here,
+    /// just what this returns for a few elements or for wide ones.
+    cols: usize,
+    /// Pad each element into a column. False for a ragged fill, where the
+    /// last row is short and there is no column to line up with.
+    pad: bool,
+};
+
+/// Christian's ruling, 2026-09-09:
+///
+/// > *"I'd lean towards smart wrapping. A hundred records you'd want to pack,
+/// > five you wouldn't, and maybe if we know the denominator, we can be smart
+/// > about how many per row. a series of 16 looks good as 4x4, or 9 look good
+/// > as 3x3."*
+///
+/// So the axis is COUNT AND SHAPE, never what the elements are. `room` is the
+/// columns left on a continuation line after its indent.
+///
+/// A SQUARE BEATS A FILL. 16 reads as 4×4 because that is what 16 is, not
+/// because four is the most that happened to fit — which is why the perfect
+/// square is tried before the divisor and the divisor before the fill.
+fn gridFor(n: usize, widest: usize, room: usize) Grid {
+    if (n <= span_stack_max) return .{ .cols = 1, .pad = false };
+    var fit: usize = 1;
+    while (fitsRow(fit + 1, widest, room)) fit += 1;
+    // Wide elements fall out here rather than needing a branch of their own:
+    // if two will not sit side by side, one per line is the answer again.
+    if (fit <= 1) return .{ .cols = 1, .pad = false };
+
+    const root = std.math.sqrt(n);
+    if (root * root == n and root <= fit) return .{ .cols = root, .pad = true };
+
+    // …then the largest exact divisor that fits, so the block closes square
+    // with no ragged tail: 120 numbers twelve wide is a clean 12×10.
+    var d = fit;
+    while (d >= 2) : (d -= 1) {
+        if (n % d == 0) return .{ .cols = d, .pad = true };
+    }
+
+    // …and a prime or otherwise awkward count fills as far as it fits,
+    // UNPADDED — the last row is short, so there is no column to keep.
+    return .{ .cols = fit, .pad = false };
+}
+
+/// Does a row of `cols` padded elements fit in `room`? The elements, the
+/// two-character separators between them, and the comma that closes the row.
+fn fitsRow(cols: usize, widest: usize, room: usize) bool {
+    return cols * widest + (cols - 1) * 2 + 1 <= room;
+}
 
 /// The top-level elements of a rendered span's interior.
 ///

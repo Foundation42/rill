@@ -4716,3 +4716,140 @@ holds the column the printer chose — `indent: "none"` is the load-bearing word
 there, and `L8` gates it.
 
 **`editors/vscode`: 45 gates → 51, 39 mutations → 46, all 46 biting.**
+
+---
+
+## R3, second half — smart wrapping, and the docs brought to the canon
+
+The first half shipped "one element per line" for a span that has to break,
+and recorded the place it read badly: three generated ramps of 121 numbers,
+which turned `rills/follow.rill` from 80 lines into 204. Christian ruled on it,
+and went further than the fill wrap that was proposed:
+
+> *"I'd lean towards smart wrapping. A hundred records you'd want to pack,
+> five you wouldn't, and maybe if we know the denominator, we can be smart
+> about how many per row. a series of 16 looks good as 4x4, or 9 look good as
+> 3x3."*
+
+### The axis is COUNT AND SHAPE, never what the elements are
+
+`gridFor(n, widest, room)`, and "one per line" stops being a special case — it
+is what the function returns when `cols` is 1:
+
+1. **`n <= 8` stacks.** Eight is his *"five you wouldn't"* with headroom, and
+   it is not a guess about taste: every record array in the 47-file corpus is
+   three to seven elements, and the arrays that want packing are the three
+   ramps at 121. Nothing sits between, so the threshold is a wide gap rather
+   than a line drawn through the evidence.
+2. **A PERFECT SQUARE beats a fill.** 16 → 4×4, 9 → 3×3, 25 → 5×5. His
+   examples, and the reason the square is tried first: 16 reads as 4×4 because
+   that is what 16 *is*, not because four is the most that happened to fit.
+   At the width the gate uses, sixteen six-wide numbers fit TEN to a row — so
+   the fixture proves a choice rather than a coincidence.
+3. **Then the largest exact divisor that fits**, so the block closes square
+   with no ragged tail: twelve seven-wide numbers fit nine to a row, and 6×2 is
+   what a reader can count.
+4. **Then a ragged fill**, for a prime or otherwise awkward count — and NOT
+   one per line, which is the absurd answer a divisor-only rule gives for 13.
+5. **Wide-and-few needs no branch.** If two elements will not sit side by side,
+   `fit` is 1 and the answer is one per line again.
+
+**A grid pads; a fill does not**, because a grid that does not line up is not a
+grid — knowing the denominator is the whole point. The padding is
+**RIGHT-aligned**, decided on two arguments and the second settled it: a ramp's
+numbers line up on the digit that says how big they are, and the comma stays
+glued to the value it closes. Padding on the right writes `0.5      ,` into the
+file, which is a column of commas nobody asked for.
+
+### The paying customers
+
+| file | before | one per line | packed |
+| --- | --- | --- | --- |
+| `src/rills/follow.rill` | 80 | 204 | **106** |
+| `src/rills/rail.rill` | 83 | 217 | **110** |
+| `src/rills/rider.rill` | 58 | 187 | **80** |
+
+All three ramps are 121 elements — which IS 11², and the square branch still
+does not take them: eleven columns of a seven-wide number is 98 and does not
+fit in 88. So they take the ragged fill at nine (rail, rider) and seven
+(follow). That is the rule working rather than failing, and it is worth
+recording because it means **the corpus does not exercise the padded branch at
+all** — its three grids are all ragged. Hence a synthetic fixture of twelve
+elements in eight different widths, which is the only thing that reaches it.
+
+**Gates: two more, five more mutations, all five biting.**
+
+| gate | mutations |
+| --- | --- |
+| `R3 G-stack` | `span_stack_max = 0` (eight pack); `= 1000` (nine stack) |
+| `R3 G-grid` | delete the square branch (16 comes back ten to a row); delete the divisor loop (12 comes back ragged nine-and-three); ignore `Grid.pad` (the column goes) |
+
+The threshold gate's two fixtures are the same numbers to the same width, one
+element apart, so nothing but the COUNT can be what decides — which is the
+claim. `R3 G-span`'s four-record `track` fixture is unchanged and is the gate
+that says a few still stack.
+
+### The docs: every fence is now a fixed point
+
+Christian, on the manual examples that ran past 88 after the first half:
+*"I meant it isn't a problem if it changes under me during the rewrite."* So
+they were brought to the canon rather than left, and the rule is the one that
+restretched them to four-space bodies a beat ago: **a reader who copies an
+example into a file and saves it must not watch it move.**
+
+`R3 G-doc` parses every ```rill fence in `rill-manual.md`,
+`rill-for-agents.md`, `README.md` and `rbf-words.md`, prints it, and compares
+byte for byte. **71 fences, all four counts pinned, and `doc_fragments` — the
+named-exemption list — is EMPTY.** That is a measurement rather than a
+convenience: every fence in the four docs is a whole program, so not one of
+them needed the escape hatch, and the gate asserts the list's length so a
+future exemption has to be written down.
+
+It found **twenty non-canonical fences in the manual alone, and only twelve of
+them were about width.** The other eight had been wrong since before this beat
+and nothing was watching: `{ health: hp, mana: mp }` for `{health: hp, mana:
+mp}` (three of those), two-space hand-wrapped continuations (three), a
+hand-aligned column of trailing comments (two). That is the gate paying for
+itself on the day it was written. **Nothing failed to parse** — the older
+"manuals parse" gate had that covered, and it stayed green under this one's
+mutation, which is the point of having both.
+
+Two examples were made to FIT rather than wrapped, using the latitude that a
+one-line example teaches better than the same example across four:
+
+- §4's sink pair echoes the block quote above it, so the comment is the
+  teaching and the path is not: `// this, because something flowed` became
+  `// this, because it flowed`, four columns and no wrap.
+- §6c's `where`/`keep` pair is a PARALLEL — "both apply to an array-valued
+  stream and they mean different things" — so one of them wrapping while the
+  other did not would have destroyed what the fence is for. Both trailing
+  comments moved onto their own lines above the statements, which is
+  canonical, keeps both sentences whole, and fits.
+
+Everything else wrapped. The cuts that were looked for and REJECTED are worth
+naming, because they are the shape of the temptation: every one of them meant
+renaming a path — `plane.sensors.gate.nearest_distance` to
+`plane.gate.nearest_distance`, `plane.world.hour` to `plane.hour` — and §7 of
+the manual teaches that taxonomy. Shortening an example by damaging the
+vocabulary it teaches is not making it fit; it is making it wrong.
+
+`README.md`'s muzzle flash wrapped, and the prose above it survives untouched:
+it says *"A muzzle flash is one statement"*, and a statement across five lines
+is still one statement. That is the distinction the language draws, and the
+wrapped form now shows it.
+
+**One thing had to move with the docs.** `addStatements` — the extractor
+behind "the manual is the source and the book cites it" — joined a
+continuation line with a `\n` and kept it, while `shared_rows` holds flat
+one-liners. Bringing the manual to the canon would have "drifted" every
+wrapped row away from a book cell that had not changed at all. It joins with a
+space now, which rebuilds the flat spelling exactly (a continuation always
+begins `| `, and the canon puts one space either side of a pipe). The
+extractor's own comment already made this argument for INDENTATION — "layout
+is not identity" — and the width canon made the line break the second half of
+the same point.
+
+Sixteen more ```rill fences live in `rill-spec.md`, `namespaces.md`,
+`slate.md` and the campaign notes. They are NOT gated: they are not embedded
+in the build, and they are records of decisions rather than things a reader
+copies. Named here so it is a decision.

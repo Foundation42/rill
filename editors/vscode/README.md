@@ -89,8 +89,9 @@ and so does a leading `|`.
 **The wrapped forms**, because the printer breaks a line that runs past **88
 columns** and the editor has to agree with it. A signature that wraps opens
 with a bare `(` and closes on a `) =` that dedents itself and indents the body
-under it; an array that wraps opens with `[` and closes on a `]`; a chain that
-wraps puts one stage per line with the `|` in the left margin of the
+under it; an array that wraps opens with `[` and closes on a `]`, laid out by
+its count — a few stacked one per line, many packed, sixteen as 4×4; a chain
+that wraps puts one stage per line with the `|` in the left margin of the
 continuation, and Enter after one of those keeps the column the printer chose
 rather than stepping right. The first `|` of a chain is still yours to indent
 — no lexical rule can tell a statement that is about to be continued from one

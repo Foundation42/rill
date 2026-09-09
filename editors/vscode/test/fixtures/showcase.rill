@@ -38,12 +38,22 @@ plane.hour | select true false | write plane.night
 //
 // A line that runs past 88 columns breaks, outermost first: one stage per
 // line with the `|` in the continuation's left margin, one port per line in a
-// signature, one element per line in a `[…]` that is still too long. Written
-// here as `rill fmt` writes it, because a showcase of the highlighting is
-// also the picture of the canon.
+// signature, and a `[…]` that is still too long laid out by its COUNT — a few
+// stacked, many packed, and sixteen as 4x4 because that is what sixteen is.
+// Written here as `rill fmt` writes it, because a showcase of the
+// highlighting is also the picture of the canon.
 
 plane.damage | where (> 0) | inc plane.stats.hits 1
 plane.contacts | sort by (.distance) desc | first | .pos.x | write plane.hud.x
+plane.world.hour
+    | choose [
+        0.0625, 0.1250, 0.1875, 0.2500,
+        0.3125, 0.3750, 0.4375, 0.5000,
+        0.5625, 0.6250, 0.6875, 0.7500,
+        0.8125, 0.8750, 0.9375, 1.0000
+    ]
+    | write plane.lights.torch.level
+
 plane.door.openness
     | along [
         {x: 0, y: 3, z: 0},
