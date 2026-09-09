@@ -1200,10 +1200,10 @@ test "pack: an exported def survives the parse, with defaults, ranges and prose 
         \\  rate | mul speed | mul spread
         \\
         \\describe roaches
-        \\  "Cockroaches milling on a floor, scattering and regrouping."
-        \\  rate   "how many rows are born each second"
-        \\  speed  "metres per second along the spray's aim at birth"
-        \\  spread "± metres per second of random jitter added at birth"
+        \\    "Cockroaches milling on a floor, scattering and regrouping."
+        \\    rate   "how many rows are born each second"
+        \\    speed  "metres per second along the spray's aim at birth"
+        \\    spread "± metres per second of random jitter added at birth"
         \\
         \\roaches | write plane.out
     );
@@ -1297,8 +1297,8 @@ test "pack: the range is stored as advice — nothing clamps and nothing refuses
     var prog = try parseOk(testing.allocator, &reg,
         \\export def wide(rate = 900 (0..500)) = rate | mul 1
         \\describe wide
-        \\  "a rate whose default sits outside its own advisory range"
-        \\  rate "rows per second"
+        \\    "a rate whose default sits outside its own advisory range"
+        \\    rate "rows per second"
         \\
         \\wide 4000 | write plane.out
     );
@@ -1325,9 +1325,9 @@ test "pack: an exported def with an undescribed port is refused, naming the port
         \\  rate | mul speed | mul spread
         \\
         \\describe roaches
-        \\  "roaches on a floor"
-        \\  rate  "how many rows are born each second"
-        \\  speed "metres per second at birth"
+        \\    "roaches on a floor"
+        \\    rate  "how many rows are born each second"
+        \\    speed "metres per second at birth"
         \\
         \\roaches | tap t
     , "port 'spread' has no description");
@@ -1337,8 +1337,8 @@ test "pack: an exported def with an undescribed port is refused, naming the port
         \\  rate | mul spread
         \\
         \\describe roaches
-        \\  "roaches on a floor"
-        \\  rate  "how many rows are born each second"
+        \\    "roaches on a floor"
+        \\    rate  "how many rows are born each second"
         \\
         \\roaches | tap t
     , "add a line `spread \"…\"` to `describe roaches`");
@@ -1353,10 +1353,10 @@ test "pack: a describe line naming an unknown port is refused, and lists the rea
         \\  rate | mul speed
         \\
         \\describe roaches
-        \\  "roaches on a floor"
-        \\  rate  "born per second"
-        \\  speed "metres per second"
-        \\  sped  "a typo nobody would ever spot"
+        \\    "roaches on a floor"
+        \\    rate  "born per second"
+        \\    speed "metres per second"
+        \\    sped  "a typo nobody would ever spot"
         \\
         \\roaches | tap t
     , "'sped' is not a port of 'roaches' — it has: rate, speed");
@@ -1381,7 +1381,7 @@ test "pack: a LOCAL def needs no describe block, but a wrong one is still refuse
     var prog2 = try parseOk(testing.allocator, &reg,
         \\def helper2(x, k = 2) = x | mul k
         \\describe helper2
-        \\  k "the multiplier"
+        \\    k "the multiplier"
         \\
         \\plane.v | helper2 | write plane.out
     );
@@ -1390,7 +1390,7 @@ test "pack: a LOCAL def needs no describe block, but a wrong one is still refuse
     try expectParseError(
         \\def helper3(x, k = 2) = x | mul k
         \\describe helper3
-        \\  kk "the multiplier, misspelled"
+        \\    kk "the multiplier, misspelled"
         \\
         \\plane.v | helper3 | tap t
     , "'kk' is not a port of 'helper3' — it has: x, k");
@@ -1413,7 +1413,7 @@ test "pack: an exported def with no describe block at all is refused" {
     try expectParseError(
         \\export def roaches(rate = 60) = rate | mul 1
         \\describe roaches
-        \\  rate "born per second"
+        \\    rate "born per second"
         \\
         \\roaches | tap t
     , "no leading description");
@@ -1465,9 +1465,9 @@ test "pack: an exported def's indented body is its body" {
         \\  scaled | add 1
         \\
         \\describe two
-        \\  "scale and offset"
-        \\  x "the value"
-        \\  k "the multiplier"
+        \\    "scale and offset"
+        \\    x "the value"
+        \\    k "the multiplier"
         \\
         \\plane.v | two | write plane.out
     , .{.{ "plane.v", @as(i64, 5) }});
@@ -1521,7 +1521,7 @@ test "pack: a describe block must follow a def that exists, once" {
     // plausible mistake — parse order is definition order here.
     try expectParseError(
         \\describe early
-        \\  "written before its def"
+        \\    "written before its def"
         \\
         \\def early(x) = x | mul 2
     , "a `describe` block follows the `def` it describes");
@@ -1531,9 +1531,9 @@ test "pack: a describe block must follow a def that exists, once" {
     try expectParseError(
         \\def f(x) = x | mul 2
         \\describe f
-        \\  x "the value"
+        \\    x "the value"
         \\describe f
-        \\  "a second opinion"
+        \\    "a second opinion"
     , "already has a `describe` block");
     // An empty block is a slip, not a statement.
     try expectParseError("def f(x) = x | mul 2\ndescribe f\nplane.v | f | tap t", "says nothing");
@@ -1541,8 +1541,8 @@ test "pack: a describe block must follow a def that exists, once" {
     try expectParseError(
         \\def f(x) = x | mul 2
         \\describe f
-        \\  x "the value"
-        \\  x "no, THIS value"
+        \\    x "the value"
+        \\    x "no, THIS value"
     , "described twice");
     // An EMPTY description is not a description. This one is here because the
     // mutation SURVIVED the first draft of this gate: with the check removed
@@ -1554,14 +1554,14 @@ test "pack: a describe block must follow a def that exists, once" {
     try expectParseError(
         \\export def f(x = 1) = x | mul 2
         \\describe f
-        \\  "a thing"
-        \\  x ""
+        \\    "a thing"
+        \\    x ""
     , "port 'x' has an empty description");
     try expectParseError(
         \\def f(x) = x | mul 2
         \\describe f
-        \\  ""
-        \\  x "the value"
+        \\    ""
+        \\    x "the value"
     , "the definition's description is empty");
 }
 
@@ -1584,8 +1584,8 @@ test "pack: a fold supplies a default, and a describe block splices nothing" {
         \\using 500 as :ceiling
         \\export def roaches(rate = :fast (:floor.. :ceiling)) = rate | mul 1
         \\describe roaches
-        \\  "roaches, whose default, floor and ceiling all came from folds"
-        \\  rate "born per second"
+        \\    "roaches, whose default, floor and ceiling all came from folds"
+        \\    rate "born per second"
         \\
         \\roaches | write plane.out
     );
@@ -1621,7 +1621,7 @@ test "pack: a fold supplies a default, and a describe block splices nothing" {
         \\using rate as :p
         \\def f(rate) = rate | mul 2
         \\describe f
-        \\  :p "the rate"
+        \\    :p "the rate"
     , "read verbatim");
 }
 
@@ -11630,10 +11630,10 @@ test "effect: an export def may end in an effect, describe block and pack intact
         \\  x | cast $glow amp radius 3 at pos
         \\
         \\describe spark
-        \\  "Deposits amp into the glow field and hands x on."
-        \\  x   "the rousing"
-        \\  pos "where the deposit lands"
-        \\  amp "how much goes in"
+        \\    "Deposits amp into the glow field and hands x on."
+        \\    x   "the rousing"
+        \\    pos "where the deposit lands"
+        \\    amp "how much goes in"
         \\
         \\plane.v | spark pos: plane.origin | write plane.out
     , .{.{ "plane.origin", @as(i64, 0) }});
@@ -11658,8 +11658,8 @@ test "effect: an export def may end in an effect, describe block and pack intact
         \\  x | cast $glow 1 radius 3 at pos
         \\
         \\describe spark
-        \\  "Deposits into the glow field."
-        \\  x "the rousing"
+        \\    "Deposits into the glow field."
+        \\    x "the rousing"
         \\
         \\plane.v | spark pos: plane.origin | write plane.out
     , "port 'pos' has no description");
@@ -12150,8 +12150,8 @@ test "@self: an export def may drive its own knob, pack and all" {
         \\  lfo sine 7s | mul gain | write plane.drift.@self.k.flock
         \\
         \\describe flock
-        \\  "Drives this spray's own flocking knob from a slow sine."
-        \\  gain "how far the knob swings"
+        \\    "Drives this spray's own flocking knob from a slow sine."
+        \\    gain "how far the knob swings"
         \\
         \\flock
     );
@@ -12301,8 +12301,8 @@ test "plane: `on row` parses after the signature and composes with `export`, res
         \\  rate | mul 0.5 | add row.age
         \\
         \\describe scuttle
-        \\  "One row's scuttle."
-        \\  rate "rows per second"
+        \\    "One row's scuttle."
+        \\    rate "rows per second"
         \\
         \\row.vel | spin | write row.pos
         \\scuttle | write row.size
@@ -12806,15 +12806,15 @@ const northstar_package =
     \\    lfo sine 7s | mul 0.05 | sub 0.03 | write :k.flock
     \\
     \\describe roaches
-    \\  "Cockroaches milling on a floor, scattering and regrouping."
-    \\  rate  "how many rows are born each second"
-    \\  flock "cohesion: negative gathers, positive scatters"
+    \\    "Cockroaches milling on a floor, scattering and regrouping."
+    \\    rate  "how many rows are born each second"
+    \\    flock "cohesion: negative gathers, positive scatters"
     \\
     \\export def scuttle() on row =
     \\    row.seed | mul 0.025 | add 0.03 | write row.size
     \\
     \\describe scuttle
-    \\  "Each row's size settles from the seed it was born with."
+    \\    "Each row's size settles from the seed it was born with."
     \\
 ;
 
@@ -12886,8 +12886,8 @@ test "NORTHSTAR: one file carries a fold, a described pack, an @self driver and 
         \\  rate | mul flock | write row.size
         \\
         \\describe roaches
-        \\  "Cockroaches milling on a floor."
-        \\  rate "how many rows are born each second"
+        \\    "Cockroaches milling on a floor."
+        \\    rate "how many rows are born each second"
     , "port 'flock' has no description");
 }
 
@@ -13064,21 +13064,21 @@ const script_fixtures = [_][]const u8{
     // a def with a full parameter pack, an export, a describe block, and a
     // call that leans on the defaults
     \\export def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5)) =
-    \\  rate | mul speed
+    \\    rate | mul speed
     \\
     \\describe scatter
-    \\  "Rows thrown outward from a point."
-    \\  rate "How many a second."
-    \\  speed "How fast, in metres a second."
+    \\    "Rows thrown outward from a point."
+    \\    rate "How many a second."
+    \\    speed "How fast, in metres a second."
     \\
     \\scatter | write plane.drift.rate
     \\scatter 120 0.3 | write plane.drift.fast
     ,
     // a local def with a multi-statement body — the tunnel, two levels
     \\def driver(x: number) =
-    \\  // a comment inside a def body
-    \\  x | mul 0.05 as g
-    \\  g | add 1
+    \\    // a comment inside a def body
+    \\    x | mul 0.05 as g
+    \\    g | add 1
     \\
     \\plane.a | driver | write plane.out
     ,
@@ -13091,8 +13091,8 @@ const script_fixtures = [_][]const u8{
     // fan-out both ways: the head block and the mid-chain `also`
     \\plane.a | rose_above 0.5 | also { write plane.b 1 } | write plane.c 2
     \\every 1s {
-    \\  write plane.d 1
-    \\  write plane.e 2
+    \\    write plane.d 1
+    \\    write plane.e 2
     \\}
     ,
     // predicate sections, keyword arguments in both spellings, durations
@@ -13381,9 +13381,9 @@ test "R2 G-pack: a port's default and its range survive as written" {
         \\    rate | mul speed
         \\
         \\describe scatter
-        \\  "Rows thrown outward from a point."
-        \\  rate  "How many a second."
-        \\  speed "How fast."
+        \\    "Rows thrown outward from a point."
+        \\    rate  "How many a second."
+        \\    speed "How fast."
         \\
         \\scatter | write plane.drift.rate
         \\
@@ -13445,9 +13445,9 @@ test "R2 G-annex: a describe block survives with every line" {
         \\    rate | mul speed
         \\
         \\describe scatter
-        \\  "Rows thrown outward from a point."
-        \\  rate  "How many a second."
-        \\  speed "How fast, with a \"quoted\" word in it."
+        \\    "Rows thrown outward from a point."
+        \\    rate  "How many a second."
+        \\    speed "How fast, with a \"quoted\" word in it."
         \\
         \\scatter | tap s
         \\
@@ -13512,24 +13512,26 @@ test "R2 G-column: an annex aligns its values, and a def body indents by four" {
     // project points people at. Padding to the longest key is deterministic,
     // so idempotence is untouched.
     //
-    // THE DEF BODY INDENT is four, unconditionally — Christian's ruling,
-    // 2026-09-09: "honestly I'd prefer 4, to match most tabs." A first pass
-    // RETAINED whatever was written, because the measurement found the corpus
-    // split between `kernels/roaches.rill` at 4 and the six def bodies
-    // printed in the manuals at 2. He asked for one canon instead, so the
-    // retained field is gone and the manuals were restretched to 4 in the
-    // same commit.
+    // THE INDENT is four, everywhere and unconditionally — Christian's
+    // ruling, 2026-09-09. Asked first about def bodies ("honestly I'd prefer
+    // 4, to match most tabs") and then about a fan-out's branches, he
+    // answered wider than the question: "four everywhere." So a def body, a
+    // `describe` block's lines and a fan-out's branches share ONE constant —
+    // not several that happen to agree, which is an invitation to drift and
+    // to re-open a closed question.
     //
-    // The second block below is what proves "unconditionally": a body
-    // WRITTEN at two comes back at four. Retention would have passed that
-    // source through unchanged, so the assertion is the difference between
-    // the ruling and what it replaced, not a restatement of it.
+    // An interim pass RETAINED whatever was written, because the measurement
+    // found the corpus split between `kernels/roaches.rill` at 4 and the six
+    // def bodies printed in the manuals at 2. The second block below is what
+    // proves the ruling replaced it: a body WRITTEN at two comes back at
+    // four, which is the one assertion retention could never have made.
     //
     // Mutations that bite: in `Printer.item`'s annex arm, write a single
     // space instead of `key_w - al.key.len + 1` (the column collapses and the
-    // first block goes red); set `def_body_indent` to 2 (both blocks go red);
-    // set it to `nested_indent` (same, and it also says why they are two
-    // constants — the annex's 2 was never part of the ruling).
+    // first block goes red); set `indent_canon` to 2 (both blocks go red);
+    // apply `indent_canon` to the def body but not to the annex lines (the
+    // first block goes red on its `describe` lines alone, which is the gate
+    // saying the ONE constant reaches all three places).
     var reg = try hostRegistry(testing.allocator);
     defer reg.deinit();
 
@@ -13540,10 +13542,10 @@ test "R2 G-column: an annex aligns its values, and a def body indents by four" {
         \\    rate | mul speed | mul capacity
         \\
         \\describe scatter
-        \\  "Rows thrown outward from a point."
-        \\  rate     "How many a second."
-        \\  speed    "How fast."
-        \\  capacity "How many seats the hall has."
+        \\    "Rows thrown outward from a point."
+        \\    rate     "How many a second."
+        \\    speed    "How fast."
+        \\    capacity "How many seats the hall has."
         \\
         \\scatter | tap s
         \\

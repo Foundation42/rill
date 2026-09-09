@@ -165,8 +165,8 @@ export def flock(gain: number = 0.05 (0..1)) =
     lfo sine 7s | mul gain | write plane.drift.@self.k.flock
 
 describe flock
-  "Drives this instance's own flocking knob from a slow sine."
-  gain "how far the knob swings"
+    "Drives this instance's own flocking knob from a slow sine."
+    gain "how far the knob swings"
 
 flock
 ```
@@ -191,8 +191,8 @@ export def scuttle(size = 0.03 (0..1)) on row =
     row.seed | mul 0.025 | add size | write row.size
 
 describe scuttle
-  "Settles each row's size from the seed it was born with."
-  size "the floor every row starts from"
+    "Settles each row's size from the seed it was born with."
+    size "the floor every row starts from"
 ```
 
 A **row def may only be instantiated from a row context** — a parse
@@ -216,9 +216,9 @@ export def roaches(rate: number = 60 (0..500), spread = 0.35 (0..3)) =
     rate | mul spread
 
 describe roaches
-  "Cockroaches milling on a floor, scattering and regrouping."
-  rate   "how many rows are born each second"
-  spread "± metres per second of random jitter added at birth"
+    "Cockroaches milling on a floor, scattering and regrouping."
+    rate   "how many rows are born each second"
+    spread "± metres per second of random jitter added at birth"
 
 roaches | write plane.drift.roaches
 ```

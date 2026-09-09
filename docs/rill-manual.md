@@ -1200,9 +1200,9 @@ export def roaches(rate: number = 60 (0..500), spread = 0.35 (0..3)) =
     rate | mul spread
 
 describe roaches
-  "Cockroaches milling on a floor, scattering and regrouping."
-  rate   "how many rows are born each second"
-  spread "± metres per second of random jitter added at birth"
+    "Cockroaches milling on a floor, scattering and regrouping."
+    rate   "how many rows are born each second"
+    spread "± metres per second of random jitter added at birth"
 
 roaches | write plane.drift.roaches
 ```

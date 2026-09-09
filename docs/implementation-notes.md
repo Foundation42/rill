@@ -4382,22 +4382,29 @@ what was written (`script.Def.indent`), on the same principle already shipped
 one field up for blank runs, with 2 as the fallback.
 
 **Christian ruled: one canon, and it is 4.** His words: *"honestly I'd prefer
-4, to match most tabs."* So the retained field is gone, `def_body_indent` is
-4 unconditionally, and rill's own docs were restretched in the same commit —
-`rill-manual.md` ×3 and `rill-for-agents.md` ×3 — because a document that
-teaches an indent the printer does not emit is wrong the first time anyone
-round-trips it. The `.rill` corpus does not move at all: `roaches.rill`'s body
-was already at 4, which is the happy consequence of the side that won.
+4, to match most tabs."* So the retained field went and the def body became 4
+unconditionally.
 
-`nested_indent` (2) was deliberately NOT swept along. A `describe` block was
-never split — 2 is unanimous across `roaches.rill`, both manuals and every
-fixture — so there is nothing to rule on there, and the ruling was about def
-bodies. A fan-out's branches sit on the same 2 by inheritance rather than by
-evidence: **no multi-line `also { … }` exists anywhere** — not in the 47-file
-corpus, not in either manual, not in the rillbook. Whether it should follow
-the def body to 4 is a ruling nobody has been asked for, and it is named in
-the constant's own comment so the next reader meets the question rather than
-the assumption.
+An interim pass kept a second constant at 2 for the blocks the ruling had not
+covered — `describe` lines (where 2 was unanimous, so there was nothing to
+rule on) and a fan-out's branches (where there was nothing to MEASURE: **no
+multi-line `also { … }` exists anywhere** — not in the 47-file corpus, not in
+either manual, not in the rillbook, so it sat there by inheritance rather than
+by evidence). That gap was put to him as the narrow fan-out question and he
+answered it wider than it was asked: **"four everywhere."**
+
+So there is now ONE constant, `indent_canon`, and one value. Not two that
+happen to agree — two names for one value is an invitation to drift apart and
+to re-open a question that is closed. It covers a def body, a `describe`
+block's lines and a fan-out's branches, and its comment says it was ruled
+rather than inherited, so the next reader does not re-derive it from the
+corpus and reach the other answer.
+
+rill's own tree was restretched to match in the same commits, because a
+document that teaches an indent the printer does not emit is wrong the first
+time anyone round-trips it: six def bodies (`rill-manual.md` ×3,
+`rill-for-agents.md` ×3), ten `describe` lines across the same two files, and
+62 `describe` lines plus three fixtures in `tests.zig`.
 
 G-column's second half changed shape with the ruling rather than being
 deleted. It used to prove RETENTION — a 4-space body and a 2-space body both
@@ -4406,20 +4413,31 @@ coming back as written. It now proves the canon is APPLIED: a body written at
 plus the fixed-point check that the restretched form does not move again.
 
 Three mutations for it, executed and watched: collapse the annex column to a
-single space; set `def_body_indent` to 2; set it to `nested_indent` (which
-also says why they are two constants). Total for the beat: **21 mutations,
-all 21 biting their named gate** — M17, the `closeLine` one that survived
-G-roundtrip, is recorded against G-pack, which is where it actually lives.
+single space; set `indent_canon` to 2; give the annex lines a literal 2 while
+the def body keeps the canon — that last one is the gate saying the ONE
+constant reaches all three places, which is the thing "four everywhere" asked
+for. Total for the beat: **21 mutations, all 21 biting their named gate** —
+M17, the `closeLine` one that survived G-roundtrip, is recorded against
+G-pack, which is where it actually lives.
 
-`kernels/roaches.rill` reprints **byte-identically**, and the corpus went
-from 38 byte-identical to 39 of 47 — and stayed at 39 through the indent
-ruling, since no `.rill` file moved (the earlier report of 35 was inflated by
+`kernels/roaches.rill` reprinted **byte-identically** once the column was
+aligned, and the corpus went from 38 byte-identical to 39 of 47 (the earlier report of 35 was inflated by
 three basename collisions in the emit directory — `motes.rill`, `smoke.rill`
 and `kindle.rill` exist in both spindrift and matryoshka; re-measured one file
 at a time). Still 47/47 on all three checks. Nothing got worse.
 
-The eight that still differ do so for one remaining reason, a different
-mechanism from this one: **cross-statement column alignment inside chains** —
+**Then "four everywhere" took it back down to 38, and that is correct rather
+than a regression.** Every `describe` block in the corpus is written at 2,
+`roaches.rill`'s included, so those files now reprint at 4 — and
+`roaches.rill`'s ONLY remaining difference is exactly that, with its
+hand-aligned value column preserved inside it. The `.rill` corpus was
+deliberately NOT normalised to the new canon here: that is the formatter's
+first real job, it wants its own commit in each sibling repo, and matryoshka
+had a live agent in it. Nothing in a sibling was touched by this beat at all.
+
+The eight that differ for the OTHER reason do so for one that is a different
+mechanism from any of this: **cross-statement column alignment inside
+chains** —
 `follow.rill` aligns its pipes down four lines, `zones.rill` aligns a sign
 column (`cast $tilt  1.0` against `cast $tilt -1.0`), `watch.rill` aligns one
 pipe, and the five ironwood rills wrap their chains. Retaining those means

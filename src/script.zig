@@ -323,32 +323,33 @@ pub const Script = struct {
 // The printer
 // ---------------------------------------------------------------------------
 
-/// A def body's indent, in spaces. Christian's ruling, 2026-09-09: *"honestly
-/// I'd prefer 4, to match most tabs."*
+/// One indent, in spaces, for everything nested: a def body, a `describe`
+/// block's lines, a fan-out's branches.
 ///
-/// The measurement that put the question to him found the corpus split, and
-/// split between two sets of his own files: `kernels/roaches.rill` — the one
-/// of the 47 `.rill` files with a multi-line def body — writes 4, while all
-/// six def bodies printed in `rill-manual.md` and `rill-for-agents.md` write
-/// 2. A first pass RETAINED what was written, on the same principle blank
-/// runs use, so that neither set moved. He asked for one canon instead, and
-/// the `.rill` file is the side that wins it — so the retained field is gone
-/// and the manuals were restretched to 4 in the same commit, because a
-/// document that teaches an indent the printer does not emit is a document
-/// that is wrong the first time anyone round-trips it.
-const def_body_indent: u32 = 4;
-
-/// The indent for a block nested inside a statement or an annex: a `describe`
-/// block's lines, and a fan-out's branches.
+/// **Four, and RULED rather than inherited.** Christian, 2026-09-09, asked
+/// first about def bodies — *"honestly I'd prefer 4, to match most tabs"* —
+/// and then about the fan-out case, and answered it wider than it was asked:
+/// **"four everywhere."**
 ///
-/// Two, and NOT swept along with the ruling above, which was about def
-/// bodies. There is nothing to rule on for `describe`: 2 is unanimous across
-/// `roaches.rill`, both manuals and every fixture. There is nothing to
-/// measure for a fan-out — no multi-line `also { … }` exists in the 47-file
-/// corpus, in either manual, or in the rillbook — so it sits here by
-/// inheritance rather than by evidence, and if it should follow the def body
-/// to 4 that is a ruling nobody has been asked for yet.
-const nested_indent: u32 = 2;
+/// One constant and not several that agree. A previous pass had two, and two
+/// names for one value is an invitation to drift apart and re-open a question
+/// that is now closed.
+///
+/// The measurement that started it is worth keeping, because it is why this
+/// needed a ruling at all rather than a majority: the corpus was split, and
+/// split between two sets of Christian's own files. `kernels/roaches.rill` —
+/// the one of the 47 `.rill` files with a multi-line def body — writes 4,
+/// while all six def bodies printed in `rill-manual.md` and
+/// `rill-for-agents.md` write 2, and every `describe` block everywhere writes
+/// 2. An interim pass RETAINED what was written so that neither set moved; he
+/// asked for one canon instead. rill's own docs were restretched to match in
+/// the same commit, because a document that teaches an indent the printer
+/// does not emit is wrong the first time anyone round-trips it.
+///
+/// The `.rill` corpus is deliberately NOT normalised here — that is the
+/// formatter's first real job, one commit per sibling repo, and it is not
+/// this beat's to do.
+const indent_canon: u32 = 4;
 
 /// The canon, chosen to read like the corpus Christian reads daily:
 ///
@@ -357,12 +358,11 @@ const nested_indent: u32 = 2;
 ///     nice shape and it is NOT recoverable from the structure — the parser
 ///     skips the newline — so a printer that guessed would churn the file
 ///     differently every time. One line is the stable answer.)
-///   - a `describe` block indents by two and pads its keys into a column, so
-///     the values line up. Every `describe` in the corpus and in both manuals
-///     writes two, and `kernels/roaches.rill` hand-aligns eleven ports —
-///     alignment is what makes a block that size readable, not decoration.
-///   - a def body indents by four (Christian's ruling — see
-///     `def_body_indent`), a fan-out's branches by two.
+///   - everything nested indents by four — a def body, a `describe` block's
+///     lines, a fan-out's branches. Christian's ruling; see `indent_canon`.
+///   - a `describe` block also pads its keys into a column so the values line
+///     up. `kernels/roaches.rill` hand-aligns eleven ports, and at that width
+///     the column is what makes the block readable, not decoration.
 ///   - blank runs preserved exactly as written. Preserving beats normalising
 ///     here: normalising would rewrite every file in the corpus on its first
 ///     save, which is the thing that makes a git history useless.
@@ -469,7 +469,7 @@ const Printer = struct {
                 var key_w: usize = 0;
                 for (an.lines) |al| key_w = @max(key_w, al.key.len);
                 for (an.lines, 0..) |al, i| {
-                    try self.indent(col + nested_indent);
+                    try self.indent(col + indent_canon);
                     if (al.key.len > 0) {
                         try self.w(al.key);
                         if (al.values.len > 0) {
@@ -531,7 +531,7 @@ const Printer = struct {
         }
         try self.trail(d.trail);
         try self.w("\n");
-        for (d.body) |b| try self.item(b, col + def_body_indent);
+        for (d.body) |b| try self.item(b, col + indent_canon);
     }
 
     fn stmt(self: *Printer, st: Stmt, col: u32) Oom!void {
@@ -567,10 +567,10 @@ const Printer = struct {
                 }
                 try self.w("\n");
                 for (f.branches) |b| {
-                    try self.lead(b.lead, col + nested_indent);
+                    try self.lead(b.lead, col + indent_canon);
                     try self.blanks(b.blank_before);
-                    try self.indent(col + nested_indent);
-                    try self.branch(b, col + nested_indent);
+                    try self.indent(col + indent_canon);
+                    try self.branch(b, col + indent_canon);
                     try self.trail(b.trail);
                     try self.w("\n");
                 }
