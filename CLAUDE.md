@@ -21,7 +21,27 @@ is not a gate but a tool: it parses a `.rill` file, prints its script
 back, and checks the reprint is the same program, stable, and has lost
 no comments. It takes files because rill must build standalone — a
 `b.path("../spindrift/…")` would break that, and 21 of the 47 corpus
-files use host words rill core must not have. `--host-row` stubs them.
+files use host words rill core must not have. `--host-row` stubs them,
+from `tools/host_row.zig`, which is the ONE definition of those fifteen
+words — a second copy drifts, and a drifted stub makes two tools
+disagree about what a legal program is while both stay green.
+
+    zig build cli -- fmt --host-row -          # or just `rill`, on PATH
+
+`zig build` also produces **`rill`** (`src/cli.zig`), the binary the
+VSCode extension in `editors/vscode` calls for Format Document and for
+squiggles. `rill fmt -` prints the canon; `rill check --json -` prints
+one diagnostics object. Exit 0 / 64 (bad command line) / 65 (does not
+parse, with EMPTY stdout — writing a partial program is how a formatter
+corrupts a file). Install it the way the extension is installed, as a
+symlink, so `zig build` updates what the editor runs:
+
+    ln -sf "$PWD/zig-out/bin/rill" ~/.local/bin/rill
+
+**The corpus is canonical, so `rill fmt` over all 47 is a no-op** — gated
+end to end in `editors/vscode/test/e2e.test.mjs`. If that gate ever goes
+red, either the printer moved or a `.rill` file was hand-edited away from
+the canon; both want looking at before it is "fixed".
 
 **What is NOT cheap is downstream.** matryoshka embeds rill and gates it
 with a nineteen-section GPU sweep plus reference captures. Touching the
