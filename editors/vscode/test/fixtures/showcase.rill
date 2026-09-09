@@ -1,0 +1,62 @@
+// showcase — every shape the grammar knows, in one file.
+//
+// Open it to SEE the highlighting; the gates in test/grammar.test.mjs read it
+// to check the highlighting. Two jobs, one file, because a demo that is not
+// also a fixture drifts from the thing it demonstrates.
+//
+// It is not a runnable program: `rbf through` is rill core, `spawn` and
+// `near` are spindrift's, `notify` is matryoshka's, and no single registry
+// holds all three. That is the point being made — the operator registry is
+// OPEN, and the grammar is the one part of the toolchain that must not care.
+
+// ══ THE STORES ═══════════════════════════════════════════════════════════
+//
+// Three relative stores and four sigils. `@self` is the language's own word:
+// it resolves at MOUNT, per instance, which is what lets a def carry one and
+// still travel.
+
+using plane.drift.@self.k as :k
+
+plane.input.kbd.space | > 0.5 as space_down
+row.seed | mul 0.025 | add 0.03 | write row.size
+row.u0 | relax 1 slate.contact | write row.u0 add
+plane.tags.in-courtyard.count | write plane.hud.mustered
+plane.ents.1.$tilt | ease 400ms up 150ms | write plane.camera.roll add
+plane.input.mouse.lmb | rose_above 0.5 | write plane.render/grade/exposure stops
+
+// ── literals ─────────────────────────────────────────────────────────────
+
+once 1 | cast $tilt -1.0 radius 25 at {x: -12, y: 3, z: 0}
+every 1f | delay 250ms | write plane.actuators.quintain.target 1
+lfo sine 18s phase 0.25 | mul 1.1 | add -3.15 | write plane.drift.@pour.pos.x
+row.age | over row.life [{l: 1.5, a: 0.02, b: 0.14}, {l: 0.6, a: 0.16, b: 0.08}] | write row.colour
+plane.hour | select true false | write plane.night
+
+// ── blocks and sections ──────────────────────────────────────────────────
+
+plane.damage | where (> 0) | inc plane.stats.hits 1
+plane.contacts | sort by (.distance) desc | first | .pos.x | write plane.hud.x
+plane.orders.sally
+  | cooldown 5m
+  | also { tag @tom #in-courtyard }
+  | notify plane.signals.counter_attack { from: "sally-port" }
+
+// ── a two-word operator ──────────────────────────────────────────────────
+//
+// Lookup tries the two-word form FIRST, so `rbf through` is one operator.
+// `rbf` is rill core's only two-word family; a host's are not knowable here.
+
+rbf through 4 | write plane.field.value
+
+// ══ THE PACK ═════════════════════════════════════════════════════════════
+
+export def scatter(rate: number = 60 (0..500), speed = 0.15 (0..5), blend = "add") on row =
+    0
+
+describe scatter
+    "A worked example of a parameter pack: a default, a range and a sentence."
+    rate     "Rows born a second. With `life` this is the population budget."
+    speed    "Metres a second along the spray's aim, applied once at birth."
+    blend    "How the cards blend over the frame: `add` lights, `alpha` lays."
+
+def healthbar(hp: number) = hp | clamp 0 100 | div 100

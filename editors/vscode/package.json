@@ -1,0 +1,143 @@
+{
+  "name": "rill",
+  "displayName": "rill",
+  "description": "Syntax, outline, formatting and diagnostics for the rill dataflow language.",
+  "version": "0.1.0",
+  "publisher": "foundation42",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Foundation42/rill"
+  },
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onLanguage:rill"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "rill",
+        "aliases": [
+          "rill",
+          "Rill"
+        ],
+        "extensions": [
+          ".rill"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rill",
+        "scopeName": "source.rill",
+        "path": "./syntaxes/rill.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "rill",
+        "path": "./snippets/rill.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[rill]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.wordBasedSuggestions": "currentDocument"
+      }
+    },
+    "commands": [
+      {
+        "command": "rill.checkBinary",
+        "title": "rill: Check the rill binary",
+        "category": "rill"
+      }
+    ],
+    "configuration": {
+      "title": "rill",
+      "properties": {
+        "rill.binaryPath": {
+          "type": "string",
+          "default": "rill",
+          "markdownDescription": "The rill binary that backs formatting and diagnostics. A bare name is looked up on `PATH`; a relative path is resolved against the workspace folder. Formatting and diagnostics need the `fmt` and `check` subcommands — see the CLI contract in the extension's README. If the binary is missing or does not understand them, both features go quietly unavailable and everything else keeps working."
+        },
+        "rill.format.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer Format Document / Format On Save for .rill files. Formatting is only ever applied when the binary hands back a formatted program and exits 0."
+        },
+        "rill.format.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "fmt",
+            "-"
+          ],
+          "markdownDescription": "Arguments for the format call. The source is written to stdin and the formatted program is read from stdout, so the last argument is normally `-`."
+        },
+        "rill.diagnostics.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show parse errors as squiggles."
+        },
+        "rill.diagnostics.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "check",
+            "--json",
+            "-"
+          ],
+          "markdownDescription": "Arguments for the diagnostics call. **Add your host's words here.** rill core does not know `spawn`, `near` or `drift` — they belong to spindrift and to matryoshka — so a plain `check` reports a false `unknown_operator` on 21 of the 47 corpus files. In a spindrift or matryoshka workspace set this to `[\"check\", \"--json\", \"--host-row\", \"-\"]`."
+        },
+        "rill.diagnostics.run": {
+          "type": "string",
+          "enum": [
+            "onType",
+            "onSave",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Re-check as you type, debounced.",
+            "Re-check on save and on open only.",
+            "Never run the checker."
+          ],
+          "default": "onType",
+          "description": "When to run the checker."
+        },
+        "rill.diagnostics.unknownNames": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "hint",
+            "off"
+          ],
+          "default": "warning",
+          "markdownDescription": "How to report a diagnostic the checker codes `unknown_operator`. The operator registry is open — the host injects its own words at startup — so a name this binary has never heard of is not necessarily a mistake. Downgraded by default; set to `error` once `rill.diagnostics.args` names your host's vocabulary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/grammar.test.mjs test/client.test.mjs test/config.test.mjs test/extension.test.mjs",
+    "mutate": "node test/mutate.mjs",
+    "preview": "node test/preview.mjs"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  }
+}

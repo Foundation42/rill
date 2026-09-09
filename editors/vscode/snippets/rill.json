@@ -1,0 +1,131 @@
+{
+  "//": [
+    "Seven shapes, and each one is a shape from the corpus rather than a shape",
+    "from the grammar. `export def` never arrives without its `describe` block",
+    "— an exported definition MUST describe itself, checked both ways — so the",
+    "snippet brings both or it is teaching a refusal. The spray package brings",
+    "all three of its parts for the same reason: the fold, the pack and the",
+    "kernel share one file because that is what a package IS.",
+    "",
+    "Bodies indent by four. Ruled 2026-09-09, and the printer emits four, so a",
+    "snippet that taught two would be wrong the first time anyone formats."
+  ],
+
+  "export def with describe": {
+    "prefix": "exportdef",
+    "description": "An exported definition and the describe block it is held to",
+    "body": [
+      "export def ${1:name}(${2:rate} = ${3:60} (${4:0}..${5:500})) =",
+      "    ${6:0}",
+      "",
+      "describe ${1:name}",
+      "    \"${7:What this is, in one sentence.}\"",
+      "    ${2:rate}    \"${8:What this parameter means, and what moves when you turn it.}\"",
+      "$0"
+    ]
+  },
+
+  "def": {
+    "prefix": "def",
+    "description": "A local definition — a private helper, flattened at parse",
+    "body": [
+      "def ${1:name}(${2:x}: ${3|number,boolean,string,any|}) =",
+      "    ${2:x} | ${4:mul 1}",
+      "$0"
+    ]
+  },
+
+  "def on row": {
+    "prefix": "defrow",
+    "description": "A definition that runs on the row plane — it may name row. and slate.",
+    "body": [
+      "def ${1:name}(${2:x}: number) on row =",
+      "    ${2:x} | ${3:mul row.age} | write row.${4:size}",
+      "$0"
+    ]
+  },
+
+  "describe": {
+    "prefix": "describe",
+    "description": "A describe block for a definition already written",
+    "body": [
+      "describe ${1:name}",
+      "    \"${2:What this is, in one sentence.}\"",
+      "    ${3:port}    \"${4:What it means.}\"",
+      "$0"
+    ]
+  },
+
+  "using": {
+    "prefix": "using",
+    "description": "Bind a fold — tokens captured verbatim, spliced back at :name",
+    "body": [
+      "using ${1:plane.drift.@self.k} as :${2:k}",
+      "$0"
+    ]
+  },
+
+  "also": {
+    "prefix": "also",
+    "description": "Fan out inline — the same value down a side branch",
+    "body": [
+      "| also { ${1:write plane.debug.value} }",
+      "$0"
+    ]
+  },
+
+  "spray package": {
+    "prefix": "kernel",
+    "description": "A spray package: the room, the pack, the kernel — one file, three things",
+    "body": [
+      "// ${1:name} — ${2:what this population looks like, in one line.}",
+      "",
+      "// ── the room ───────────────────────────────────────────────────────────────",
+      "//",
+      "// `@self` resolves to the SPRAY's name at mount, so two sprays of one",
+      "// kind carry different gains.",
+      "using plane.drift.@self.k as :k",
+      "",
+      "// ── the pack ───────────────────────────────────────────────────────────────",
+      "//",
+      "// The body is `0` on purpose: instantiating this would bake the defaults",
+      "// in as literals, and the numbers have to reach the kernel LIVE through",
+      "// the `.k.` room. `export def` is here for its PACK.",
+      "export def ${1:name}(rate = ${3:60} (0..500), speed = ${4:0.15} (0..5), spread = ${5:0.35} (0..3), life = ${6:14000} (16..60000), capacity = ${7:4096} (1..65536), blend = \"${8|add,alpha|}\") =",
+      "    0",
+      "",
+      "describe ${1:name}",
+      "    \"${2:what this population looks like, in one line.}\"",
+      "    rate     \"Rows born a second. With `life` this is the population budget — rate x life rows exist in the steady state, and it must fit under `capacity`.\"",
+      "    speed    \"Metres a second along the spray's aim, applied once at birth.\"",
+      "    spread   \"Per-axis random jitter added to the launch velocity, in +/- metres a second.\"",
+      "    life     \"How long a row lives, in MILLISECONDS. `perish` below is what reaps at it.\"",
+      "    capacity \"Rows allocated, for the population's whole life. Keep it above rate x life.\"",
+      "    blend    \"How the cards blend over the frame: `add` lights onto it, `alpha` lays over it.\"",
+      "",
+      "// ══ THE KERNEL ═══════════════════════════════════════════════════════════",
+      "//",
+      "// One program, run per row, per tick.",
+      "",
+      "// Aim x speed + jitter, once, on the first tick of a row's life. Without",
+      "// this a row is born at rest and `speed` and `spread` do nothing.",
+      "spawn",
+      "",
+      "// Retire the row on the first tick its age reaches its life. Marks only;",
+      "// the spray reaps in a serial phase. Without it, rows are immortal.",
+      "perish",
+      "",
+      "$0"
+    ]
+  },
+
+  "section banner": {
+    "prefix": "section",
+    "description": "A section rule in the house style",
+    "body": [
+      "// ── ${1:title} ───────────────────────────────────────────────────────────────",
+      "//",
+      "// $0"
+    ]
+  }
+}

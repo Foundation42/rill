@@ -1,0 +1,529 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "rill",
+  "scopeName": "source.rill",
+
+  "//": [
+    "THE GRAMMAR IS THE TOKENIZER, TRANSCRIBED. Every rule below has a line in",
+    "`src/parser.zig`'s `tokenize` (:230) behind it, and where the two could",
+    "disagree the comment says which line. A highlighter that guesses at a",
+    "grammar is a second, quieter parser that drifts from the first one; this",
+    "one is meant to be checkable against the real tokenizer, and the gates in",
+    "`test/` run it over all 47 corpus programs.",
+    "",
+    "WHAT IT DELIBERATELY DOES NOT DO — three of them, each for the same",
+    "reason: the operator registry is OPEN (host-injected, `src/registry.zig`),",
+    "so no static list can be right.",
+    "",
+    "  1. It does not know the operator set. A word in HEAD position (the start",
+    "     of a statement, or after a `|`) is scoped as an operator whether it",
+    "     is `perish`, matryoshka's `drift`, or a local `as` name being piped.",
+    "     Colouring the third one as a verb is the price of never being wrong",
+    "     about the first two, and a chain reads as a chain either way.",
+    "",
+    "  2. It does not know which ops are TWO WORDS. `rbf …` is rill core's only",
+    "     two-word family and is spelled out; a host's (`drift spawn`, `light",
+    "     move`) gets its verb scoped and its sub-op left as an argument. No",
+    "     lexical rule can separate `drift spawn` from `along track` — see",
+    "     #operator-head-two-word.",
+    "",
+    "  3. It does not know which ports are TAILS (§3.11). A tail captures the",
+    "     rest of the line VERBATIM from raw source, and only the registry",
+    "     knows a port is one, so a locator (`/tmp/loop.wav`,",
+    "     `pack:horns#audio.stem`) is highlighted as ordinary argument tokens.",
+    "     That is close to plain text and never mangles the line — except for a",
+    "     locator holding `//`, which reads as a comment. rill's OWN tokenizer",
+    "     does the same thing outside a tail, so the grammar is faithful; it is",
+    "     the tail's exemption it cannot see. Gated in test/grammar.test.mjs."
+  ],
+
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#locator" },
+    { "include": "#describe-block" },
+    { "include": "#def-signature" },
+    { "include": "#string" },
+    { "include": "#keyword" },
+    { "include": "#as-binding" },
+    { "include": "#fold" },
+    { "include": "#duration" },
+    { "include": "#number" },
+    { "include": "#range" },
+    { "include": "#member" },
+    { "include": "#path-head" },
+    { "include": "#sigil" },
+    { "include": "#record-key" },
+    { "include": "#operator-head-two-word" },
+    { "include": "#operator-head" },
+    { "include": "#pipe" },
+    { "include": "#comparison" },
+    { "include": "#unbind" },
+    { "include": "#punctuation" },
+    { "include": "#bare-word" }
+  ],
+
+  "repository": {
+
+    "comment": {
+      "//": [
+        "`//` opens a comment and `#` does not — ruled 2026-08-25, and the",
+        "reason is that `#` is the tag sigil (`#garrison`) and cannot also lead",
+        "a comment. A plain `//` match is exactly rill's rule and not an",
+        "approximation of it: `/` is name-INTERIOR only when it JOINS two name",
+        "characters, so `render/grade/exposure` lexes as one word (see",
+        "#bare-word, which carries the same joiner) and no `//` can ever sit",
+        "inside a token. Every `//` the tokenizer meets is at a boundary, by",
+        "construction."
+      ],
+      "match": "(//).*$",
+      "name": "comment.line.double-slash.rill",
+      "captures": {
+        "1": { "name": "punctuation.definition.comment.rill" }
+      }
+    },
+
+    "locator": {
+      "//": [
+        "The ONE concession to the tail port, and it is a concession the",
+        "tokenizer cannot contradict: a `/` that does not JOIN two name",
+        "characters has no meaning in rill at all. It is an inert `raw` token,",
+        "legal only inside a tail (§3.11) — so a `/`-led run in argument",
+        "position is a locator, is text rather than structure, and is scoped as",
+        "text. `/tmp/loop.wav` comes out whole instead of shattering into a",
+        "stray slash, a joined name and a projection.",
+        "",
+        "It stops at whitespace and at `|`, so it can only ever claim the run",
+        "the author typed, and it sits AFTER #comment so `// …` is still a",
+        "comment. The blind spot it does not fix is a locator holding `//`",
+        "(`https://…`): rill's own tokenizer reads that as a comment outside a",
+        "tail, and a grammar that disagreed with the tokenizer to be helpful",
+        "would be the second, quieter parser this file exists not to be."
+      ],
+      "match": "(?<![\\w$@#^./-])/[^\\s|]*",
+      "name": "string.unquoted.locator.rill"
+    },
+
+    "string": {
+      "//": "The tokenizer takes the raw span between quotes and applies escapes later; a newline inside one is `unterminated string`, so this rule stays on its line.",
+      "name": "string.quoted.double.rill",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.rill" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.rill" } },
+      "patterns": [
+        { "match": "\\\\.", "name": "constant.character.escape.rill" }
+      ]
+    },
+
+    "keyword": {
+      "patterns": [
+        {
+          "//": "`using <tokens…> as :name` binds a parse-time fold (§3.10). `use` is still reserved so the parser can point at `using`; it is scoped as the keyword it is, and rill will tell him the rest.",
+          "match": "(?<![\\w.:$@#^-])(using|use)(?![\\w-])",
+          "name": "keyword.control.using.rill"
+        },
+        {
+          "//": "`also { … }` is fan-out spelled inline — pure desugaring, no new node kind.",
+          "match": "(?<![\\w.:$@#^-])also(?![\\w-])",
+          "name": "keyword.control.also.rill"
+        },
+        {
+          "match": "(?<![\\w.:$@#^-])(true|false)(?![\\w-])",
+          "name": "constant.language.boolean.rill"
+        }
+      ]
+    },
+
+    "as-binding": {
+      "//": [
+        "`as` names an edge. Two spellings, and the difference is the sigil:",
+        "`as :k` closes a `using` and binds a FOLD; `as tangent` binds a stream.",
+        "The bound name gets a definition scope so the outline and the eye find",
+        "it in the same place."
+      ],
+      "patterns": [
+        {
+          "match": "(?<![\\w.:$@#^-])(as)(\\s+)(:[A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+          "captures": {
+            "1": { "name": "keyword.control.as.rill" },
+            "3": { "name": "variable.other.constant.fold.rill" }
+          }
+        },
+        {
+          "match": "(?<![\\w.:$@#^-])(as)(\\s+)([A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+          "captures": {
+            "1": { "name": "keyword.control.as.rill" },
+            "3": { "name": "entity.name.variable.rill" }
+          }
+        },
+        {
+          "match": "(?<![\\w.:$@#^-])as(?![\\w-])",
+          "name": "keyword.control.as.rill"
+        }
+      ]
+    },
+
+    "fold": {
+      "//": [
+        "`:name` is ONE token, colon included, exactly as `$chan` is. What",
+        "decides is ADJACENCY, not position (`colonOpensFold`, parser.zig:213):",
+        "every other colon in the language glues to the name on its LEFT — a",
+        "port type `x: number`, a record `{l: 0.28}`, a kwarg `at: row.pos` —",
+        "and a fold colon glues to the name on its RIGHT. So the whitelist",
+        "below is the tokenizer's: start of line, whitespace, or one of",
+        "`( [ { , |`.",
+        "",
+        "`:k.tight` is therefore `:k` + a projection, and it is scoped that way",
+        "— NOT as a path. The head has no `plane`/`row`/`slate` scope on it,",
+        "because a fold is tokens, not a store: it may hold a path prefix",
+        "(`using plane.drift.@self.k as :k`) and it may hold anything else."
+      ],
+      "match": "(?:^|(?<=[\\s(\\[{,|]))(:[$@#^]?[A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+      "captures": {
+        "1": { "name": "variable.other.constant.fold.rill" }
+      }
+    },
+
+    "duration": {
+      "//": [
+        "A number GLUED to a unit is one token (§3.13). The unit set is closed",
+        "and ratified — s, ms, m, f — so an unknown one is loud here for the",
+        "same reason it is loud in the parser (`unknown duration unit '5x'`)",
+        "rather than splitting quietly into a number and a name."
+      ],
+      "patterns": [
+        {
+          "match": "(?<![\\w$@#^])(-?\\d+(?:\\.\\d+)?)(ms|s|m|f)(?![\\w.-])",
+          "captures": {
+            "1": { "name": "constant.numeric.duration.rill" },
+            "2": { "name": "keyword.other.unit.rill" }
+          }
+        },
+        {
+          "match": "(?<![\\w$@#^])-?\\d+(?:\\.\\d+)?[A-Za-z]+(?![\\w.-])",
+          "name": "invalid.illegal.duration-unit.rill"
+        }
+      ]
+    },
+
+    "number": {
+      "//": [
+        "`(?:\\.\\d+)?` stops short of `..` on its own: the range separator is",
+        "two dots and `\\d` matches neither, so `0..500` lexes as number, range,",
+        "number without a special case — the same yield the number lexer makes",
+        "in parser.zig:325.",
+        "A `-` opens a number only when a digit follows it; a lone `-` is the",
+        "unbind sentinel and a word (see #unbind). rill has no infix minus."
+      ],
+      "match": "(?<![\\w$@#^])-?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w]|\\.\\d)",
+      "name": "constant.numeric.rill"
+    },
+
+    "range": {
+      "//": "`..` is the range separator and appears nowhere else in the language. It must be tried before #member or `0..500` reads as a projection.",
+      "match": "\\.\\.",
+      "name": "keyword.operator.range.rill"
+    },
+
+    "member": {
+      "//": [
+        "One rule for both spellings, because they are the same thing: a path",
+        "segment (`plane.drift.@self.k.tight`) and a projection off a name",
+        "(`stats.mana`) and the mid-chain sugar (`| .pos.x`) all reuse",
+        "`parseProjections`. A segment may be a number (`plane.ents.1.$tilt`)",
+        "and may carry the `-`/`/` joiners (`plane.tags.in-courtyard.count`).",
+        "A sigil segment (`.@self`, `.$tilt`) is left to #sigil, which is why",
+        "this does not try to swallow one."
+      ],
+      "match": "(\\.)([A-Za-z_][\\w]*(?:[-/][\\w]+)*|\\d+)",
+      "captures": {
+        "1": { "name": "punctuation.accessor.rill" },
+        "2": { "name": "variable.other.member.rill" }
+      }
+    },
+
+    "path-head": {
+      "//": [
+        "The three relative stores, reserved so an operator can never shadow",
+        "one (`registry.isReservedWord`): `plane` the world, `row` the row",
+        "being swept, `slate` the row's register file for one tick. The",
+        "lookahead is what keeps this from firing on an operator or a stream",
+        "that happens to be spelled the same — a head is always followed by a",
+        "dot, because a store on its own is not a value."
+      ],
+      "match": "(?<![\\w.:$@#^-])(plane|row|slate)(?=\\.)",
+      "name": "support.class.plane.rill"
+    },
+
+    "sigil": {
+      "//": [
+        "The four sigils name rows of the STORE, never operators — refused at",
+        "registration for exactly that reason (registry.zig:599). Each is one",
+        "token with its sigil ON, which is what `$wind` and `@self` are in the",
+        "tokenizer, so the sigil is inside the scope rather than split off as",
+        "punctuation. A lone sigil is an inert `raw` token and is left alone.",
+        "",
+        "`@self` is the one that is the language's own word: it resolves at",
+        "MOUNT, per instance, and it is the single path a `def` may name and",
+        "still travel (`checkDefReach`, 2026-09-08). It gets its own scope so",
+        "it reads differently from `@roaches` — because it means something",
+        "different."
+      ],
+      "patterns": [
+        { "match": "@self(?![\\w-])", "name": "variable.language.self.rill" },
+        { "match": "\\$[A-Za-z_][\\w]*(?:[-/][\\w]+)*", "name": "entity.name.tag.channel.rill" },
+        { "match": "@[A-Za-z_][\\w]*(?:[-/][\\w]+)*", "name": "entity.name.tag.entity.rill" },
+        { "match": "#[A-Za-z_][\\w]*(?:[-/][\\w]+)*", "name": "entity.name.tag.condition.rill" },
+        { "match": "\\^[A-Za-z_][\\w]*(?:[-/][\\w]+)*", "name": "entity.name.tag.archetype.rill" }
+      ]
+    },
+
+    "record-key": {
+      "//": [
+        "`{l: 0.28}` and the colon-kwarg `at: row.pos` are the same shape and",
+        "get the same scope. NO whitespace is allowed before the colon, and",
+        "that is not tidiness: it is `colonOpensFold`'s rule read from the",
+        "other side. Allow a space and `near :k.tight` reads as a kwarg named",
+        "`near`, which is the exact failure the adjacency rule was written to",
+        "prevent in the parser."
+      ],
+      "match": "([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(:)(?!:)",
+      "captures": {
+        "1": { "name": "variable.other.property.rill" },
+        "2": { "name": "punctuation.separator.key-value.rill" }
+      }
+    },
+
+    "operator-head-two-word": {
+      "//": [
+        "Operator lookup tries the TWO-WORD form first (parser.zig:2717), so a",
+        "host registry seeded from (verb, subop) pairs maps one row to one",
+        "operator. `rbf` is rill core's only two-word family (`rbf through`,",
+        "`rbf bump`) and is the only one spelled out here.",
+        "",
+        "A host's two-word verbs are NOT, and cannot be: `drift spawn` and",
+        "`along track` are the same two tokens, and only the registry knows",
+        "which is a sub-op and which is a stream. Guessing gets `along track",
+        "loop` wrong in every kernel that draws a curve, so the second word",
+        "stays an argument and the line still reads correctly. To add a family,",
+        "add an alternative to the group below — the shape is closed on",
+        "purpose, so a wrong list is a visible edit rather than a heuristic."
+      ],
+      "patterns": [
+        {
+          "match": "^([ \\t]*)(rbf)([ \\t]+)([A-Za-z_][\\w]*)",
+          "captures": {
+            "2": { "name": "entity.name.function.rill" },
+            "4": { "name": "entity.name.function.rill" }
+          }
+        },
+        {
+          "match": "(?<=[|{(])([ \\t]*)(rbf)([ \\t]+)([A-Za-z_][\\w]*)",
+          "captures": {
+            "2": { "name": "entity.name.function.rill" },
+            "4": { "name": "entity.name.function.rill" }
+          }
+        }
+      ]
+    },
+
+    "operator-head": {
+      "//": [
+        "HEAD POSITION: the start of a statement, or straight after a `|`, a",
+        "`{` that opened a fan-out block, or a `(` that opened a predicate",
+        "section. That is where a word is a verb.",
+        "",
+        "The negative lookahead `(?![\\w.:/-])` is what keeps this off the",
+        "other four things that can stand there: a path (`plane.`), a",
+        "projection off a name (`stats.mana`), a record key (`{l:`) and the",
+        "second half of a joined name. A statement head that is a local `as`",
+        "name (`t | write plane.follow.t`) does land here and is scoped as a",
+        "verb — see the module note; the alternative is a semantic pass, and a",
+        "chain reads as a chain either way."
+      ],
+      "patterns": [
+        {
+          "match": "^([ \\t]*)(?!(?:def|export|describe|using|use|also|as|true|false)(?![\\w-]))([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(?![\\w.:/-])",
+          "captures": {
+            "2": { "name": "entity.name.function.rill" }
+          }
+        },
+        {
+          "match": "(?<=[|{(])([ \\t]*)(?!(?:def|export|describe|using|use|also|as|true|false)(?![\\w-]))([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(?![\\w.:/-])",
+          "captures": {
+            "2": { "name": "entity.name.function.rill" }
+          }
+        }
+      ]
+    },
+
+    "def-signature": {
+      "//": [
+        "`defstmt := [\"export\"] \"def\" name \"(\" port* \")\" [\"on\" plane] \"=\" body`",
+        "(parser.zig:1233). The signature ENDS AT THE NEWLINE — a `(` claims",
+        "nothing across it — and this context ends at the `=` for the same",
+        "reason, so a one-line def (`def dbl(x) = x | mul 2`) hands its body",
+        "back to the ordinary rules.",
+        "",
+        "`export def` marks a definition visible to the HOST; rill has no",
+        "imports and no cross-file reference, so that is the whole of what",
+        "visibility can mean, and the pack is the one thing that survives the",
+        "parse that flattens the body away."
+      ],
+      "name": "meta.function.definition.rill",
+      "begin": "^([ \\t]*)(?:(export)[ \\t]+)?(def)[ \\t]+([A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+      "beginCaptures": {
+        "2": { "name": "storage.modifier.export.rill" },
+        "3": { "name": "storage.type.function.rill" },
+        "4": { "name": "entity.name.function.definition.rill" }
+      },
+      "end": "(=)|$",
+      "endCaptures": {
+        "1": { "name": "keyword.operator.assignment.rill" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "//": "`on row` / `on plane` — the definition's own evaluation plane (2026-09-08). `on` reserves nothing: the parser looks for it in exactly one place, which is here.",
+          "match": "(?<![\\w.:$@#^-])(on)[ \\t]+(row|plane)(?![\\w-])",
+          "captures": {
+            "1": { "name": "keyword.control.on.rill" },
+            "2": { "name": "entity.name.type.plane.rill" }
+          }
+        },
+        { "include": "#port-pack" }
+      ]
+    },
+
+    "port-pack": {
+      "//": [
+        "The PARAMETER PACK (§3.9): a default that makes the port optional at",
+        "the call site, an advisory range that nothing enforces, and — through",
+        "the separate `describe` block — one sentence each. Blade3D's",
+        "`[OperatorParameter(…)]`, transposed: one declaration is the signature,",
+        "the widget, the documentation and the validation at once."
+      ],
+      "name": "meta.parameters.rill",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": { "0": { "name": "punctuation.section.parameters.begin.rill" } },
+      "endCaptures": { "0": { "name": "punctuation.section.parameters.end.rill" } },
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#range-group" },
+        {
+          "//": "`x: number` — the port's declared type. Types are interned freely, so any word may be one; `number`, `boolean`, `string` and `any` are the four the shape grammar also knows.",
+          "match": "(:)[ \\t]*([A-Za-z_][\\w]*)",
+          "captures": {
+            "1": { "name": "punctuation.separator.key-value.rill" },
+            "2": { "name": "entity.name.type.rill" }
+          }
+        },
+        { "match": "=", "name": "keyword.operator.assignment.rill" },
+        { "include": "#string" },
+        { "include": "#keyword" },
+        { "include": "#fold" },
+        { "include": "#duration" },
+        { "include": "#number" },
+        { "match": ",", "name": "punctuation.separator.comma.rill" },
+        {
+          "match": "[A-Za-z_][\\w]*(?:[-/][\\w]+)*",
+          "name": "variable.parameter.rill"
+        }
+      ]
+    },
+
+    "range-group": {
+      "//": "`(0..500)` — advice, not a constraint. A sane range for a slider and for a reader; nothing clamps and nothing refuses.",
+      "name": "meta.range.rill",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": { "0": { "name": "punctuation.section.group.begin.rill" } },
+      "endCaptures": { "0": { "name": "punctuation.section.group.end.rill" } },
+      "patterns": [
+        { "include": "#range" },
+        { "include": "#fold" },
+        { "include": "#duration" },
+        { "include": "#number" }
+      ]
+    },
+
+    "describe-block": {
+      "//": [
+        "`describe <name>` opens the prose block an exported def is held to.",
+        "The block ends at a DEDENT (parser.zig:1549, `t.col <= kw.col`) and",
+        "blank lines inside it are skipped, so the `while` continues on an",
+        "indented line or an empty one and stops at the first line back in the",
+        "left margin.",
+        "",
+        "The check runs both ways: an exported port with no line is refused,",
+        "and a line naming a port that does not exist is refused too — that one",
+        "for local defs as well, because a block that lies is wrong whoever",
+        "wrote it. So the port names here are scoped as parameters, not as the",
+        "statement heads they would otherwise look like."
+      ],
+      "name": "meta.describe.rill",
+      "begin": "^([ \\t]*)(describe)[ \\t]+([A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+      "beginCaptures": {
+        "2": { "name": "keyword.control.describe.rill" },
+        "3": { "name": "entity.name.function.rill" }
+      },
+      "while": "^(?=[ \\t]+\\S|[ \\t]*$)",
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#string" },
+        {
+          "match": "^[ \\t]*([A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+          "captures": { "1": { "name": "variable.parameter.rill" } }
+        },
+        { "include": "#fold" },
+        { "include": "#bare-word" }
+      ]
+    },
+
+    "pipe": {
+      "match": "\\|",
+      "name": "keyword.operator.pipe.rill"
+    },
+
+    "comparison": {
+      "//": "`= != < <= > >=` are ordinary operators over data — there is no `if` statement and no exec wire (§4.3). `where (= 0)` and `| > 0.5` are the same six words.",
+      "match": "(!=|<=|>=|=|<|>)",
+      "name": "keyword.operator.comparison.rill"
+    },
+
+    "unbind": {
+      "//": "A lone `-` is the console's unbind sentinel (`light arche l1 -`) and lexes as a WORD, because rill has no infix minus — subtraction is `sub`.",
+      "match": "(?<=[\\s(\\[])-(?=[\\s)\\]]|$)",
+      "name": "constant.language.unbind.rill"
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "match": "\\{", "name": "punctuation.section.block.begin.rill" },
+        { "match": "\\}", "name": "punctuation.section.block.end.rill" },
+        { "match": "\\[", "name": "punctuation.section.array.begin.rill" },
+        { "match": "\\]", "name": "punctuation.section.array.end.rill" },
+        { "match": "\\(", "name": "punctuation.section.group.begin.rill" },
+        { "match": "\\)", "name": "punctuation.section.group.end.rill" },
+        { "match": ",", "name": "punctuation.separator.comma.rill" },
+        { "match": "\\.", "name": "punctuation.accessor.rill" },
+        { "match": ":", "name": "punctuation.separator.key-value.rill" }
+      ]
+    },
+
+    "bare-word": {
+      "//": [
+        "Everything else a name can be: an argument, a flag (`loop`, `desc`), a",
+        "keyword-introduced port's word (`radius 12`), a write mode (`hold`,",
+        "`add`, `stops`), a stream read by name, a bare word bound to a",
+        "string-typed port. `-` and `/` are name-INTERIOR when they join two",
+        "name characters, which is what makes `key-light` one entity name and",
+        "`render/grade/exposure` one knob path — and, in passing, what makes",
+        "the `//` comment rule sound."
+      ],
+      "match": "[A-Za-z_][\\w]*(?:[-/][\\w]+)*",
+      "name": "variable.other.rill"
+    }
+  }
+}

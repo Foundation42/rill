@@ -1,0 +1,9 @@
+# What a .vsix does NOT need. The dev dependencies back the gates only — the
+# extension itself has no runtime dependency beyond the `vscode` module the
+# editor supplies.
+node_modules/**
+.mutant/**
+test/**
+.gitignore
+.vscodeignore
+*.vsix

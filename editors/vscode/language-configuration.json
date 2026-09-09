@@ -1,0 +1,90 @@
+{
+  "//": [
+    "The editor's half of the tokenizer. Every value here is the same rule the",
+    "parser holds, said in the one dialect VSCode understands.",
+    "",
+    "FOUR SPACES, everywhere. Ruled 2026-09-09 ('four everywhere'), and it is",
+    "one constant in the printer too (`script.zig`'s `indent_canon`) rather",
+    "than one per site, because two names for one value is an invitation to",
+    "drift apart. The value itself lives in package.json's",
+    "`configurationDefaults` — that is the only place VSCode reads a tab size",
+    "from — and this file carries the rules that decide WHEN to add one."
+  ],
+
+  "comments": {
+    "//": "`//` opens a comment; `#` does NOT — ruled 2026-08-25, because `#` is the tag sigil (`#garrison`) and cannot also lead a comment. rill has no block comment, so none is declared: an editor that offers one would be offering a syntax error.",
+    "lineComment": "//"
+  },
+
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string", "comment"] }
+  ],
+
+  "surroundingPairs": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"],
+    ["\"", "\""]
+  ],
+
+  "wordPattern": "([:$@#^]?[A-Za-z_][A-Za-z0-9_]*(?:[-/][A-Za-z0-9_]+)*)|(-?[0-9]+(?:\\.[0-9]+)?(?:ms|s|m|f)?)",
+
+  "//wordPattern": [
+    "A word is what the tokenizer calls one, and nothing else:",
+    "",
+    "  `:k`      a fold reference, sigil included, ONE token (§3.10)",
+    "  `$wind`   a field channel, sigil included, ONE token",
+    "  `@self`   an entity segment; `#garrison` and `^raider` likewise",
+    "  `in-courtyard`, `render/grade/exposure`",
+    "            `-` and `/` are name-INTERIOR when they JOIN two name",
+    "            characters (parser.zig:190). Double-clicking a knob path",
+    "            should take all of it, because that is one name.",
+    "  `250ms`   a duration is a number glued to a unit, one token",
+    "",
+    "The dot is deliberately NOT in the pattern. `plane.drift.@self.k.tight`",
+    "is five words, so a double-click takes the segment under the cursor —",
+    "which is the one you are about to retype. Taking the whole path was the",
+    "other reading and was rejected: it makes the common edit harder to serve",
+    "the rare one, and Ctrl+D on `k` across a file is worth more than one",
+    "click saved on a copy."
+  ],
+
+  "indentationRules": {
+    "//": [
+      "Indent after the three things that open a body: a def signature's `=`,",
+      "a `describe` head, and any unclosed opener. Outdent on a closer.",
+      "A def signature ends at the newline, so `=` at end of line is the",
+      "reliable mark — `(` claims nothing across it."
+    ],
+    "increaseIndentPattern": "^\\s*(?:(?:export\\s+)?def\\b.*=\\s*$|describe\\s+[A-Za-z_][\\w-]*\\s*$)|[{\\[(]\\s*$",
+    "decreaseIndentPattern": "^\\s*[}\\])]"
+  },
+
+  "onEnterRules": [
+    {
+      "//": [
+        "Continue a `//` comment onto the next line. Not a nicety here:",
+        "`matryoshka/kernels/roaches.rill` is the documented exemplar and is",
+        "roughly four-fifths prose — the numbers, the traps and the reasoning",
+        "all live in `//` lines. Writing that by hand without this is typing",
+        "two slashes a hundred and forty times."
+      ],
+      "beforeText": "^\\s*//.*$",
+      "action": { "indent": "none", "appendText": "// " }
+    },
+    {
+      "//": "A leading `|` continues the statement above it — no statement can begin with a pipe, so it has never had a second meaning (parser.zig:1905). Enter after one keeps the branch aligned in the left margin, where the eye finds it.",
+      "beforeText": "^(\\s*)\\|\\s.*$",
+      "action": { "indent": "none", "appendText": "| " }
+    }
+  ]
+}

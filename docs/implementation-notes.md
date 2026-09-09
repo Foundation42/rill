@@ -4444,3 +4444,63 @@ pipe, and the five ironwood rills wrap their chains. Retaining those means
 recording per-token padding, which is a much larger thing than a block's key
 width and was not built. Named here so it is a decision rather than an
 oversight.
+
+---
+
+## `editors/vscode` — the plugin, and the CLI it is waiting for
+
+Christian asked for "a nice VSCode .rill plugin" on 2026-09-09, the afternoon
+the printer landed. It ships highlighting, a language configuration, snippets
+and a document outline, all of which work today; and a formatter and a
+diagnostics provider, **neither of which can work yet**, because rill has no
+`fmt` and no `check` subcommand. That is deliberate: the client half is built
+and gated, the contract is written down in the extension's README, and the Zig
+half is a separate beat in this repo's own source.
+
+The grammar is `src/parser.zig`'s tokenizer transcribed rule by rule, with line
+references in the comments. What it deliberately does **not** know is the
+operator set, because the registry is open: a head-position word is scoped as a
+verb even when it is a local `as` name, and a host's `(verb, subop)` pairs are
+not spelled out because `drift spawn` and `along track` are lexically identical
+to `rbf sample`. Only `rbf`, rill core's one two-word family, is named.
+
+**Gates: 45 tests, 39 mutations, all 39 biting.** Six survived the first run and
+one was stale, and every one was a real finding rather than a weak mutation —
+the two worth recording here because they are about how a TextMate grammar
+actually resolves:
+
+- **G6** survived because `#record-key` matches earlier in the line and eats
+  `pack:` before `#fold` is ever offered the colon. The adjacency law (a kwarg
+  colon glues left, a fold colon glues right) is enforced by the two rules
+  *together*, so a mutation aimed at one of them proves nothing. It is a pair
+  now.
+- **G7** survived because at column 0 `#path-head` wins on list order anyway.
+  The guard it was aimed at only matters on an *indented* path-headed line, so
+  the gate grew that case.
+
+Both are the same lesson in a new place: **a mutation that the code routes
+around has not tested the code.** Same shape as the chunking gate whose crowd
+all sat in one cell.
+
+The contract the Zig side must satisfy is `rill fmt -` (program on stdin,
+program on stdout, exit 0/64/65 with an EMPTY stdout on 65) and
+`rill check --json -`. One requirement in it is not obvious and is the reason
+diagnostics default to off until it exists: **every diagnostic needs a stable
+`code`.** rill core does not know `spawn`, `near`, `push` or `drift`, so a plain
+parse of the corpus reports `unknown operator` on 21 of 47 files — all of them
+correct programs. With `unknown_operator` as a code the client can downgrade it
+to a warning; without one, the only honest default is silence. `Diag`'s
+line/col/message alone is not enough, which is worth knowing before implementing
+the seam.
+
+Three measurements from building it, none of which were known before:
+
+- **No core rill operator has a tail port.** Tails come only from host
+  registrations, and **no `.rill` file in the corpus contains a tail-port
+  statement** — locators live in `.rillbook` files and console input. The tail
+  trap is real for the future and has no present corpus footprint, so its gate
+  uses a synthetic fixture.
+- **The 47-file corpus is 8 spindrift, 39 matryoshka, and zero in rill itself.**
+  The same fact that makes `tools/roundtrip.zig` take files as arguments.
+- `[rill]` sets `editor.tabSize: 4`, gated, because the editor and the printer
+  must not disagree about the canon ruled this morning.
