@@ -138,7 +138,14 @@ const MUTATIONS = [
   {
     id: 'G7d', file: G, test: GRAMMAR_TEST, name: '^G7d: ',
     why: 'a describe block never dedents — the statements after it are read as prose',
-    from: '"while": "^(?=[ \\\\t]+\\\\S|[ \\\\t]*$)",', to: '"while": "^(?=.*$)",',
+    // ANCHORED ON THE RULE, not on the pattern. `layout` (2026-09-09) gave a
+    // second block the same dedent `while`, so a bare anchor matched twice and
+    // the runner reported this stale rather than mutating the wrong block —
+    // three gates watching nothing until the anchors were widened. The
+    // subject's scope is what tells the two apart: `describe` names a def,
+    // `layout` names the document.
+    from: '"3": { "name": "entity.name.function.rill" }\n      },\n      "while": "^(?=[ \\\\t]+\\\\S|[ \\\\t]*$)",',
+    to: '"3": { "name": "entity.name.function.rill" }\n      },\n      "while": "^(?=.*$)",',
   },
   {
     id: 'G8', file: G, test: GRAMMAR_TEST, name: '^G8: ',
@@ -283,12 +290,18 @@ const MUTATIONS = [
   {
     id: 'G7e-dedent', file: G, test: GRAMMAR_TEST, name: '^G7e: ',
     why: 'a describe block does not need an indent to continue — the wrapped signature above it makes that look plausible',
-    from: '"while": "^(?=[ \\\\t]+\\\\S|[ \\\\t]*$)",', to: '"while": "^(?=[ \\\\t]*\\\\S|[ \\\\t]*$)",',
+    // Same widening as G7d, same reason.
+    from: '"3": { "name": "entity.name.function.rill" }\n      },\n      "while": "^(?=[ \\\\t]+\\\\S|[ \\\\t]*$)",',
+    to: '"3": { "name": "entity.name.function.rill" }\n      },\n      "while": "^(?=[ \\\\t]*\\\\S|[ \\\\t]*$)",',
   },
   {
     id: 'G9', file: G, test: GRAMMAR_TEST, name: '^G9: ',
     why: 'head position after a `|` goes — a broken chain has no verbs, only words',
-    from: '        {\n          "match": "(?<=[|{(])([ \\\\t]*)(?!(?:def|export|describe|using|use|also|as|true|false)(?![\\\\w-]))([A-Za-z_][\\\\w]*(?:[-/][\\\\w]+)*)(?![\\\\w.:/-])",\n          "captures": {\n            "2": { "name": "entity.name.function.rill" }\n          }\n        }\n',
+    // The keyword list in this lookahead gained `layout` (2026-09-09) and the
+    // anchor went to ZERO matches — the other half of the same staleness G7d
+    // hit, and the reason a mutation's `from` must be re-read whenever the
+    // rule it quotes is edited.
+    from: '        {\n          "match": "(?<=[|{(])([ \\\\t]*)(?!(?:def|export|describe|layout|using|use|also|as|true|false)(?![\\\\w-]))([A-Za-z_][\\\\w]*(?:[-/][\\\\w]+)*)(?![\\\\w.:/-])",\n          "captures": {\n            "2": { "name": "entity.name.function.rill" }\n          }\n        }\n',
     to: '',
     also: [{ from: '          }\n        },\n      ]\n    },\n\n    "def-signature"', to: '          }\n        }\n      ]\n    },\n\n    "def-signature"' }],
   },
@@ -336,6 +349,41 @@ const MUTATIONS = [
     why: 'the spray package teaches a 149-column signature the first save reflows',
     from: '      "export def ${1:name}(",\n      "    rate = ${3:60} (0..500),",\n      "    speed = ${4:0.15} (0..5),",\n      "    spread = ${5:0.35} (0..3),",\n      "    life = ${6:14000} (16..60000),",\n      "    capacity = ${7:4096} (1..65536),",\n      "    blend = \\"${8|add,alpha|}\\"",\n      ") =",',
     to: '      "export def ${1:name}(rate = ${3:60} (0..500), speed = ${4:0.15} (0..5), spread = ${5:0.35} (0..3), life = ${6:14000} (16..60000), capacity = ${7:4096} (1..65536), blend = \\"${8|add,alpha|}\\") =",',
+  },
+  // ── the two spellings a canvas needs, 2026-09-09 ────────────────────────
+  //
+  // `layout` puts node positions IN the document; a shaped hole lets the
+  // document hold a node nothing is wired to yet. Both anchors below quote
+  // enough of their own rule to be unique — `layout` shares `describe`'s
+  // dedent `while`, which is what went stale here the first time.
+  {
+    id: 'G7f', file: G, test: GRAMMAR_TEST, name: '^G7f: ',
+    why: 'no layout rule — `layout` reads as an operator head, its subject as an argument, and every node key as a statement of its own',
+    from: '    { "include": "#layout-block" },\n', to: '',
+  },
+  {
+    id: 'G7f-dedent', file: G, test: GRAMMAR_TEST, name: '^G7f: ',
+    why: 'a layout block never dedents — the statement after it is read as another node position',
+    from: '"3": { "name": "entity.name.namespace.rill" }\n      },\n      "while": "^(?=[ \\\\t]+\\\\S|[ \\\\t]*$)",',
+    to: '"3": { "name": "entity.name.namespace.rill" }\n      },\n      "while": "^(?=.*$)",',
+  },
+  {
+    id: 'G7g', file: G, test: GRAMMAR_TEST, name: '^G7g: ',
+    why: 'the hole sigil claims the `?` a shape literal already spent — `expect {id?: string}` reads its optional field as a hole',
+    from: '"match": "(\\\\?)(?![:])([A-Za-z_][\\\\w]*(?:[-/][\\\\w]+)*)?",',
+    to: '"match": "(\\\\?)([A-Za-z_][\\\\w]*(?:[-/][\\\\w]+)*)?",',
+  },
+  {
+    id: 'G7g-list', file: G, test: GRAMMAR_TEST, name: '^G7g: ',
+    why: 'the shape vocabulary is hard-coded to the eight built-ins — a host type stops being a shape the grammar can see',
+    from: '"match": "(\\\\?)(?![:])([A-Za-z_][\\\\w]*(?:[-/][\\\\w]+)*)?",',
+    to: '"match": "(\\\\?)(?![:])(number|boolean|string|record|bytes|array|duration|any)?",',
+  },
+  {
+    id: 'C10-hole', file: S, test: CLIENT_TEST, name: '^C10: ',
+    why: 'a `using` body must start with a name — every shaped hole drops out of the outline',
+    from: "const USING = new RegExp('^\\\\s*using\\\\s+(.*?)\\\\s+as\\\\s+(:' + NAME + ')\\\\s*$');",
+    to: "const USING = new RegExp('^\\\\s*using\\\\s+([A-Za-z].*?)\\\\s+as\\\\s+(:' + NAME + ')\\\\s*$');",
   },
 ];
 

@@ -5334,5 +5334,53 @@ is gated: the next edit to `USING` could take it away silently.
 opposite reason — see the note in `symbols.js`.)
 
 **Corpus: 47/47 round-trip, 47/47 `rill fmt` no-op, byte-identical.** No
-corpus file uses either feature. Suite 504 → 510. Extension 58 → 59 tests,
-51 → 55 mutations.
+corpus file uses either feature. Suite 504 → 510. Extension 58 → 59 tests.
+
+### The mutation runner is the count, and it caught me
+
+Both entries above first claimed a mutation count (49 → 51 → 55) taken from
+the PROSE notes beside each gate. `test/mutate.mjs` is the authority — it is
+the thing that executes them — and it still held 49 entries: the five new ones
+had been run by hand and never added to the runner, so nothing would have
+re-run them. **49 → 54** is the real number, and the five are `G7f`,
+`G7f-dedent`, `G7g`, `G7g-list` and `C10-hole`.
+
+Worse, and the reason this needed a commit of its own: **three existing
+mutations had gone stale**, and a stale mutation is a gate watching nothing.
+
+    STALE  G7d          '"while": …' appears 2 times
+    STALE  G7e-dedent   same anchor, same reason
+    STALE  G9           the operator-head lookahead — appears 0 times
+
+Two causes, one beat. `layout` was given the same dedent `while` as
+`describe`, so the anchor those two mutations quoted matched TWICE and the
+runner refused an ambiguous edit — correctly, which is why it reports
+staleness instead of counting a pass. And `layout` joined the keyword
+lookahead in `#operator-head`, so `G9`'s anchor, which quoted the old list,
+matched nothing at all.
+
+Both are fixed by quoting more of the rule: `G7d` and `G7e-dedent` now anchor
+on `describe`'s own subject scope (`entity.name.function.rill`) and
+`G7f-dedent` on `layout`'s (`entity.name.namespace.rill`), so each names one
+block. All three were then RE-RUN, and all three still bite — checked rather
+than assumed, because a mutation that has not been observed since its anchor
+moved is a claim, not a measurement.
+
+### Should `describe` and `layout` be one rule?
+
+Asked, and the answer is no — twice over.
+
+1. TextMate's `while` is a property of a rule, not an includable pattern, so
+   there is no shared `#dedent-block` to factor out. The only merge available
+   is one rule with `(describe|layout)` in its `begin`, and a single `begin`
+   cannot scope capture 3 two ways — it would make a def name and the
+   document name highlight identically, and a port and a node key with them.
+   That is the distinction `G7f` exists to assert.
+2. This is NOT the `G6` shape. `G6` was two rules enforcing ONE law, where a
+   mutation aimed at either proved nothing about the law. Here the laws
+   differ — *a describe line's key is a port*, *a layout line's key is a
+   node* — and each has its own gate over its own dedent (`G7d`, `G7f`). What
+   they share is a shape, and what was actually wrong was the anchors.
+
+The reasoning is written into `#layout-block`'s own note, where the next
+person to add a third block will meet it.
