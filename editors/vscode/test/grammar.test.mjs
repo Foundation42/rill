@@ -41,7 +41,12 @@ async function walk(dir, out) {
     return out;
   }
   for (const e of entries) {
-    if (e.name === '.git' || e.name === '.zig-cache' || e.name === 'node_modules') continue;
+    // `scratchpad` joins the skip list for the same reason the Zig-side
+    // corpus definition excludes it (`rill/CLAUDE.md`): it is gitignored
+    // working space, and a half-written `.rill` an agent left there is not a
+    // corpus program. Found on 2026-09-09 by a scratch file failing G1.
+    if (e.name === '.git' || e.name === '.zig-cache' || e.name === 'node_modules'
+      || e.name === 'scratchpad') continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) await walk(full, out);
     else if (e.isFile() && e.name.endsWith('.rill')) out.push(full);
@@ -373,6 +378,43 @@ test('G7d: a describe block is prose, and its port names are parameters', () => 
 });
 // MUTATION: change #describe-block's `while` to "^(?:.*)$". The block never
 // ends, `spawn` is read as a describe line, and the last assertion goes red.
+
+test('G7f: a layout block is coordinates, and its keys are nodes', () => {
+  const tokens = lex([
+    'plane.a | mul 2 | write plane.out',
+    '',
+    'layout demo',
+    '    mul1          240 120',
+    '    roaches1.sin1 400 -60',
+    'spawn',
+    '',
+  ].join('\n'));
+
+  assert.ok(scopesOfText(tokens, 'layout').includes('keyword.control.layout.rill'));
+  // The SUBJECT names the document and is never resolved against a def, so
+  // it is a namespace here and not `entity.name.function` — scoping it as a
+  // def would tell the reader something the parser does not believe.
+  assert.ok(scopesOfText(tokens, 'demo').includes('entity.name.namespace.rill'));
+  // A key is a NODE INSTANCE, dotted for one inside a spliced def — not the
+  // statement head every `^`-anchored rule would otherwise claim it is.
+  assert.ok(scopesOfText(tokens, 'mul1').includes('variable.other.node.rill'));
+  assert.ok(scopesOfText(tokens, 'roaches1.sin1').includes('variable.other.node.rill'),
+    'a dotted instance key is one node name, not a path');
+  assert.ok(scopesOfText(tokens, '240').includes('constant.numeric.rill'));
+  assert.ok(scopesOfText(tokens, '-60').includes('constant.numeric.rill'),
+    'a canvas may place a node at a negative coordinate');
+  assert.ok(!anyScope(tokens, 'invalid.'), 'nothing in a layout block is illegal');
+  // …and the block ENDS at the dedent, so `spawn` is a statement again.
+  assert.ok(scopesOfText(tokens, 'spawn').includes('entity.name.function.rill'));
+});
+// MUTATIONS, two:
+//   G7f        delete `{ "include": "#layout-block" }` from the top-level
+//              patterns. `layout` reads as an operator head, `demo` as its
+//              argument and `mul1` as a statement head of its own — the
+//              first three assertions go red.
+//   G7f-dedent change #layout-block's `while` to "^(?:.*)$". The block never
+//              ends, `spawn` is read as another node key, and the last
+//              assertion goes red.
 
 // ---------------------------------------------------------------------------
 // G8 — literals.

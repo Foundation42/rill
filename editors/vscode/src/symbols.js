@@ -29,6 +29,15 @@
 //   4. `… as name` — a bound stream. Names are single-assignment and must be
 //      defined before use, so parse order IS topological order: the outline's
 //      order is the schedule's order, for free.
+//
+// WHAT IS DELIBERATELY NOT IN IT: a `layout` block (2026-09-09). The outline
+// answers "how do I navigate this document", and the layout block is the one
+// part of a rill file a person never reads — it is a coordinate table a
+// canvas writes and a canvas reads. Its keys are node instance names, so
+// putting them in would fill the outline with `mul1`, `write1`, `add1` and
+// bury the four things above. RECORDED, NOT BUILT. Trigger: an editor that
+// wants to jump from the outline to a node's position, which is the reverse
+// of the direction anyone has asked for.
 
 const KIND = {
   banner: 'namespace',

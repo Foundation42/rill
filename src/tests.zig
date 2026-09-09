@@ -4017,7 +4017,11 @@ test "the manuals parse: every printed example compiles" {
     // def runs on" and its `on row` def. Fenced ```rill for the same reason
     // the `@self` driver is: that a row def parses inside a WORLD program is
     // half the ruling, and this gate parses with `rill.parse`.
-    try testing.expectEqual(@as(usize, 56), human);
+    // 56 → 57 (the `layout` block, 2026-09-09): §10a. Fenced ```rill because
+    // the block is rill, not prose about rill — the gate two thousand lines
+    // below then holds its COLUMNS to the canon, which is the half a parse
+    // gate cannot see.
+    try testing.expectEqual(@as(usize, 57), human);
     // 4 → 5 (`using`, 2026-09-08): §2 gains the fold, and the block is a
     // ```rill fence so this gate reads it rather than the reader trusting it.
     // 5 → 6 (the parameter pack, same day): §2 gains `export def roaches`.
@@ -14269,12 +14273,201 @@ test "R3 G-doc: every printed example is written the way the printer writes it" 
     // and the campaign notes hold sixteen more fences between them and are
     // NOT gated: they are not embedded in the build, and they are records of
     // decisions rather than teaching material.
-    try testing.expectEqual(@as(usize, 56), human);
+    try testing.expectEqual(@as(usize, 57), human);
     try testing.expectEqual(@as(usize, 8), agent);
     try testing.expectEqual(@as(usize, 4), readme);
     try testing.expectEqual(@as(usize, 3), rbf_doc);
     // NOTHING is exempt. `doc_fragments` is empty and that is a measurement:
-    // all 71 fences in the four docs are whole programs, so not one of them
+    // all 72 fences in the four docs are whole programs, so not one of them
     // needed the escape hatch.
     try testing.expectEqual(@as(usize, 0), doc_fragments.len);
+}
+
+// ---------------------------------------------------------------------------
+// R4 — what a canvas needs that the language could not say (2026-09-09).
+// `layout` puts the picture in the document: node positions, in a block the
+// parser reads, the runtime elides and the document keeps.
+// ---------------------------------------------------------------------------
+
+test "R4 G-layout: a layout block is retained, printed back, and changes NOTHING" {
+    // The claim the whole feature rests on: `layout` is runtime-elided. The
+    // same program with and without the block must produce the same nodes,
+    // the same slots and — the gate that actually watches it — the same DUMP,
+    // byte for byte.
+    //
+    // MUTATION that bites: make the block reach the graph. Appending
+    // `try self.program_target.items.append(self.a(), .{ .stmt = … })`, or
+    // simply parsing a layout line as a statement, gives the program a node
+    // and the dump lengths diverge. Executed 2026-09-09: replacing the annex
+    // append in `parseLayout` with a `parseStatement` call over the same
+    // tokens makes `mul1 240 120` an operator call and the gate goes red on
+    // the node count before it ever reaches the dump.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const bare =
+        \\plane.a | mul 2 | write plane.out
+        \\plane.b | add 1 | write plane.other
+        \\
+    ;
+    const laid =
+        \\plane.a | mul 2 | write plane.out
+        \\plane.b | add 1 | write plane.other
+        \\
+        \\layout demo
+        \\    mul1   240 120
+        \\    write1 400 120
+        \\    add1   240 260
+        \\    write2 400 260
+        \\
+    ;
+    var d1 = rill.Diag{};
+    var p1 = try rill.parse(testing.allocator, &reg, "p", bare, &d1);
+    defer p1.deinit();
+    var d2 = rill.Diag{};
+    var p2 = try rill.parse(testing.allocator, &reg, "p", laid, &d2);
+    defer p2.deinit();
+
+    try testing.expectEqual(p1.nodes.items.len, p2.nodes.items.len);
+    try testing.expectEqual(p1.slots.items.len, p2.slots.items.len);
+    try testing.expectEqual(p1.subs.items.len, p2.subs.items.len);
+    try testing.expectEqual(@as(usize, 0), p2.warnings.items.len);
+
+    var m1 = rill.MockPlane.init(testing.allocator);
+    defer m1.deinit();
+    try m1.putValue("plane.a", @as(i64, 3));
+    try m1.putValue("plane.b", @as(i64, 4));
+    var r1 = try rill.Runtime.mount(testing.allocator, &p1, m1.asPlane(), .{});
+    defer r1.deinit();
+    var m2 = rill.MockPlane.init(testing.allocator);
+    defer m2.deinit();
+    try m2.putValue("plane.a", @as(i64, 3));
+    try m2.putValue("plane.b", @as(i64, 4));
+    var r2 = try rill.Runtime.mount(testing.allocator, &p2, m2.asPlane(), .{});
+    defer r2.deinit();
+    const dump1 = try rill.dump(&r1, testing.allocator);
+    defer testing.allocator.free(dump1);
+    const dump2 = try rill.dump(&r2, testing.allocator);
+    defer testing.allocator.free(dump2);
+    try testing.expectEqualSlices(u8, dump1, dump2);
+
+    // And it is RETAINED: same annex shape `describe` uses, keyword and all,
+    // which is why the printer did not have to move for it.
+    const an = for (p2.script.?.top) |it| {
+        if (it == .annex and std.mem.eql(u8, it.annex.keyword, "layout")) break it.annex;
+    } else return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("demo", an.subject);
+    try testing.expectEqual(@as(usize, 4), an.lines.len);
+    try testing.expectEqualStrings("mul1", an.lines[0].key);
+    try testing.expectEqual(@as(usize, 2), an.lines[0].values.len);
+    try testing.expectEqualStrings("240", an.lines[0].values[0]);
+
+    // Printed back, byte for byte, and a fixed point — the columns included:
+    // `write1` is the longest key, so every value lines up under it.
+    try expectPrintedStable(&reg, laid, laid);
+}
+
+test "R4 G-layout-stale: a line naming a node that is gone WARNS, and the file still parses" {
+    // Christian's rule for a machine-written, cosmetic block: loud, never
+    // fatal. `describe` is hard-refused in both directions because prose is
+    // the author's burden and an undescribed port is a gap in the pack; a
+    // stale coordinate is a node the canvas places by default, and a hand
+    // rename must not make the file stop parsing.
+    //
+    // MUTATION 1 that bites: turn the `warn` in `checkLayoutKeys` into a
+    // `fail`. Executed 2026-09-09 — the parse returns error.Parse and this
+    // gate dies at the `try`, one line in.
+    //
+    // MUTATION 2 that bites, and it is the one worth having: DELETE the
+    // check. Executed 2026-09-09 — the program parses exactly as it does now
+    // and only the warning count goes to zero, which is why the count and the
+    // message are asserted and not just "it parsed".
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\plane.a | mul 2 | write plane.out
+        \\
+        \\layout demo
+        \\    mul1 240 120
+        \\    sin4 400 120
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    try testing.expectEqual(@as(usize, 1), prog.warnings.items.len);
+    try testing.expectEqual(rill.Warning.Code.layout_unknown_node, prog.warnings.items[0].code);
+    try testing.expectEqual(@as(u32, 5), prog.warnings.items[0].line);
+    try testing.expect(std.mem.indexOf(u8, prog.warnings.items[0].msg, "'sin4'") != null);
+    // The stale line is KEPT. Dropping it would be the editor deleting an
+    // author's work to tidy up after itself.
+    try expectPrintedStable(&reg, src, src);
+
+    // The same shape, twice over one node — one position per node or the
+    // canvas has two answers.
+    const twice =
+        \\plane.a | mul 2 | write plane.out
+        \\
+        \\layout demo
+        \\    mul1 240 120
+        \\    mul1 400 120
+        \\
+    ;
+    var d2 = rill.Diag{};
+    var p2 = try rill.parse(testing.allocator, &reg, "p", twice, &d2);
+    defer p2.deinit();
+    try testing.expectEqual(@as(usize, 1), p2.warnings.items.len);
+    try testing.expectEqual(rill.Warning.Code.layout_duplicate, p2.warnings.items[0].code);
+}
+
+test "R4 G-layout-loud: what a layout block may NOT hold" {
+    // The half that is still a refusal. Everything a layout line can hold is
+    // inert — a name and numbers — which is the property that makes "eliding
+    // the block" a safe claim: nothing in here can be a path, a call or a
+    // fold, so eliding it can never elide a subscription.
+    //
+    // MUTATION that bites: drop the `v.kind != .number` test. Executed
+    // 2026-09-09 — `mul1 plane.x` then parses, the block silently holds a
+    // path, and the first assertion below goes red.
+    try expectParseError(
+        \\plane.a | mul 2 | write plane.out
+        \\
+        \\layout demo
+        \\    mul1 plane.x 120
+        \\
+    , "coordinates are numbers");
+    // A fold in here would let a runtime-elided block reach the fold table,
+    // and a fold in the KEY position could rename the node the end-of-parse
+    // check then looks for.
+    try expectParseError(
+        \\using mul1 as :n
+        \\plane.a | mul 2 | write plane.out
+        \\
+        \\layout demo
+        \\    :n 240 120
+        \\
+    , "read verbatim");
+    // One block per document — the same ruling `describe` has, for the same
+    // reason: one place a canvas reads and writes.
+    try expectParseError(
+        \\plane.a | mul 2 | write plane.out
+        \\
+        \\layout demo
+        \\    mul1 240 120
+        \\
+        \\layout demo
+        \\    mul1 400 120
+        \\
+    , "already has a `layout` block");
+    // A subject is required. It is never RESOLVED — see `parseLayout` — but
+    // a block with nothing after the keyword is a block about nothing.
+    try expectParseError(
+        \\layout
+        \\    mul1 240 120
+        \\
+    , "expected a name after 'layout'");
+    // And `layout` is a statement keyword, so it may not be an operator.
+    try expectParseError(
+        \\plane.a | layout 2 | write plane.out
+        \\
+    , "statement keyword");
 }

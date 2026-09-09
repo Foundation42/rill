@@ -104,8 +104,32 @@ pub const CastTarget = struct {
 /// serialised: a restored Program carries none, and that is correct — the text
 /// they point into is gone. Hosts print them at mount and move on.
 pub const Warning = struct {
+    /// What KIND of warning this is, so a client can decide what to do with
+    /// it without reading English.
+    ///
+    /// Built on 2026-09-09 by the trigger `cli.zig` recorded for it — *"a
+    /// second `warn` site in the parser"* — which the `layout` block fired
+    /// with two. Until then there was one warn site, `rill check --json`
+    /// dropped every warning on the floor, and a code would have been a
+    /// field with one value and no reader.
+    pub const Code = enum {
+        /// §3.14 — an `also` branch ends holding a value nobody reads.
+        discards_value,
+        /// A `layout` line names a node this program does not have. Cosmetic
+        /// and machine-written, so a stale coordinate warns rather than
+        /// refusing — see `parser.parseLayout`.
+        layout_unknown_node,
+        /// A `layout` block places one node twice.
+        layout_duplicate,
+
+        pub fn name(self: Code) []const u8 {
+            return @tagName(self);
+        }
+    };
+
     line: u32,
     col: u32,
+    code: Code = .discards_value,
     msg: []const u8,
 };
 
@@ -348,6 +372,7 @@ pub const Program = struct {
         self.carryKinds();
         try self.linkBodies();
     }
+
 
     /// An elementwise operator CARRIES the kind of what is piped into it: an
     /// occurrence through `mul 2` is still an occurrence.

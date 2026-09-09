@@ -41,6 +41,7 @@
     { "include": "#comment" },
     { "include": "#locator" },
     { "include": "#describe-block" },
+    { "include": "#layout-block" },
     { "include": "#def-signature" },
     { "include": "#string" },
     { "include": "#keyword" },
@@ -343,13 +344,13 @@
       ],
       "patterns": [
         {
-          "match": "^([ \\t]*)(?!(?:def|export|describe|using|use|also|as|true|false)(?![\\w-]))([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(?![\\w.:/-])",
+          "match": "^([ \\t]*)(?!(?:def|export|describe|layout|using|use|also|as|true|false)(?![\\w-]))([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(?![\\w.:/-])",
           "captures": {
             "2": { "name": "entity.name.function.rill" }
           }
         },
         {
-          "match": "(?<=[|{(])([ \\t]*)(?!(?:def|export|describe|using|use|also|as|true|false)(?![\\w-]))([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(?![\\w.:/-])",
+          "match": "(?<=[|{(])([ \\t]*)(?!(?:def|export|describe|layout|using|use|also|as|true|false)(?![\\w-]))([A-Za-z_][\\w]*(?:[-/][\\w]+)*)(?![\\w.:/-])",
           "captures": {
             "2": { "name": "entity.name.function.rill" }
           }
@@ -485,6 +486,40 @@
           "match": "^[ \\t]*([A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
           "captures": { "1": { "name": "variable.parameter.rill" } }
         },
+        { "include": "#fold" },
+        { "include": "#bare-word" }
+      ]
+    },
+
+    "layout-block": {
+      "//": [
+        "`layout <document>` opens the block a canvas writes its node",
+        "positions into (parser.zig, `parseLayout`, 2026-09-09). Same shape as",
+        "#describe-block and it ends the same way, at a DEDENT.",
+        "",
+        "Two differences from `describe`, both deliberate. The SUBJECT names",
+        "the document and is never resolved, so it is scoped as a namespace",
+        "rather than as a function name — it is not a def, and highlighting it",
+        "as one would tell the reader something untrue. And the keys are NODE",
+        "instances (`mul1`, `roaches1.near1`), so they scope as variables, not",
+        "as the statement heads every `^`-anchored rule would otherwise claim",
+        "them to be — which is the same trap #describe-block's port names are",
+        "in."
+      ],
+      "name": "meta.layout.rill",
+      "begin": "^([ \\t]*)(layout)[ \\t]+([A-Za-z_][\\w]*(?:[-/][\\w]+)*)",
+      "beginCaptures": {
+        "2": { "name": "keyword.control.layout.rill" },
+        "3": { "name": "entity.name.namespace.rill" }
+      },
+      "while": "^(?=[ \\t]+\\S|[ \\t]*$)",
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "match": "^[ \\t]*([A-Za-z_][\\w]*(?:[-/][\\w]+)*(?:\\.[A-Za-z_][\\w]*(?:[-/][\\w]+)*)*)",
+          "captures": { "1": { "name": "variable.other.node.rill" } }
+        },
+        { "include": "#number" },
         { "include": "#fold" },
         { "include": "#bare-word" }
       ]

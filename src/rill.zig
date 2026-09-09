@@ -74,6 +74,11 @@ pub const DefPort = graph.DefPort;
 /// `Plane`, which below is the host STORE's vtable and has been since the
 /// first week: two different questions, one namespace.
 pub const EvalPlane = graph.EvalPlane;
+/// A non-fatal parse diagnostic, with the `code` a client sorts on
+/// (2026-09-09). `prog.warnings` carries them in source order; `rill check
+/// --json` prints them beside a refusal's diagnostics with severity
+/// "warning".
+pub const Warning = graph.Warning;
 pub const parse = parser.parse;
 pub const parseKernel = parser.parseKernel;
 /// `prog.script` → `.rill` text. Semantically faithful and stable, not

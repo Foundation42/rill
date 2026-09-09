@@ -5079,3 +5079,119 @@ settings for a host workspace, `70` named in both exit tables, the two
 deliberate omissions (`end_*`, warnings) written down as decisions, and the
 wanted-later list rewritten so each entry carries the trigger that would build
 it. The manifest's own descriptions carry the same two facts.
+
+---
+
+## `layout` — the picture lives in the document (2026-09-09)
+
+Christian's governing rule for the editor beat: **"everything should be
+round-trippable from the document."** The `layout` block is the first thing
+that rule forced into the language. A canvas has to remember where it put
+things, and he ruled out both alternatives before naming what he wanted:
+
+> not use comments, but an actual block that rill elides as far as runtime,
+> but is structured in rill-like form to preserve with the document
+
+`describe` is the precedent he named, and `script.Annex` had already been
+generalised for exactly this on the retention beat — which recorded the
+prediction that `layout` would cost *"a reader in the parser and the printer
+does not move at all"*.
+
+**That prediction held.** `script.zig` is untouched by this commit. The whole
+of the block is `parseLayout` plus a reserved word.
+
+### The subject names the DOCUMENT, and is never resolved
+
+The open question the brief raised: `describe roaches` names a def, so does
+`layout roaches`, and what names the top level? Ruled: the subject names the
+**document**, is retained verbatim, and is resolved against nothing.
+
+Three reasons, and the ruling is meant to be final.
+
+1. **`parse` flattens.** Every node in the finished program has a name in one
+   namespace — `near1` beside `roaches1.near1` for a node inside a spliced def
+   instance. So a rill file has exactly one graph to lay out, and one block
+   lays it out. Drilling into a definition needs no second syntax because a
+   subgraph's nodes are already keys in this block.
+2. **A document's own name is not in its text.** The host hands
+   `program_name` to `parse`, and `rill fmt -` hands it `-`. A subject checked
+   against that would make the formatter warn on every file it was pointed at,
+   over a label that changes nothing.
+3. **Christian's own example would have landed in the wrong block.** He wrote
+   `layout roaches` with the keys `near1` and `push1`. In
+   `matryoshka/kernels/roaches.rill` those are TOP-LEVEL nodes and `def
+   roaches` has a body of `0` — it is a parameter pack, never instantiated.
+   Reading the subject as the def would have put his keys somewhere the
+   feature could not use them on the day it landed.
+
+**What keeps a second spelling from being needed later**: `autoName` always
+ends an instance name with a DIGIT. So `wobble.mul1` — a def name with no
+instance number — is a key nothing can currently mint, and it is where an
+*uninstantiated* definition's interior would go on the day one needs a
+position. Same block, same grammar, a new key shape rather than a new
+statement.
+
+### An unknown key WARNS
+
+Recommended by the brief and accepted. `describe` is hard-refused in both
+directions because prose is the author's burden and an undescribed port is a
+gap in the pack. A layout block is machine-written and purely cosmetic: a hand
+rename of a node must not make the file stop parsing, and the stale line is
+KEPT, because an editor that tidies away what an author wrote is the failure
+the whole retention beat exists to prevent. Loud, never fatal — and the same
+call for a node placed twice.
+
+The check runs at the END of the parse, not at the block, because a `layout`
+block is not a statement: parse order is dependency order for STATEMENTS, and
+a block that may sit above the nodes it names can only be judged once the file
+is read. Same shape as `checkExportsDescribed`.
+
+### The trigger that fired: warnings now have a `code`
+
+`cli.zig` had recorded, in prose, that `rill check --json` drops
+`prog.warnings` on the floor, with the trigger *"a second `warn` site in the
+parser"*. `layout` fired it with two. So `graph.Warning` gained a `Code`
+(`discards_value`, `layout_unknown_node`, `layout_duplicate`) and the checker
+prints warnings in the same envelope as a refusal, `"severity":"warning"`,
+with `ok` still true.
+
+This was not scope creep, it was the point: a warning that reaches no client
+is a gate over a field nobody reads. `layout`'s whole reason for warning
+rather than refusing is that a stale coordinate must be VISIBLE and not fatal;
+invisible and not fatal is just silent. The extension needed no change — it
+has mapped `severity: 'warning'` since it was written.
+
+### Coordinates are numbers, and nothing else
+
+The refusal is by token KIND rather than by "unexpected token", and it is what
+makes "the runtime elides it" a claim that can be checked rather than
+asserted: nothing in a layout block can be a path, a call or a fold, so
+eliding the block can never elide a subscription. A fold is refused by name
+for the reason `describe` refuses one, plus one more — a fold in the KEY
+position could rename the node the end-of-parse check then looks for.
+
+### Gates, and the mutation each was paid for
+
+| gate | mutation, executed 2026-09-09 | observed |
+| --- | --- | --- |
+| `R4 G-layout` | `subFor(key)` per layout line — the block reaches the graph | red: `expected 2, found 6` subscriptions, before the dump is even compared |
+| `R4 G-layout-stale` | `warn` → `fail` in `checkLayoutKeys` | red: `error.Parse` one line into the gate |
+| `R4 G-layout-stale` | delete the check (`const known = true`) | red: `expected 1, found 0` warnings — which is why the gate asserts the count and the message, not "it parsed" |
+| `R4 G-layout-loud` | drop the `v.kind != .number` test | red: `mul1 plane.x` parses and the block silently holds a path |
+| `G7f` (grammar) | delete `#layout-block` from the top-level patterns | red: `layout` reads as an operator head |
+| `G7f-dedent` | `while` → `"^(?:.*)$"` | red: the block never ends and swallows the next statement |
+
+The dump gate is the one that carries the feature's claim: the same program
+with and without a `layout` block mounts to the same nodes, the same slots,
+the same subscriptions and the same DUMP, byte for byte.
+
+### One thing found on the way
+
+`editors/vscode/test/grammar.test.mjs` walked for `.rill` files without
+skipping `scratchpad/`, which the Zig-side corpus definition has always
+excluded. A scratch file left by an agent joined the 47 and failed G1. Fixed
+in the same commit — the e2e walker already had it right.
+
+**Corpus: 47/47 round-trip, 47/47 `rill fmt` no-op, byte-identical.** No
+corpus file uses `layout`, which is what makes that the no-regression gate.
+Suite 501 → 504. Extension 57 → 58 tests, 49 → 51 mutations.

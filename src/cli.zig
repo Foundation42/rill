@@ -281,15 +281,29 @@ fn doCheck(
     const w = out.writer();
     switch (parsed) {
         .ok => |*prog| {
-            prog.deinit();
-            // `prog.warnings` is dropped here, and that is a decision rather
-            // than an oversight: a warning has no `code`, and a client that
-            // cannot name what it is looking at cannot decide what to do with
-            // it — which is the exact argument that put `code` on `Diag`.
-            // RECORDED, NOT BUILT. Trigger: a second `warn` site in the
-            // parser, or Christian asking for the discards-a-value warning in
-            // the editor. Building it means a `code` on `graph.Warning`.
-            try w.writeAll("{\"ok\":true,\"diagnostics\":[]}\n");
+            defer prog.deinit();
+            // Warnings ride the SAME envelope as a refusal, with
+            // `"severity":"warning"` — built 2026-09-09 on the trigger this
+            // site recorded for itself (*"a second `warn` site in the
+            // parser"*), which `layout` fired with two. `ok` stays TRUE: the
+            // program parsed, the formatter may still run, and the editor's
+            // `checkSource` reads a non-empty diagnostics list on exit 0
+            // exactly as it reads one on 65.
+            //
+            // A warning that never reaches a client is a gate over a field
+            // nobody reads. `layout`'s whole reason for warning rather than
+            // refusing is that a stale coordinate must be VISIBLE and not
+            // fatal — invisible and not fatal is just silent.
+            try w.writeAll("{\"ok\":true,\"diagnostics\":[");
+            for (prog.warnings.items, 0..) |wa, i| {
+                if (i > 0) try w.writeAll(",");
+                try w.print("{{\"line\":{d},\"col\":{d},\"severity\":\"warning\",\"code\":", .{ wa.line, wa.col });
+                try writeJsonString(w, wa.code.name());
+                try w.writeAll(",\"message\":");
+                try writeJsonString(w, wa.msg);
+                try w.writeAll("}");
+            }
+            try w.writeAll("]}\n");
             return EX_OK;
         },
         .refused => |d| {

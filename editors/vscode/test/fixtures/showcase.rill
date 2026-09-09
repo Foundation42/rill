@@ -91,3 +91,16 @@ describe scatter
     blend    "How the cards blend over the frame: `add` lights, `alpha` lays."
 
 def healthbar(hp: number) = hp | clamp 0 100 | div 100
+
+// ══ THE PICTURE ══════════════════════════════════════════════════════════
+//
+// `layout` is a block the parser reads, the runtime elides and the document
+// keeps — where a canvas put each node. The keys are instance names, dotted
+// for a node inside a spliced def, and the coordinates are numbers and
+// nothing else.
+
+layout showcase
+    where1        240 120
+    inc1          400 120
+    sort1         240 260
+    healthbar1.q1 400 260

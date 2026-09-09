@@ -547,7 +547,13 @@ pub fn isReservedWord(s: []const u8) bool {
     // before the parser ever asks `find`, so an operator named either would
     // register cleanly and then be permanently unreachable: exactly what this
     // list exists to prevent.
-    const words = [_][]const u8{ "plane", "row", "slate", "use", "using", "def", "export", "describe", "as", "also", "true", "false" };
+    // `layout` is the editor beat's second block (2026-09-09) — node
+    // positions, kept IN the document rather than in a sidecar or in
+    // comments. Same standing as `describe`, and reserved for the same
+    // reason: it is recognised at statement head before `find` is ever asked,
+    // so an operator called `layout` would register cleanly and then be
+    // permanently unreachable.
+    const words = [_][]const u8{ "plane", "row", "slate", "use", "using", "def", "export", "describe", "layout", "as", "also", "true", "false" };
     for (words) |w| {
         if (std.mem.eql(u8, s, w)) return true;
     }

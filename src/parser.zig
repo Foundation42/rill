@@ -784,6 +784,15 @@ const Parser = struct {
     last_call: script.Call = .{ .op = "" },
     /// Did the expression just parsed turn out to be an opcall?
     expr_was_call: bool = false,
+    /// Every key of the one `layout` block, with the token to point at.
+    /// Checked at the END of the parse (`checkLayoutKeys`) and not at the
+    /// block, because a `layout` block is not a statement: parse order is
+    /// dependency order for STATEMENTS, and a block that may sit above the
+    /// nodes it names can only be judged once the file is read.
+    layout_keys: std.ArrayListUnmanaged(struct { name: []const u8, tok: Token }) = .empty,
+    /// Where the one `layout` block was opened — the second one's refusal
+    /// points back at it.
+    layout_at: ?Token = null,
 
     fn a(self: *Parser) std.mem.Allocator {
         return self.prog.a();
@@ -791,10 +800,11 @@ const Parser = struct {
 
     /// Record a non-fatal diagnostic. Never aborts the parse: the text is
     /// well-formed, it just probably doesn't mean what it says.
-    fn warn(self: *Parser, tok: Token, comptime fmt: []const u8, args: anytype) !void {
+    fn warn(self: *Parser, tok: Token, code: graph.Warning.Code, comptime fmt: []const u8, args: anytype) !void {
         try self.prog.warnings.append(self.a(), .{
             .line = tok.line,
             .col = tok.col,
+            .code = code,
             .msg = try std.fmt.allocPrint(self.a(), fmt, args),
         });
     }
@@ -1143,6 +1153,8 @@ const Parser = struct {
                 try self.parseDef(ex);
             } else if (t.kind == .name and std.mem.eql(u8, t.text, "describe")) {
                 try self.parseDescribe();
+            } else if (t.kind == .name and std.mem.eql(u8, t.text, "layout")) {
+                try self.parseLayout();
             } else if (t.kind == .name and std.mem.eql(u8, t.text, "using")) {
                 try self.parseUsing();
             } else {
@@ -1156,6 +1168,7 @@ const Parser = struct {
             }
         }
         try self.checkExportsDescribed();
+        try self.checkLayoutKeys();
         try self.publishExports();
         if (self.prog.findCycle()) |cyc| {
             const n = self.prog.node(cyc.write.node);
@@ -1699,6 +1712,150 @@ const Parser = struct {
         } });
     }
 
+    /// layoutstmt := "layout" name NEWLINE (INDENT name number+)+
+    ///
+    /// Where the nodes sit on a canvas. Christian ruled it on 2026-09-09,
+    /// having ruled OUT both alternatives first: not a sidecar file, and not
+    /// a comment convention — *"not use comments, but an actual block that
+    /// rill elides as far as runtime, but is structured in rill-like form to
+    /// preserve with the document"* — naming `describe` as the precedent.
+    /// The governing principle is his: **everything should be round-trippable
+    /// from the document.**
+    ///
+    /// ## What the SUBJECT names, and why it is never resolved
+    ///
+    /// `describe roaches` names a def, and the parser resolves it in both
+    /// directions — prose belongs to a definition, so an orphan `describe`
+    /// block is a lie and is refused as one. A `layout` block's subject is
+    /// the opposite kind of thing: **it names the DOCUMENT**, the one graph a
+    /// rill file has, and it is retained verbatim and resolved against
+    /// nothing.
+    ///
+    /// Three reasons, and the ruling is meant to be final:
+    ///
+    /// 1. `parse` FLATTENS. Every node in the finished program — a top-level
+    ///    call and a node inside a spliced def instance alike — has a name in
+    ///    one namespace, `near1` beside `roaches1.near1`. So the file has
+    ///    exactly one graph to lay out, and one block lays it out. Tunneling
+    ///    needs no second syntax because a subgraph's nodes are already
+    ///    keys in this block.
+    /// 2. A document's own name is not a fact rill's text carries — the HOST
+    ///    hands `program_name` to `parse`, and `rill fmt -` hands it `-`. A
+    ///    subject checked against that would make the formatter warn on every
+    ///    file it was pointed at, over a label that changes nothing.
+    /// 3. Christian's own example is `layout roaches` in a file whose
+    ///    top-level nodes are `near1` and `push1` and whose `def roaches` has
+    ///    a body of `0`. Reading the subject as the def would put his keys in
+    ///    the wrong block on the day the feature landed.
+    ///
+    /// The namespace that stays free is what keeps this from needing a second
+    /// spelling later: `autoName` always ends an instance name with a DIGIT,
+    /// so `wobble.mul1` — a def name with no instance number — can name a
+    /// definition's own interior on the day an uninstantiated def needs one,
+    /// in the same block, with the same grammar.
+    ///
+    /// ## An unknown key WARNS
+    ///
+    /// A layout block is machine-written and purely cosmetic, and a hand
+    /// rename of a node must not make the file stop parsing. `describe` is
+    /// hard-refused both ways because prose is the author's burden and an
+    /// undescribed port is a gap in the pack; a stale coordinate is a node
+    /// the canvas will place by default. Loud, never fatal.
+    fn parseLayout(self: *Parser) ParseError!void {
+        const lead = try self.takeLead(self.peek().line);
+        var lines = std.ArrayListUnmanaged(script.AnnexLine).empty;
+        const kw = self.next(); // "layout"
+        const name_tok = self.next();
+        if (name_tok.kind != .name) {
+            return self.fail(name_tok, "expected a name after 'layout' — `layout <document>`, and the block's keys are the node names", .{});
+        }
+        if (self.layout_at) |first| {
+            return self.fail(name_tok, "this program already has a `layout` block (line {d}) — one block per document, so there is one place a canvas reads and writes", .{first.line});
+        }
+        self.layout_at = kw;
+
+        var any_line = false;
+        while (true) {
+            self.skipNewlines();
+            const t = self.peek();
+            if (t.kind == .eof) break;
+            if (t.col <= kw.col) break; // dedent ends the block
+            // A layout block splices NOTHING, for the reason `describe`
+            // splices nothing and one more: a fold in the key position could
+            // rename the node the end-of-parse check then looks for, and a
+            // fold anywhere in here would let a runtime-elided block reach
+            // the fold table. Refused by name.
+            if (t.kind == .fold) {
+                return self.fail(t, "a `layout` block is coordinates and is read verbatim — '{s}' is not spliced here", .{t.text});
+            }
+            if (t.kind != .name) {
+                return self.fail(t, "layout '{s}': expected a node name, got '{s}'", .{ name_tok.text, t.text });
+            }
+            _ = self.next();
+            const key_line = t.line;
+            var vals = std.ArrayListUnmanaged([]const u8).empty;
+            while (self.peek().line == key_line and self.peek().kind != .newline and self.peek().kind != .eof) {
+                const v = self.next();
+                // Coordinates are NUMBERS, and the refusal is by kind rather
+                // than by "unexpected token": everything a layout line can
+                // hold is inert, so eliding the block can never elide a
+                // subscription, a fold or a call. `240px` lexes as a duration
+                // and lands here too, which is the message it wants.
+                if (v.kind != .number) {
+                    return self.fail(v, "layout '{s}': '{s}' is a coordinate and coordinates are numbers — `{s} <x> <y>`", .{ name_tok.text, t.text, t.text });
+                }
+                try vals.append(self.a(), try self.renderTokens(self.toks[self.pos - 1 ..][0..1]));
+            }
+            if (vals.items.len == 0) {
+                return self.fail(t, "layout '{s}': '{s}' has no coordinates — `{s} <x> <y>`", .{ name_tok.text, t.text, t.text });
+            }
+            // Recorded for the end-of-parse check; a duplicate key is caught
+            // there too, where both lines are already in hand.
+            try self.layout_keys.append(self.a(), .{ .name = t.text, .tok = t });
+            try lines.append(self.a(), .{ .key = t.text, .values = vals.items });
+            any_line = true;
+        }
+        if (!any_line) {
+            return self.fail(kw, "layout '{s}' places nothing — put a node and its coordinates on the next line, indented", .{name_tok.text});
+        }
+        self.closeLine();
+        // The one place this block reaches: `Script.top`, as an ANNEX beside
+        // `describe`. It appends NO node, NO slot, NO subscription and NO
+        // fold, which is what "runtime-elided" means here — the evaluator,
+        // the row runtime and the dump cannot tell a program with a layout
+        // block from the same program without one.
+        try self.program_target.items.append(self.a(), .{ .annex = .{
+            .keyword = kw.text,
+            .subject = name_tok.text,
+            .lines = lines.items,
+            .lead = lead.lead,
+            .blank_before = lead.blank,
+            .trail = self.takeTrail(),
+            .line = kw.line,
+            .col = kw.col,
+        } });
+    }
+
+    /// Every layout key names a node, and names it once — checked at the END
+    /// of the parse, where the whole node list exists, and reported as a
+    /// WARNING (see `parseLayout`).
+    fn checkLayoutKeys(self: *Parser) ParseError!void {
+        for (self.layout_keys.items, 0..) |k, i| {
+            for (self.layout_keys.items[0..i]) |prev| {
+                if (std.mem.eql(u8, prev.name, k.name)) {
+                    try self.warn(k.tok, .layout_duplicate, "layout: '{s}' is placed twice (line {d} too) — the last one wins", .{ k.name, prev.tok.line });
+                    break;
+                }
+            }
+            const known = for (self.prog.nodes.items) |*n| {
+                if (std.mem.eql(u8, n.name, k.name)) break true;
+            } else false;
+            if (!known) {
+                try self.warn(k.tok, .layout_unknown_node, "layout: '{s}' is not a node in this program — the position is kept, and nothing is placed by it", .{k.name});
+            }
+        }
+    }
+
     /// One annex value, rendered. A `describe` line's string keeps its quotes
     /// and its escapes exactly as typed — the pack holds the decoded text for
     /// a HUD, and the file holds the spelling.
@@ -2176,7 +2333,7 @@ const Parser = struct {
         // warns on five existing gates' programs.
         if (current.outputs.len > 0) {
             const writes = if (current.node) |n| self.reg.get(target.nodes.items[n].op).class.writes() else false;
-            if (!writes) try self.warn(head, "block discards a value; end with a sink or drop the tail", .{});
+            if (!writes) try self.warn(head, .discards_value, "block discards a value; end with a sink or drop the tail", .{});
         }
     }
 
@@ -2825,7 +2982,8 @@ const Parser = struct {
             // the author spelled correctly. ONE door: the previous beat proved
             // the copies in `parseProgram` and `parseExpr` were dead code by
             // mutating them and watching the suite stay green.
-            if (std.mem.eql(u8, op_name, "export") or std.mem.eql(u8, op_name, "describe"))
+            if (std.mem.eql(u8, op_name, "export") or std.mem.eql(u8, op_name, "describe") or
+                std.mem.eql(u8, op_name, "layout"))
                 return self.fail(op_tok, "'{s}' is a statement keyword and stands at the top level of a program — it cannot appear in a chain or inside a def body", .{op_name});
             // THE coded one. Every door above this line is a word rill core
             // knows and is refusing on purpose, so they stay `.parse`; this

@@ -1290,6 +1290,47 @@ plane.damage | where (> 0) | inc plane.stats.hits 1
 
 ---
 
+## 10a. `layout` — the picture lives in the document
+
+A visual editor has to remember where it put things. rill's answer is
+not a sidecar file and not a comment convention: it is a **block the
+parser reads, the runtime elides, and the document keeps** — the same
+shape `describe` has.
+
+```rill
+plane.hour | mul 15 | write plane.sun.angle
+
+layout skyline
+    mul1   240 120
+    write1 400 120
+```
+
+The keys are the instance names the parser mints — `mul1`, `write1`,
+and `roaches1.near1` for a node inside a spliced `def`. `parse`
+flattens, so every node in the finished program has a name in one
+namespace, and one block lays the whole document out. That is why
+drilling into a definition needs no second syntax: a subgraph's nodes
+are already keys here.
+
+The **subject** names the document. It is retained verbatim and
+resolved against nothing — a rill file does not carry its own name (the
+host hands it to `parse`), so a subject checked against anything would
+make the formatter complain about a label that changes nothing.
+
+Coordinates are numbers, and nothing else may appear in the block — no
+path, no call, no fold. That is what makes "the runtime elides it" a
+claim you can check: a program with a `layout` block and the same
+program without one produce the same nodes, the same wires and the same
+dump, byte for byte.
+
+A line naming a node that is not there **warns** and still parses.
+`describe` is refused in both directions because prose is the author's
+burden; a layout block is machine-written and cosmetic, and a hand
+rename of a node must not make the file stop parsing. The stale line is
+kept, so nothing an author wrote is quietly deleted.
+
+---
+
 ## 11. Recipes
 
 **The sentinel** — sound the horn when the watch sees anyone:
