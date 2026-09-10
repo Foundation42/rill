@@ -98,8 +98,20 @@ pub fn addCall(
     const op_id = reg.find(op_name) orelse return error.UnknownOperator;
     const def = reg.get(op_id);
 
+    // **Insert before the file's trailing annexes, not at the very end.**
+    // An annex is a BLOCK about the program — `layout <stem>` is written last
+    // by `hud save` and `describe` sits with its def — and a statement landing
+    // after one reads as an afterthought bolted onto the document's footer.
+    // It parses either way; rill has no ordering rule for annexes. It looks
+    // wrong, and the file is the thing a person reads.
+    //
+    // Found by driving the verb: the second `hud add` on a file that already
+    // had a `layout` block put its statement below it.
+    var cut = sc.top.len;
+    while (cut > 0 and sc.top[cut - 1] == .annex) cut -= 1;
+
     var items = std.ArrayListUnmanaged(script.Item).empty;
-    try items.appendSlice(arena, sc.top);
+    try items.appendSlice(arena, sc.top[0..cut]);
 
     // An operator that needs a SECTION BODY (`keep (> 0)`, `map (…)`) cannot
     // be dropped bare: the body is a sub-graph, not a value, and there is no
@@ -167,6 +179,7 @@ pub fn addCall(
             .args = try args.toOwnedSlice(arena),
         } },
     } });
+    try items.appendSlice(arena, sc.top[cut..]);
 
     var out = sc.*;
     out.top = try items.toOwnedSlice(arena);
