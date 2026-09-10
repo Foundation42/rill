@@ -321,7 +321,75 @@ pub const Script = struct {
         }
         return null;
     }
+
+    /// **The `Call` a graph node came from** — the other half of
+    /// `graph.CallSite`, and the bridge an editor crosses to change a
+    /// program's text.
+    ///
+    /// A node knows the line and column of the operator token that wrote it;
+    /// this finds the `Call` that carries the same pair. The match is exact
+    /// rather than approximate because both numbers come from the SAME token,
+    /// read twice inside `parseOpcall` — so this is a lookup, not a search
+    /// with a tolerance.
+    ///
+    /// Everywhere a `Call` can hide is walked: the top level, every stage of
+    /// every chain, every branch of a fan-out, and every def body (which is a
+    /// `Block` exactly as `top` is, which is what makes the recursion three
+    /// lines instead of a second traversal). A def's body is walked even
+    /// though its nodes are FLATTENED with prefixed names, because the call
+    /// that wrote them is in there and nowhere else.
+    ///
+    /// Null for a site of `{0, 0}` — sugar with no call of its own — and null
+    /// for a script that did not come from this program. Both are the same
+    /// answer to the caller: there is no text to edit here.
+    ///
+    /// Takes the two numbers rather than a `graph.CallSite`, because `graph`
+    /// imports THIS file and the reverse would be a cycle. `graph.CallSite`
+    /// carries the pair; `Node.site.line, Node.site.col` is the call.
+    pub fn callAt(self: *const Script, line: u32, col: u32) ?*const Call {
+        if (line == 0) return null;
+        return findCallIn(self, self.top, .{ .line = line, .col = col });
+    }
 };
+
+fn findCallIn(sc: *const Script, items: []const Item, site: anytype) ?*const Call {
+    for (items) |*it| {
+        switch (it.*) {
+            .stmt => |*st| {
+                if (findCallInStmt(st.head, st.stages, site)) |c| return c;
+            },
+            .def => |di| {
+                if (di < sc.defs.len) {
+                    if (findCallIn(sc, sc.defs[di].body, site)) |c| return c;
+                }
+            },
+            .using, .annex => {},
+        }
+    }
+    return null;
+}
+
+fn findCallInStmt(head: Head, stages: []const Stage, site: anytype) ?*const Call {
+    switch (head) {
+        .call => |*c| if (c.line == site.line and c.col == site.col) return c,
+        .value => {},
+    }
+    return findCallInStages(stages, site);
+}
+
+fn findCallInStages(stages: []const Stage, site: anytype) ?*const Call {
+    for (stages) |*sg| {
+        switch (sg.*) {
+            .call => |*c| if (c.line == site.line and c.col == site.col) return c,
+            .project => {},
+            .fan => |*f| for (f.branches) |*b| {
+                if (b.head.line == site.line and b.head.col == site.col) return &b.head;
+                if (findCallInStages(b.stages, site)) |c| return c;
+            },
+        }
+    }
+    return null;
+}
 
 // ---------------------------------------------------------------------------
 // The printer

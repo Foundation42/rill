@@ -81,9 +81,48 @@ pub const Slot = struct {
     path: []const u8 = "",
 };
 
+/// **Where a node was written** — the call site, in the retained `Script`.
+///
+/// One-based line and column of the operator token that made this node, or
+/// `{0, 0}` for a node no `Call` corresponds to — a projection, a record's
+/// assembly, a node from a dump rather than from text.
+///
+/// It exists because there is otherwise NO way back. `Program.script` hands a
+/// client the file as written and the graph hands it the picture, and until
+/// this field the only bridge between them was that parse order is dependency
+/// order and `autoName` mints `near1`, `near2` in it — so the Nth `near` call
+/// in the script is `nearN`. That is true and it is a re-derivation of
+/// something the parser knew for certain and threw away, which makes it a
+/// second answer able to drift from the first. An editor that changes a wire
+/// has to find the `Call` that wrote it; `script.Call` already carries `line`
+/// and `col`, and two calls cannot begin at the same place, so the match is
+/// exact and needs no ordering assumption at all.
+///
+/// **Not serialized**, for `Program.script`'s reason restated: a dump is of a
+/// MOUNTED graph and this describes the SOURCE. Nothing below the parser reads
+/// it.
+///
+/// Read aloud: *the node's call site*. NOT `Origin` — `script.Origin` is
+/// already taken and answers a different question (which def INSTANCE produced
+/// a flattened node), and two `Origin`s one import apart is how a reader ends
+/// up reaching for the wrong one. Also rejected: `Pos` (this file's `pos` is
+/// metres, in a spray), `Mark` (spindrift's `deposit` word), `Span` (there is
+/// no end here — one point, and the token's own).
+pub const CallSite = struct {
+    line: u32 = 0,
+    col: u32 = 0,
+
+    pub fn known(self: CallSite) bool {
+        return self.line != 0;
+    }
+};
+
 pub const Node = struct {
     id: NodeId,
     op: registry.OpId,
+    /// See `CallSite`. `{0, 0}` when this node is sugar with no `Call` of
+    /// its own.
+    site: CallSite = .{},
     /// Instance name: "bevel1", or "rivet1.scatter1" inside a flattened def.
     name: []const u8,
     inputs: []SlotId,

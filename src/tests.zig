@@ -15097,3 +15097,124 @@ test "R4 G-hole-place: a hole stands where a VALUE stands, and nowhere else" {
         \\plane.a | add :t
     , "a hole stands alone");
 }
+
+// ---------------------------------------------------------------------------
+// R5 — the bridge back to the text. `graph.CallSite` + `Script.callAt`.
+//
+// An editor that moves a node needs nothing from the source; an editor that
+// changes a WIRE has to find the `Call` that wrote it and edit that. Until
+// this pair there was no way across: `Program.script` hands out the file as
+// written, the graph hands out the picture, and the only bridge was that
+// parse order is dependency order and `autoName` mints `near1`, `near2` in it
+// — so the Nth `near` call is `nearN`. True, and a re-derivation of something
+// the parser knew for certain and discarded, which is a second answer able to
+// drift from the first.
+// ---------------------------------------------------------------------------
+
+test "R5: every operator node names the Call that wrote it, and the Call agrees" {
+    // The claim in one line: for every node the parser made from a `Call`,
+    // `Script.callAt(node.site)` returns THAT call — spelled the same, and
+    // exactly one of them.
+    //
+    // MUTATION that bites: in `makeNodeAt`, use the token's line with column
+    // 1 (`.{ .line = t.line, .col = 1 }`). Red — three calls share line 2, so
+    // the lookup returns the first of them for all three and the op spellings
+    // disagree.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    // The third line is a FAN-OUT, and it is here on purpose: without a
+    // branch anywhere in the fixture, `findCallInStages`' `.fan` arm is code
+    // no gate executes — deleting it wholesale left every gate green, which
+    // is how it got into this fixture.
+    const src =
+        \\plane.a | clamp 0 1 | write plane.lit
+        \\plane.seed | mul 0.025 | add 0.03 | write plane.size
+        \\plane.hp | also { write plane.log } | write plane.hp2
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+    const sc = prog.script.?;
+
+    var matched: usize = 0;
+    for (prog.nodes.items) |n| {
+        if (!n.site.known()) continue;
+        const call = sc.callAt(n.site.line, n.site.col) orelse {
+            std.debug.print("\nno call at {d}:{d} for '{s}'\n", .{ n.site.line, n.site.col, n.name });
+            return error.NoCallForNode;
+        };
+        // The op SPELLING, not the id: `Call.op` is what was typed and a node
+        // carries the resolved definition, so this is the assertion that the
+        // two sides are looking at the same statement rather than at two
+        // statements that happen to share a position.
+        try testing.expectEqualStrings(reg.get(n.op).name, call.op);
+        matched += 1;
+    }
+    // clamp, write, mul, add, write, and the two the fan-out line wrote —
+    // seven. A gate that matched NONE would sail through the loop above,
+    // which is why the count is asserted and not just the agreement.
+    try testing.expectEqual(@as(usize, 7), matched);
+}
+
+test "R5: sugar with no Call of its own says so, rather than pointing at a neighbour" {
+    // A record literal's assembly node and a projection node are minted
+    // without an operator token. Giving them a plausible-looking site would be
+    // worse than giving them none: an editor would follow it to whichever call
+    // was nearest and rewrite a statement the reader never touched.
+    //
+    // MUTATION that bites: make `makeNodeAt`'s `site` non-optional and pass
+    // the record's opening brace token through `parseRecord`. Red — `record1`
+    // reports a known site, and there is no `Call` there at all, so an editor
+    // asking "what wrote this" gets a confident wrong answer instead of none.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg,
+        "p", "{x: 1, y: 2} | write plane.out\n", &diag);
+    defer prog.deinit();
+
+    var sugar: usize = 0;
+    for (prog.nodes.items) |n| {
+        if (std.mem.eql(u8, reg.get(n.op).name, "record")) {
+            try testing.expect(!n.site.known());
+            try testing.expect(prog.script.?.callAt(n.site.line, n.site.col) == null);
+            sugar += 1;
+        }
+    }
+    try testing.expect(sugar > 0);
+}
+
+test "R5: a call inside a def body is found, because that is where its text is" {
+    // A def's nodes are FLATTENED into the program with prefixed names
+    // (`double1.mul1`), and the call that wrote them is in the def's body and
+    // nowhere else. `findCallIn` recurses into `Script.defs` for exactly this.
+    //
+    // MUTATION that bites: drop the `.def` arm from `findCallIn`. Red — the
+    // spliced node's site is known and resolves to nothing, which is the
+    // shape that would make drill-in editing silently do nothing.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\def double(x) =
+        \\    x | mul 2
+        \\
+        \\plane.a | double | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+
+    var found_inside = false;
+    for (prog.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "mul")) continue;
+        try testing.expect(n.site.known());
+        const call = prog.script.?.callAt(n.site.line, n.site.col) orelse return error.NoCallForNode;
+        try testing.expectEqualStrings("mul", call.op);
+        // …and it is the one in the BODY: line 2, not the splice on line 4.
+        try testing.expectEqual(@as(u32, 2), call.line);
+        found_inside = true;
+    }
+    try testing.expect(found_inside);
+}

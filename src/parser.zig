@@ -3444,7 +3444,7 @@ const Parser = struct {
             });
         }
 
-        const node_id = try self.makeNode(target, op_id, sources, statics);
+        const node_id = try self.makeNodeAt(target, op_id, sources, statics, op_tok);
         target.nodes.items[node_id].body = body_node;
 
         // Predicate sections mirror the consumer's primary input. A BODY does
@@ -4009,6 +4009,19 @@ const Parser = struct {
 
     /// Create a node + its slots in `target`. `sources` supplies one Source
     /// per input port (variadic ops derive their ports from it).
+    /// `site` is the token that WROTE this node, or null for sugar no
+    /// `script.Call` corresponds to — a projection node, a record's assembly.
+    /// See `graph.CallSite` for why the field exists at all.
+    ///
+    /// **The same token the script's `Call` takes its position from**, read
+    /// twice in one function rather than measured twice. That is what makes
+    /// the match exact instead of merely likely.
+    fn makeNodeAt(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal, site: ?Token) ParseError!NodeId {
+        const id = try self.makeNode(target, op_id, sources, statics);
+        if (site) |t| target.nodes.items[id].site = .{ .line = t.line, .col = t.col };
+        return id;
+    }
+
     fn makeNode(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal) ParseError!NodeId {
         const def = self.reg.get(op_id);
         const node_id: NodeId = @intCast(target.nodes.items.len);
@@ -4246,6 +4259,15 @@ const Parser = struct {
                 .inputs = inputs,
                 .outputs = outputs,
                 .statics = statics,
+                // **The site travels with the splice**, and it points into the
+                // DEF BODY rather than at the call that spliced it — which is
+                // where the text a drill-in editor has to change actually is.
+                // Dropped in the first draft of `CallSite` (this copy lists
+                // its fields by hand, so a new one is silently default) and
+                // caught by R5's def gate: a spliced node reported no site at
+                // all, which is the shape that makes drill-in editing quietly
+                // do nothing.
+                .site = tn.site,
             });
             // A def body may hold a sink — a `@subject`/`#tag` pair since the
             // membership beat, and since 2026-09-08 a `write` at a RELATIVE
