@@ -15218,3 +15218,259 @@ test "R5: a call inside a def body is found, because that is where its text is" 
     }
     try testing.expect(found_inside);
 }
+
+// ---------------------------------------------------------------------------
+// R6 — `edit.addCall`: an operator dropped on a canvas.
+//
+// §3.15's shaped holes were built for this exact moment and `graph.Source.hole`
+// says so: *"an editor that drags an operator onto a canvas had nowhere to put
+// it."* This is the customer.
+// ---------------------------------------------------------------------------
+
+/// Print a script and parse the result, which is the only assertion that
+/// matters about an edit: what it produced is a file rill can read.
+fn addAndReparse(
+    gpa: std.mem.Allocator,
+    reg: *rill.Registry,
+    src: []const u8,
+    op: []const u8,
+    out_text: *[]u8,
+) !rill.Program {
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, reg, "p", src, &diag);
+    defer before.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.addCall(arena.allocator(), before.script.?, reg, op);
+
+    out_text.* = try rill.script.print(gpa, &edited);
+
+    var d2 = rill.Diag{};
+    return rill.parse(gpa, reg, "p", out_text.*, &d2) catch |e| {
+        std.debug.print("\nedited source will not parse: {d}:{d} {s}\n---\n{s}---\n", .{
+            d2.line, d2.col, d2.msg(), out_text.*,
+        });
+        return e;
+    };
+}
+
+test "R6: a dropped operator lands as a statement with an open socket" {
+    // The whole claim, and it is end to end on purpose: build the edit, PRINT
+    // it, and parse the printed text. An edit that produces a `Script` the
+    // printer emits and the parser then refuses is worse than no edit at all,
+    // because the host has already thrown the old one away.
+    //
+    // MUTATION that bites: drop the `items.append(.using …)` so only the
+    // statement is written. Red at the re-parse — `:add_b` is an undeclared
+    // fold, which is the loud refusal §3.15 exists to preserve.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var text: []u8 = undefined;
+    var prog = try addAndReparse(testing.allocator, &reg,
+        "plane.a | write plane.out\n", "clamp", &text);
+    defer testing.allocator.free(text);
+    defer prog.deinit();
+
+    // The node EXISTS in the graph — that is the representation's point.
+    try testing.expect(nodeIdOf(&prog, "clamp1") != null);
+    // …and its declared inputs are holes, not bound values and not `.none`.
+    const n = prog.node(nodeIdOf(&prog, "clamp1").?);
+    var holes: usize = 0;
+    for (n.inputs) |sid| {
+        if (prog.slot(sid).source == .hole) holes += 1;
+    }
+    try testing.expect(holes > 0);
+    // The hole is named for the operator and the port, so the file says what
+    // the socket is for at the point of use.
+    try testing.expect(std.mem.indexOf(u8, text, ":clamp_") != null);
+}
+
+test "R6: what an edit prints is already canonical" {
+    // The property the whole 47-file corpus is held to, applied to generated
+    // text: `rill fmt` over an edited file must change nothing. If an edit
+    // emitted something the printer would re-flow, then format-on-save would
+    // silently rewrite the file the instant the reader touched it, and the
+    // diff of their next real change would carry the difference.
+    //
+    // MUTATION that bites: give the appended statement `blank_before = 0` and
+    // the `using` items `blank_before = 3`. The first parse-print is stable
+    // either way — the printer emits what the script says — so the mutation
+    // that actually bites is the one that makes the SCRIPT disagree with the
+    // canon: set the `using` body to `? number` (a space), which the printer
+    // emits verbatim and the parser then reads as a bare `?` followed by a
+    // type word. Red at the re-parse.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var text: []u8 = undefined;
+    var prog = try addAndReparse(testing.allocator, &reg,
+        "plane.a | write plane.out\n", "clamp", &text);
+    defer testing.allocator.free(text);
+    defer prog.deinit();
+
+    const again = try rill.script.print(testing.allocator, prog.script.?);
+    defer testing.allocator.free(again);
+    try testing.expectEqualStrings(text, again);
+}
+
+test "R6: two drops of the same operator do not name one socket twice" {
+    // A single `addCall` may mint several holes and a second call mints more.
+    // Both would happily produce `:clamp_lo` twice, and the second `using`
+    // silently shadows the first — a file that parses, runs, and is wrong.
+    //
+    // MUTATION that bites: have `mintHole` consider only `sc.top` and not the
+    // items being built. Red — the second drop reuses the first's names.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var t1: []u8 = undefined;
+    var p1 = try addAndReparse(testing.allocator, &reg,
+        "plane.a | write plane.out\n", "clamp", &t1);
+    defer testing.allocator.free(t1);
+    p1.deinit();
+
+    var t2: []u8 = undefined;
+    var p2 = try addAndReparse(testing.allocator, &reg, t1, "clamp", &t2);
+    defer testing.allocator.free(t2);
+    defer p2.deinit();
+
+    try testing.expect(nodeIdOf(&p2, "clamp1") != null);
+    try testing.expect(nodeIdOf(&p2, "clamp2") != null);
+    // Every hole in the twice-edited file is distinct — asserted on the
+    // PROGRAM's hole table rather than by counting substrings, so a name that
+    // differs only in a way the parser ignores still fails.
+    for (p2.holes, 0..) |h, i| {
+        for (p2.holes[i + 1 ..]) |other| {
+            try testing.expect(!std.mem.eql(u8, h.name, other.name));
+        }
+    }
+    try testing.expect(p2.holes.len >= 2);
+}
+
+test "R6: an operator whose argument cannot be a value is refused by name" {
+    // A hole is a VALUE. A section body (`keep (> 0)`) and a line-tail are
+    // neither, so there is no text that leaves one open — and emitting a file
+    // that will not parse is the one outcome worse than refusing.
+    //
+    // MUTATION that bites: delete the `port.kind == .section or port.tail`
+    // check. Red — the call returns a script whose printed form the parser
+    // refuses, which the gate catches as a parse error rather than the named
+    // refusal it asked for.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", "plane.a | write plane.out\n", &diag);
+    defer prog.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // The named refusal this gate is actually about. `keep` declares
+    // `body = 1`: its argument is a sub-graph, and there is no hole spelling
+    // for one.
+    try testing.expectError(
+        error.CannotLeaveOpen,
+        rill.edit.addCall(arena.allocator(), prog.script.?, &reg, "keep"),
+    );
+    // And the other refusal, because a palette out of date with its host is
+    // worth saying rather than crashing on.
+    try testing.expectError(
+        error.UnknownOperator,
+        rill.edit.addCall(arena.allocator(), prog.script.?, &reg, "no_such_operator"),
+    );
+}
+
+test "R6 AUDIT: every registered operator either drops cleanly or refuses by name" {
+    // **Exhaustive, because picking two operators picks two that agree with
+    // you.** Two mutations survived a hand-chosen fixture — `clamp` has no
+    // optional port and no keyword port, so the rules covering both were
+    // untested and the gate could not have known. This walks the whole
+    // vocabulary instead: for every registered operator, `addCall` must either
+    // produce text rill parses, or refuse by NAME. Never a third thing, and
+    // never a file that will not load.
+    //
+    // It is also the honest count of what a palette can offer today, printed
+    // rather than asserted, so a beat that widens `addCall` shows up as the
+    // number moving.
+    //
+    // MUTATIONS that bite: drop `if (port.optional) continue;` — an optional
+    // port gets a hole it does not need, and several operators then emit a
+    // required-looking socket for something the parser never expected. Drop
+    // the `port.kw` spelling — a keyword port written positionally is refused
+    // by the parser with "written WITHOUT its name", which lands here as a
+    // parse failure on generated text.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var base = try rill.parse(testing.allocator, &reg, "p", "plane.a | write plane.out\n", &diag);
+    defer base.deinit();
+
+    var dropped: usize = 0;
+    var refused: usize = 0;
+    var i: registry.OpId = 0;
+    while (i < reg.ops.items.len) : (i += 1) {
+        const name = reg.get(i).name;
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+
+        const edited = rill.edit.addCall(arena.allocator(), base.script.?, &reg, name) catch |e| {
+            // The only legal refusals, and both are named. Anything else — an
+            // OOM aside — is a bug wearing an error.
+            switch (e) {
+                error.CannotLeaveOpen, error.NotCallable => {},
+                else => return e,
+            }
+            refused += 1;
+            continue;
+        };
+
+        const text = try rill.script.print(testing.allocator, &edited);
+        defer testing.allocator.free(text);
+        var d2 = rill.Diag{};
+        var prog = rill.parse(testing.allocator, &reg, "p", text, &d2) catch |e| {
+            std.debug.print("\n'{s}' dropped to text rill refuses: {d}:{d} {s}\n---\n{s}---\n", .{
+                name, d2.line, d2.col, d2.msg(), text,
+            });
+            return e;
+        };
+        defer prog.deinit();
+        // …and the node is really there, which is the point of the whole
+        // representation. A drop that parsed but put no node in the graph
+        // would be an operator the reader cannot see or wire.
+        try testing.expect(prog.nodes.items.len > base.nodes.items.len);
+
+        // **Required ports get a HOLE; optional ports get NOTHING**, and the
+        // difference is not cosmetic. `eval.markNode` SKIPS a `.none` input
+        // when deciding whether a node is ready, and a `.hole` does the
+        // opposite — it holds the node quiet, which is the whole reason
+        // §3.15 gave holes their own variant instead of reusing `.none`. So
+        // an optional port bound to a hole is an operator that never fires
+        // again, however carefully the reader wires the rest of it.
+        //
+        // Only checkable here: a hole on an optional port PARSES perfectly
+        // well, so the round-trip above cannot see it. The mutation that
+        // deletes `if (port.optional) continue;` survived every other gate in
+        // this file.
+        const added = prog.nodes.items[prog.nodes.items.len - 1];
+        try testing.expectEqual(i, added.op);
+        for (added.inputs) |sid| {
+            const slot = prog.slot(sid);
+            if (slot.port >= reg.get(i).inputs.len) continue;
+            const want_hole = !reg.get(i).inputs[slot.port].optional;
+            const is_hole = slot.source == .hole;
+            if (want_hole != is_hole) {
+                std.debug.print("\n'{s}' port '{s}': optional={}, source={s}\n", .{
+                    name, slot.name, !want_hole, @tagName(slot.source),
+                });
+                return error.WrongOpenness;
+            }
+        }
+        dropped += 1;
+    }
+
+    std.debug.print(
+        "\n[palette] {d} of {d} operators drop bare; {d} need something first\n",
+        .{ dropped, dropped + refused, refused },
+    );
+    // A gate that refused everything would pass every assertion above.
+    try testing.expect(dropped > 20);
+}

@@ -41,6 +41,8 @@ pub const parser = @import("parser.zig");
 /// back as `.rill` text (2026-09-09). `prog.script` is what a visual editor
 /// reads and edits; nothing in the runtime touches it.
 pub const script = @import("script.zig");
+/// Structural edits to a retained script — the visual editor's half.
+pub const edit = @import("edit.zig");
 pub const ops = @import("ops.zig");
 pub const plane = @import("plane.zig");
 pub const eval = @import("eval.zig");
