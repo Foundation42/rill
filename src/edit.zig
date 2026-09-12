@@ -70,6 +70,16 @@ pub const Error = std.mem.Allocator.Error || error{
     /// Removing that call would take away an `as` name something below still
     /// reads, or make one name a different producer. See `removeCall`.
     StillRead,
+    /// No `using` binds that name in this script.
+    NoSuchFold,
+    /// The fold is bound and its body has no such field.
+    NoSuchField,
+    /// The fold's body is an array and has no element at that index.
+    NoSuchElement,
+    /// The fold's body is not a shape this can reach into — a bare value, or
+    /// an array of something other than records. Refused by name rather than
+    /// half-edited.
+    NotEditable,
 };
 
 /// **One end of a wire**, addressed the way the canvas can address it.
@@ -880,6 +890,143 @@ fn withUsingAndDrops(
     var out = sc.*;
     out.top = try items.toOwnedSlice(arena);
     return out;
+}
+
+// ── a literal inside a fold ──────────────────────────────────────────────
+//
+// Christian, 2026-09-12, right-clicking a record literal on the canvas: *"how
+// do we edit record3?"* A `{…}` has no `Call`, so `link`, `unlink` and
+// `removeCall` all have nothing to take hold of.
+//
+// What it does have, once the author hoists it, is a NAME. `graph.Node.fold`
+// carries which `using` spliced a node in; this is what an editor does with
+// that answer. The two halves are deliberately one beat: a link nothing can
+// act on is a field nobody reads.
+//
+// **Text, and not structure, because the body IS text.** `Using.body` is what
+// `renderTokens` produced, so it is already canonical — elements separated by
+// `, `, one spelling per value — and the edit is a scan and a rejoin rather
+// than a parse. The scanner is `script.SpanIter`, which is the PRINTER's, for
+// the reason stated where it lives: two scanners for "where does this element
+// end" is a pair that drifts.
+
+/// Split `l: 0.28` into its key and its value. Null when there is no `:` at
+/// depth zero — a positional element of an array, which has no field to name.
+fn splitField(piece: []const u8) ?struct { key: []const u8, value: []const u8 } {
+    var depth: usize = 0;
+    var in_string = false;
+    for (piece, 0..) |c, i| {
+        if (in_string) {
+            if (c == '"') in_string = false;
+            continue;
+        }
+        switch (c) {
+            '"' => in_string = true,
+            '[', '{', '(' => depth += 1,
+            ']', '}', ')' => depth -|= 1,
+            ':' => if (depth == 0) return .{
+                .key = std.mem.trim(u8, piece[0..i], " "),
+                .value = std.mem.trim(u8, piece[i + 1 ..], " "),
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// `{a: 1, b: 2}` with one field's value replaced. Null when `field` is not in
+/// it, so the caller can say so by name rather than writing a record that
+/// quietly gained a field nobody asked for.
+fn recordWith(
+    arena: std.mem.Allocator,
+    record: []const u8,
+    field: []const u8,
+    value: []const u8,
+) Error!?[]const u8 {
+    if (record.len < 2 or record[0] != '{' or record[record.len - 1] != '}') return null;
+    var out = std.ArrayListUnmanaged(u8).empty;
+    try out.append(arena, '{');
+    var it = script.SpanIter{ .text = record[1 .. record.len - 1] };
+    var found = false;
+    var n: usize = 0;
+    while (it.next()) |piece| {
+        if (piece.len == 0) continue;
+        const kv = splitField(piece) orelse return null;
+        if (n > 0) try out.appendSlice(arena, ", ");
+        try out.appendSlice(arena, kv.key);
+        try out.appendSlice(arena, ": ");
+        if (std.mem.eql(u8, kv.key, field)) {
+            try out.appendSlice(arena, value);
+            found = true;
+        } else {
+            try out.appendSlice(arena, kv.value);
+        }
+        n += 1;
+    }
+    try out.append(arena, '}');
+    if (!found) return null;
+    return try out.toOwnedSlice(arena);
+}
+
+/// **Set one field of a record bound by a `using`.**
+///
+/// `element` is which item of the body, for a body that is an ARRAY of
+/// records — `null` when the body is the record itself. Nothing deeper is
+/// reachable and nothing deeper is refused quietly: an element that is not a
+/// record answers `NotEditable`, which is the honest thing to say about
+/// `[[1, 2], [3, 4]]` until somebody has a use for it.
+pub fn setFoldField(
+    arena: std.mem.Allocator,
+    sc: *const script.Script,
+    fold_name: []const u8,
+    element: ?usize,
+    field: []const u8,
+    value: []const u8,
+) Error!script.Script {
+    var at: ?usize = null;
+    for (sc.top, 0..) |it, i| {
+        const u = switch (it) {
+            .using => |x| x,
+            else => continue,
+        };
+        if (std.mem.eql(u8, u.name, fold_name)) at = i;
+    }
+    const idx = at orelse return error.NoSuchFold;
+    const body = sc.top[idx].using.body;
+
+    const new_body: []const u8 = blk: {
+        const e = element orelse break :blk (try recordWith(arena, body, field, value)) orelse
+            return error.NoSuchField;
+        if (body.len < 2 or body[0] != '[' or body[body.len - 1] != ']') return error.NotEditable;
+
+        var out = std.ArrayListUnmanaged(u8).empty;
+        try out.append(arena, '[');
+        var it = script.SpanIter{ .text = body[1 .. body.len - 1] };
+        var n: usize = 0;
+        var hit = false;
+        while (it.next()) |piece| {
+            if (piece.len == 0) continue;
+            if (n > 0) try out.appendSlice(arena, ", ");
+            if (n == e) {
+                const rewritten = (try recordWith(arena, piece, field, value)) orelse
+                    return error.NoSuchField;
+                try out.appendSlice(arena, rewritten);
+                hit = true;
+            } else try out.appendSlice(arena, piece);
+            n += 1;
+        }
+        try out.append(arena, ']');
+        if (!hit) return error.NoSuchElement;
+        break :blk try out.toOwnedSlice(arena);
+    };
+
+    const items = try arena.dupe(script.Item, sc.top);
+    var u = sc.top[idx].using;
+    u.body = new_body;
+    items[idx] = .{ .using = u };
+    var out_sc = sc.*;
+    out_sc.top = items;
+    return out_sc;
 }
 
 /// A hole name nothing else in the file has taken.

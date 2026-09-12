@@ -1140,11 +1140,19 @@ fn fitsRow(cols: usize, widest: usize, room: usize) bool {
 /// `,` inside `"a, b"` is not a separator and a `\"` does not close the
 /// string. Nothing else can hide one, because the text this walks was
 /// rendered by the parser's own `renderTokens`.
-const SpanIter = struct {
+/// **The top-level elements of a rendered span's interior**, comma-separated,
+/// nesting and strings respected.
+///
+/// `pub` since 2026-09-12: `edit.setFoldField` walks a `using` body with it.
+/// That is the same job from the other side — the printer scans a rendered
+/// span to lay it out, and an editor scans the same text to change one piece
+/// of it — and a second scanner would be a second answer to "where does this
+/// element end", which is exactly the sort of pair that drifts.
+pub const SpanIter = struct {
     text: []const u8,
     at: usize = 0,
 
-    fn next(self: *SpanIter) ?[]const u8 {
+    pub fn next(self: *SpanIter) ?[]const u8 {
         if (self.at >= self.text.len) return null;
         const start = self.at;
         var depth: usize = 0;

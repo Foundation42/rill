@@ -2985,14 +2985,14 @@ const Parser = struct {
         const op_id = self.reg.find("array") orelse return self.fail(tok, "core operator 'array' is not registered", .{});
         const statics = try self.a().alloc(registry.StaticVal, sources.len);
         for (0..sources.len) |i| statics[i] = .{ .word = try std.fmt.allocPrint(self.a(), "{d}", .{i}) };
-        return self.makeNode(target, op_id, sources, statics);
+        return self.sugarNode(target, op_id, sources, statics, tok);
     }
 
     fn makeRecordNode(self: *Parser, target: *Target, fields: []const []const u8, sources: []const Source, tok: Token) ParseError!NodeId {
         const op_id = self.reg.find("record") orelse return self.fail(tok, "core operator 'record' is not registered", .{});
         const statics = try self.a().alloc(registry.StaticVal, fields.len);
         for (fields, 0..) |f, i| statics[i] = .{ .word = f };
-        return self.makeNode(target, op_id, sources, statics);
+        return self.sugarNode(target, op_id, sources, statics, tok);
     }
 
     // -- shape literals -------------------------------------------------------
@@ -4095,8 +4095,41 @@ const Parser = struct {
     /// the match exact instead of merely likely.
     fn makeNodeAt(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal, site: ?Token) ParseError!NodeId {
         const id = try self.makeNode(target, op_id, sources, statics);
-        if (site) |t| target.nodes.items[id].site = .{ .line = t.line, .col = t.col };
+        if (site) |t| {
+            target.nodes.items[id].site = .{ .line = t.line, .col = t.col };
+            target.nodes.items[id].fold = self.foldOriginOf(t);
+        }
         return id;
+    }
+
+    /// A record or array node: it takes the FOLD from its opening token and
+    /// leaves its CALL site at `{0, 0}`.
+    ///
+    /// **The two are not the same fact and this is the gate that says so.**
+    /// `R5: sugar with no Call of its own says so` names giving these a site
+    /// as its mutation, and the reason it gives still holds: `site` is
+    /// documented as where a CALL is, and a caller testing `site.known()` to
+    /// mean "there is text here I can edit as a call" would get a confident
+    /// wrong answer. The literal's own position is a different question, and
+    /// the day something needs it, it gets a field with its own name rather
+    /// than a second meaning bolted onto this one.
+    fn sugarNode(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal, tok: Token) ParseError!NodeId {
+        const id = try self.makeNode(target, op_id, sources, statics);
+        target.nodes.items[id].fold = self.foldOriginOf(tok);
+        return id;
+    }
+
+    /// The outermost fold that spliced `tok` in, or nothing when the author
+    /// typed it. `noteProvenance` walks the same chain to write a diagnostic;
+    /// this one hands the answer to the graph. Outermost for `renderTokens`'
+    /// reason: through a chain of folds, the one actually IN THE FILE is the
+    /// one an editor can act on.
+    fn foldOriginOf(self: *Parser, tok: Token) graph.FoldOrigin {
+        if (tok.fold == 0) return .{};
+        const site = self.outermostSite(tok.fold);
+        if (site == 0) return .{};
+        const f = self.fold_sites.items[site - 1];
+        return .{ .name = f.name, .line = f.def_line };
     }
 
     fn makeNode(self: *Parser, target: *Target, op_id: registry.OpId, sources: []const Source, statics: []registry.StaticVal) ParseError!NodeId {

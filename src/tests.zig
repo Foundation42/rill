@@ -16072,3 +16072,141 @@ test "using: a SHORT body stays on its line, and an unclosed section still ends 
     try testing.expectEqual(@as(usize, 1), open.nodes.items.len);
     try testing.expectEqualStrings("mul", reg.get(open.nodes.items[0].op).name);
 }
+
+// ---------------------------------------------------------------------------
+// R6e — `Node.fold` and `edit.setFoldField`: "how do we edit record3?"
+// ---------------------------------------------------------------------------
+
+test "graph: a node spliced by a fold says WHICH fold, and where it was bound" {
+    // Christian, 2026-09-12, right-clicking a record literal on the canvas:
+    // *"how do we edit record3?"* A `{…}` has no `Call`, so `CallSite` has
+    // nothing to say about it — but once it is hoisted to a `using` it has a
+    // NAME, and a name is something an editor can act on.
+    //
+    // MUTATION A: `foldOriginOf` returns `.{}` always. Every sugar node
+    // becomes anonymous again and the only honest answer to "edit this" goes
+    // back to "you cannot".
+    // MUTATION B: use `tok.fold` directly instead of `outermostSite`. Through
+    // a chain of folds it names the INNER one — a name that is not in the
+    // file, so an editor sends the reader looking for a `using` nobody wrote.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    const hoisted =
+        \\using [{l: 0.28, a: -0.02, b: -0.08}, {l: 1.10, a: 0.10, b: 0.10}] as :stops
+        \\
+        \\:stops | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(gpa, &reg, "p", hoisted, &diag);
+    defer prog.deinit();
+
+    var records: usize = 0;
+    for (prog.nodes.items) |n| {
+        const op = reg.get(n.op).name;
+        if (!std.mem.eql(u8, op, "record") and !std.mem.eql(u8, op, "array")) continue;
+        records += 1;
+        try testing.expect(n.fold.known());
+        try testing.expectEqualStrings(":stops", n.fold.name);
+        try testing.expectEqual(@as(u32, 1), n.fold.line);
+        // …and it is still NOT a call, which is the other half of the answer.
+        try testing.expect(prog.script.?.callAt(n.site.line, n.site.col) == null);
+    }
+    try testing.expectEqual(@as(usize, 3), records); // two records + the array
+
+    // The node the AUTHOR wrote carries no fold — or every node in every file
+    // would claim to come from somewhere it does not.
+    for (prog.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "write")) continue;
+        try testing.expect(!n.fold.known());
+    }
+
+    // An INLINE literal has no fold, and keeps the `{0, 0}` CALL site that
+    // `R5: sugar with no Call of its own says so` insists on. The two facts
+    // are separate on purpose: `site` answers "is there a call here" and
+    // `fold` answers "does this have a name I can reach". A literal nobody
+    // hoisted has neither, and saying so is the honest end of this road.
+    var d2 = rill.Diag{};
+    var inl = try rill.parse(gpa, &reg, "p", "[{l: 0.28, a: 0.0, b: 0.0}] | write plane.out\n", &d2);
+    defer inl.deinit();
+    for (inl.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "record")) continue;
+        try testing.expect(!n.fold.known());
+        try testing.expect(!n.site.known());
+    }
+}
+
+test "edit: one field of one element of a fold, and the rest untouched" {
+    // The answer to "how do we edit record3", end to end: hoist it, and the
+    // literal has a name the editor can reach.
+    //
+    // MUTATION A: write `value` into every field rather than the named one.
+    // The gate's `a` and `b` assertions go red — and in a file this would look
+    // like a working edit until somebody read the diff.
+    // MUTATION B: rejoin elements with "," instead of ", ". It still parses,
+    // and `rill fmt` is no longer a no-op on the result: the corpus canon
+    // breaks the moment the editor touches a file.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    const src =
+        \\using [{l: 0.28, a: -0.02, b: -0.08}, {l: 0.55, a: 0.02, b: 0.02}, {l: 1.10, a: 0.10, b: 0.10}] as :stops
+        \\
+        \\:stops | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", src, &diag);
+    defer before.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.setFoldField(arena.allocator(), before.script.?, ":stops", 2, "l", "1.5");
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    // The one value moved…
+    try testing.expect(std.mem.indexOf(u8, text, "{l: 1.5, a: 0.10, b: 0.10}") != null);
+    // …and its neighbours did not, spelling included: `-0.02` is not `-0.020`.
+    try testing.expect(std.mem.indexOf(u8, text, "{l: 0.28, a: -0.02, b: -0.08}") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "{l: 0.55, a: 0.02, b: 0.02}") != null);
+
+    // And it is still canonical — printing what this produced changes nothing,
+    // which is the property the whole corpus is held to.
+    const twice = try rill.script.print(gpa, after.script.?);
+    defer gpa.free(twice);
+    try testing.expectEqualStrings(text, twice);
+}
+
+test "edit: a fold this cannot reach into is refused by name, never half-edited" {
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var diag = rill.Diag{};
+    var p = try rill.parse(gpa, &reg, "p",
+        \\using [{l: 0.28, a: 0.0, b: 0.0}] as :stops
+        \\using [[1, 2], [3, 4]] as :pairs
+        \\
+        \\:stops | write plane.out
+        \\
+    , &diag);
+    defer p.deinit();
+    const sc = p.script.?;
+
+    try testing.expectError(error.NoSuchFold, rill.edit.setFoldField(a, sc, ":nope", 0, "l", "1"));
+    try testing.expectError(error.NoSuchField, rill.edit.setFoldField(a, sc, ":stops", 0, "zz", "1"));
+    try testing.expectError(error.NoSuchElement, rill.edit.setFoldField(a, sc, ":stops", 9, "l", "1"));
+    // An array of arrays: there is no field to name, and saying so is better
+    // than inventing a meaning for it.
+    try testing.expectError(error.NoSuchField, rill.edit.setFoldField(a, sc, ":pairs", 0, "l", "1"));
+}

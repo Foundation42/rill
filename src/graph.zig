@@ -117,12 +117,44 @@ pub const CallSite = struct {
     }
 };
 
+/// A fold reference and where it was bound. See `Node.fold`.
+pub const FoldOrigin = struct {
+    /// The reference as the author wrote it — `:stops`, sigil included, so it
+    /// is the same string the binding and every use of it are keyed on.
+    name: []const u8 = "",
+    /// The line the `using` that bound it sits on.
+    line: u32 = 0,
+
+    pub fn known(self: FoldOrigin) bool {
+        return self.name.len > 0;
+    }
+};
+
 pub const Node = struct {
     id: NodeId,
     op: registry.OpId,
     /// See `CallSite`. `{0, 0}` when this node is sugar with no `Call` of
     /// its own.
     site: CallSite = .{},
+    /// **Which fold spliced this node in**, when one did — `… as :stops` and
+    /// the line the `using` is on.
+    ///
+    /// The parser has kept this per TOKEN since `using` replaced `use`
+    /// (`Token.fold`), and spends it on one thing: a refusal on a token nobody
+    /// typed can still say whose it is (*"expanded from :stops, bound at line
+    /// 1"*). This carries the same fact up to the NODE, for the same reason
+    /// one layer out.
+    ///
+    /// Christian, 2026-09-12, right-clicking a record literal on the canvas
+    /// and asking how to edit it: a `{…}` has no `Call`, so `CallSite` has
+    /// nothing to say about it — but if the author hoisted it to a `using`,
+    /// then it has a NAME, and a name is a thing an editor can act on. That is
+    /// what makes "edit `record3`" answerable as "edit `:stops`".
+    ///
+    /// The OUTERMOST site, for `renderTokens`' reason: through a chain of
+    /// folds, the one that is actually in the file is the one the author can
+    /// go and change.
+    fold: FoldOrigin = .{},
     /// Instance name: "bevel1", or "rivet1.scatter1" inside a flattened def.
     name: []const u8,
     inputs: []SlotId,

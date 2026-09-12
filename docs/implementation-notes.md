@@ -5971,3 +5971,59 @@ The same fact bit the gate a third time — an assertion that `using (> 0 as
 
 The VSCode grammar needed no change: it matches the `using` keyword and
 `as :name` independently, with no line-scoped rule between them.
+
+## `Node.fold` and `setFoldField` — "how do we edit record3?" (2026-09-12)
+
+Christian, right-clicking a record literal on the canvas. A `{…}` has no
+`Call`, so `link`, `unlink` and `removeCall` all have nothing to take hold of.
+What it has, once the author hoists it, is a NAME.
+
+### The link
+
+The parser has kept per-token provenance since `using` replaced `use`
+(`Token.fold`) and spent it on one thing: a refusal on a token nobody typed can
+still say whose it is — *"expanded from :stops, bound at line 1"*.
+`graph.Node.fold` carries that same fact up to the node. Outermost site, for
+`renderTokens`' reason: through a chain of folds, the one actually IN THE FILE
+is the one an editor can act on.
+
+**And `Node.site` was left alone**, which took a gate to notice.
+`makeRecordNode` was changed to `makeNodeAt` so the `{` became the node's site
+— strictly more information, and red on `R5: sugar with no Call of its own says
+so`, whose comment names that exact change as its mutation. The reason it gives
+still holds: `site` is documented as where a CALL is, and a caller reading
+`site.known()` as "there is text here I can edit" gets a confident wrong
+answer. So records and arrays take a fold from their opening token and keep
+`{0, 0}`. **The literal's own position is a different question, and the day
+something needs it, it gets a field with its own name.**
+
+Two facts, two fields: `site` answers *is there a call here*, `fold` answers
+*does this have a name I can reach*. A literal nobody hoisted has neither, and
+saying so is the honest end of that road.
+
+### The edit
+
+`setFoldField(sc, ":stops", element, field, value)` — text, not structure,
+because the body IS text. `Using.body` is what `renderTokens` produced, so it
+is already canonical (elements separated by `, `, one spelling per value) and
+the edit is a scan and a rejoin rather than a parse.
+
+The scanner is `script.SpanIter`, now `pub`. That is the same job from the
+other side — the printer scans a rendered span to lay it out, an editor scans
+the same text to change one piece — and a second scanner would be a second
+answer to "where does this element end", exactly the sort of pair that drifts.
+
+### Gates
+
+- `graph: a node spliced by a fold says WHICH fold, and where it was bound` —
+  **A**: `foldOriginOf` returns `.{}`; every sugar node is anonymous again.
+  **B**: use `tok.fold` instead of `outermostSite`; through nested folds it
+  names the inner one — a name that is not in the file, so the editor sends a
+  reader hunting a `using` nobody wrote.
+- `edit: one field of one element of a fold, and the rest untouched` —
+  **A**: write `value` into every field; in a file that reads as a working
+  edit until somebody reads the diff. **B**: rejoin with `,` instead of `, `;
+  it parses, and `rill fmt` stops being a no-op — the corpus canon breaks the
+  moment the editor touches a file.
+- `edit: a fold this cannot reach into is refused by name, never half-edited` —
+  `NoSuchFold`, `NoSuchField`, `NoSuchElement`, and an array of arrays.
