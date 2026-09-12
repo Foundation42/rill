@@ -3530,6 +3530,57 @@ test "reserved delta kinds are refused, never quietly treated as values" {
 // something flowed.
 // ---------------------------------------------------------------------------
 
+test "latch: the same payload twice is two events, not one" {
+    // **An occurrence is not a value, and `latch` produces occurrences.** Its
+    // own help says so — *"emit the current `in` when `trigger` fires"* — but
+    // its output port was declared `p.val`, so `emitSlot`'s value rule
+    // ("20→20 is silence") swallowed every firing after the first whenever the
+    // sampled payload did not change.
+    //
+    // Found in matryoshka, 2026-09-12. `select.rill` ends:
+    //
+    //     "main" | latch clear_click | where replacing | select clear
+    //
+    // — click empty space to drop your selection. The latch samples the same
+    // string every time, so the FIRST click cleared and every one after it was
+    // silence. Chris: *"I can't unselect it clicking anywhere."* The policy was
+    // right, its gates were right, and the wire ate the event.
+    //
+    // Mutation: declare the output `p.val` again. The second tick writes
+    // nothing and this goes red on the count — which is the whole bug, in one
+    // number.
+    var reg = try rill.Registry.init(testing.allocator);
+    defer reg.deinit();
+    try rill.registerCore(&reg);
+    var prog = try parseOk(testing.allocator, &reg, "\"main\" | latch plane.trig | write plane.out");
+    defer prog.deinit();
+
+    var mock = rill.MockPlane.init(testing.allocator);
+    defer mock.deinit();
+    var rt = try rill.Runtime.mount(testing.allocator, &prog, mock.asPlane(), .{});
+    defer rt.deinit();
+
+    const enc = try packOne(testing.allocator, @as(i64, 1));
+    defer testing.allocator.free(enc);
+
+    try rt.feed(.{ .path = "plane.trig", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 1 });
+    try testing.expectEqual(@as(usize, 1), mock.writes.items.len);
+
+    // The SAME payload, a second time. A person clicking empty space twice has
+    // performed two gestures, and the second one is not less of one for
+    // resembling the first.
+    try rt.feed(.{ .path = "plane.trig", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 2 });
+    try testing.expectEqual(@as(usize, 2), mock.writes.items.len);
+
+    // …and a third, because "it works twice" is what a stale-by-one bug looks
+    // like.
+    try rt.feed(.{ .path = "plane.trig", .value = enc, .kind = .occurrence });
+    try rt.tick(.{ .frame = 3 });
+    try testing.expectEqual(@as(usize, 3), mock.writes.items.len);
+}
+
 test "set: a rousing writes a constant, in one node" {
     var reg = try rill.Registry.init(testing.allocator);
     defer reg.deinit();

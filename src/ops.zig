@@ -3666,7 +3666,18 @@ const CORE = [_]registry.OpDef{
     .{ .name = "where", .tags = &.{"flow", "gate"}, .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Pass arrivals of `in` while pred is true; otherwise silence.", .class = .reads, .eval = evalWhere },
     .{ .name = "partition", .tags = &.{"flow"}, .inputs = &.{ p.in("in", Tag.any), p.in("pred", Tag.boolean) }, .outputs = &.{ p.val("pass", Tag.any), p.val("fail", Tag.any) }, .routes = .anywhere, .help = "Route every arrival of `in` to exactly one side by pred.", .class = .reads, .eval = evalPartition },
     .{ .name = "changed", .tags = &.{"event"}, .inputs = &.{p.in("in", Tag.any)}, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Emit an occurrence whenever the value actually changes.", .class = .reads, .eval = evalChanged },
-    .{ .name = "latch", .tags = &.{"flow"}, .inputs = &.{ p.in("in", Tag.any), p.occ("trigger", Tag.any) }, .outputs = &.{p.val("out", Tag.any)}, .routes = .anywhere, .help = "Sample-and-hold: emit the current `in` when `trigger` fires.", .class = .reads, .eval = evalLatch },
+    // **`out` is an OCCURRENCE, and the help text was always the argument for
+    // it**: "emit … when `trigger` fires" is an event, not a level. Declared
+    // `p.val` it went through `emitSlot`'s value rule — "20→20 is silence" —
+    // so a latch sampling an unchanging payload fired ONCE and was then mute
+    // for the life of the program. matryoshka's `select.rill` ends
+    // `"main" | latch clear_click | where replacing | select clear`, and that
+    // is exactly a constant sampled on a gesture: clicking empty space to drop
+    // a selection worked the first time and never again (Chris, 2026-09-12).
+    // Downstream still READS the held bytes — an occurrence is stored like
+    // anything else — so sample-and-hold is intact; what changes is that every
+    // firing is delivered, which is what firing means.
+    .{ .name = "latch", .tags = &.{"flow"}, .inputs = &.{ p.in("in", Tag.any), p.occ("trigger", Tag.any) }, .outputs = &.{p.occ("out", Tag.any)}, .routes = .anywhere, .help = "Sample-and-hold: emit the current `in` when `trigger` fires.", .class = .reads, .eval = evalLatch },
     // events
     .{ .name = "dropped_below", .tags = &.{"event"}, .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .routes = .anywhere, .help = "Fire (with the value) when `in` crosses below threshold. First observation baselines silently.", .class = .reads, .eval = evalDroppedBelow },
     .{ .name = "rose_above", .tags = &.{"event"}, .inputs = &.{ p.in("in", Tag.number), p.in("threshold", Tag.number) }, .outputs = &.{p.occ("out", Tag.number)}, .routes = .anywhere, .help = "Fire (with the value) when `in` crosses above threshold. First observation baselines silently.", .class = .reads, .eval = evalRoseAbove },
