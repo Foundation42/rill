@@ -6027,3 +6027,61 @@ answer to "where does this element end", exactly the sort of pair that drifts.
   moment the editor touches a file.
 - `edit: a fold this cannot reach into is refused by name, never half-edited` —
   `NoSuchFold`, `NoSuchField`, `NoSuchElement`, and an array of arrays.
+
+## `setArg` / `nameArg` — a magic constant, set and named (2026-09-12)
+
+Christian, on `row.seed | mul 0.025 | add 0.03 | write row.size`: *"Magic
+constants can have real names too."*
+
+### Two doors, and the canvas draws them the same
+
+`0.025` is a `script.Arg` with a declared port — nothing to hoist, nothing to
+look up, `script.Arg.port` finds it. A value the parser ASSEMBLED (`record3`)
+has no argument of its own and is reachable only through the `using` that binds
+it. The reader sees a pin labelled `b 0.025` either way, so one verb takes one
+spelling and the host picks the door.
+
+`nameArg` is extract-variable, spelled as the binding rill already has. **It
+moves no numbers** — the literal crosses as the characters that were in the
+file — which is what makes it safe to offer on a right-click.
+
+### Three bugs, all found by driving the verbs in sequence
+
+**`blank_before` is not what it sounds like.** The printer emits lead comments
+(each with its own blank), THEN `Stmt.blank_before`, then the code. So that
+field is the gap between a statement's paragraph and the statement — and the
+first version added one there, pushing a reader's paragraph off the thing it
+describes. Visible only by looking at `roaches.rill`. `openRoomAbove` moves the
+separation onto the declaration and gives the comment block a single blank to
+sit under, touching no prose. `withUsing` had the same bug and now shares the
+fix.
+
+**A named constant was set over its name.** `hud name` lifted `0.025` to
+`:grain`, and `hud set` on the same pin wrote `0.040` straight over the
+reference — an editor undoing the naming gesture the reader made a moment
+earlier, in the same session, for the same number. `setArg` follows a bound
+name to its binding now. Exactly the bound name, never a prefix: `:k.tight` is
+a fold of a PLANE PATH and its number is not in the file.
+
+**And a name got named.** A fold reference expands to a literal, so it arrives
+with `.literal` kind and sailed past the kind check — producing `using :grain
+as :again`, a name bound to a name, which parses and means nothing. Refused as
+`AlreadyNamed` rather than treated as a rename: renaming changes every use,
+where this gesture changes one argument, and the two want different words and
+different confirmations.
+
+None of the three would have been found by reading. All three came from running
+the verbs against the real file, twice, in sequence.
+
+### Gates
+
+- `an argument is set VERBATIM, and its neighbours keep their spelling` —
+  **A**: format the text as a number; `0.030` becomes `0.03` and the file
+  quietly stops being what the author wrote. **B**: index `args` by port number
+  rather than finding the arg whose `port` matches.
+- `a magic constant gets a real name, bound where a reader meets it` —
+  **A**: hoist to the top of the file; it parses, and the name is declared a
+  screen from the only place it means anything. **B**: re-render the literal
+  from its value; a rename that changes the spelling is not a rename.
+- `setting a NAMED constant lands on the binding, not over the name`.
+- `naming refuses what is already named, and what has no text at all`.

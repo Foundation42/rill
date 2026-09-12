@@ -80,6 +80,16 @@ pub const Error = std.mem.Allocator.Error || error{
     /// an array of something other than records. Refused by name rather than
     /// half-edited.
     NotEditable,
+    /// That port has no authored argument: it is fed by the pipe, by a wire,
+    /// or left to its default. There is no text there to set or to name.
+    PortNotWritten,
+    /// A `using` already binds that name. Refused rather than shadowing one,
+    /// which the parser refuses anyway — better to say so before writing.
+    NameTaken,
+    /// That argument is a fold reference — the constant already has a name.
+    /// Renaming it is a different gesture: it changes every use, where this
+    /// one changes an argument.
+    AlreadyNamed,
 };
 
 /// **One end of a wire**, addressed the way the canvas can address it.
@@ -558,15 +568,17 @@ fn withUsing(
 ) Error!script.Script {
     var items = std.ArrayListUnmanaged(script.Item).empty;
     try items.appendSlice(arena, sc.top[0..at]);
+    var spaced = st;
+    const outer = try openRoomAbove(arena, &spaced);
     try items.append(arena, .{ .using = .{
         .name = name,
         // `addCall`'s spelling, and its reason: `?any` would be a type word a
         // reader has to be told means "no constraint", and §3.15 already gives
         // the unshaped hole a spelling of its own.
         .body = if (ty.len == 0) "?" else try std.fmt.allocPrint(arena, "?{s}", .{ty}),
-        .blank_before = 1,
+        .blank_before = outer,
     } });
-    try items.append(arena, .{ .stmt = st });
+    try items.append(arena, .{ .stmt = spaced });
     try items.appendSlice(arena, sc.top[at + 1 ..]);
     var out = sc.*;
     out.top = try items.toOwnedSlice(arena);
@@ -1027,6 +1039,173 @@ pub fn setFoldField(
     var out_sc = sc.*;
     out_sc.top = items;
     return out_sc;
+}
+
+/// **Set one authored argument of a call.**
+///
+/// The other half of "how do we edit a literal", and the simpler half by far:
+/// `mul 0.025`'s `0.025` is a `script.Arg` with a declared port, so there is
+/// nothing to look up and nothing to hoist — `script.Arg.port` finds it and
+/// the text is replaced.
+///
+/// **The text goes in VERBATIM.** rill keeps a literal's spelling and not only
+/// its value: `0.5` and `0.50` are the same number and not the same file, and
+/// a caller that formatted an f32 here would rewrite every neighbour's
+/// spelling the first time it touched one. Whatever a caller hands over is
+/// what the file gets, which also means `:grain` may be handed over — the
+/// printer emits `Arg.text` and asks no questions.
+pub fn setArg(
+    arena: std.mem.Allocator,
+    sc: *const script.Script,
+    pin: Pin,
+    text: []const u8,
+) Error!script.Script {
+    const loc = try locate(sc, pin.line, pin.col);
+    const st = sc.top[loc.item].stmt;
+    const call = callOf(&st, loc.stage);
+    const ai = argForPort(call, pin.port) orelse return error.PortNotWritten;
+    const arg = call.args[ai];
+
+    // **A named constant is set AT ITS BINDING, not at its use.**
+    //
+    // If the argument is `:grain` and a `using` binds that name, then the
+    // number lives there and this is where a reader's edit has to land.
+    // Writing the literal over the reference instead would answer "0.040" and
+    // silently take the name away — an editor undoing the naming gesture the
+    // reader just made, in the same session, for the same number. Found by
+    // driving `hud name` then `hud set` on the same pin.
+    //
+    // Exactly the bound name, never a prefix of one: `:k.tight` is a fold of a
+    // PLANE PATH with a projection on it, and its number is on the plane
+    // rather than in the file.
+    if (nameTaken(sc, sc.top, arg.text)) {
+        for (sc.top, 0..) |it, i| {
+            const u = switch (it) {
+                .using => |x| x,
+                else => continue,
+            };
+            if (!std.mem.eql(u8, u.name, arg.text)) continue;
+            var bound = u;
+            bound.body = try arena.dupe(u8, text);
+            return withItem(arena, sc, i, .{ .using = bound });
+        }
+    }
+
+    var args = try arena.dupe(script.Arg, call.args);
+    args[ai].text = try arena.dupe(u8, text);
+    const st2 = try withArgs(arena, st, loc.stage, args);
+    return withItem(arena, sc, loc.item, .{ .stmt = st2 });
+}
+
+/// **Give a magic constant a real name**, in place.
+///
+/// Christian, 2026-09-12, looking at `row.seed | mul 0.025 | add 0.03 | write
+/// row.size`: *"Magic constants can have real names too."* This is that
+/// gesture — every editor's "extract variable", spelled in rill as the binding
+/// the language already has:
+///
+///     using 0.025 as :grain
+///
+///     row.seed | mul :grain | add 0.03 | write row.size
+///
+/// The `using` goes immediately above the statement, which is `addCall`'s
+/// placement and its reason: *"an add and a later delete take an adjacent pair
+/// away together"*. Here it buys something more — the name is declared where a
+/// reader meets it, rather than at the top of a file they have to scroll back
+/// through.
+///
+/// **Only a LITERAL can be named.** A port fed by a wire already has a name —
+/// the thing feeding it — and a hole is a socket, not a value. Both are
+/// refused rather than producing a `using` bound to something that is not
+/// there.
+pub fn nameArg(
+    arena: std.mem.Allocator,
+    sc: *const script.Script,
+    pin: Pin,
+    bare: []const u8,
+) Error!script.Script {
+    const loc = try locate(sc, pin.line, pin.col);
+    const st = sc.top[loc.item].stmt;
+    const call = callOf(&st, loc.stage);
+    const ai = argForPort(call, pin.port) orelse return error.PortNotWritten;
+    const arg = call.args[ai];
+    switch (arg.kind) {
+        .literal, .record, .array => {},
+        // A wire, a hole, a plane path or a bare word: each is already named
+        // by what it is, and a `using` bound to one would be a second name for
+        // the same thing at best and a lie at worst.
+        else => return error.NotEditable,
+    }
+    // **A constant that already has a name is not named again.** A fold
+    // reference expands to a literal, so it reaches here with `.literal` kind
+    // and sails through the switch above — and the result is `using :grain as
+    // :again`, a name bound to a name, which parses and means nothing. Found
+    // by driving `hud name` twice on the same pin.
+    //
+    // Refused rather than treated as a RENAME: renaming `:grain` changes every
+    // use of it, and this gesture's contract is one argument. The two want
+    // different words and different confirmations.
+    if (nameTaken(sc, sc.top, arg.text)) return error.AlreadyNamed;
+
+    const name = try std.fmt.allocPrint(arena, ":{s}", .{bare});
+    if (nameTaken(sc, sc.top, name)) return error.NameTaken;
+
+    var args = try arena.dupe(script.Arg, call.args);
+    args[ai].text = name;
+    var st2 = try withArgs(arena, st, loc.stage, args);
+    const outer = try openRoomAbove(arena, &st2);
+
+    var items = std.ArrayListUnmanaged(script.Item).empty;
+    try items.appendSlice(arena, sc.top[0..loc.item]);
+    try items.append(arena, .{ .using = .{
+        .name = name,
+        // The literal AS AUTHORED becomes the binding's body — which is why
+        // this is a rename and not a rounding: `0.025` goes across as the four
+        // characters that were in the file.
+        .body = arg.text,
+        .blank_before = outer,
+    } });
+    try items.append(arena, .{ .stmt = st2 });
+    try items.appendSlice(arena, sc.top[loc.item + 1 ..]);
+    var out = sc.*;
+    out.top = try items.toOwnedSlice(arena);
+    return out;
+}
+
+/// **Make room above a statement for a declaration, without moving prose.**
+///
+/// The printer emits, in order: the lead comments (each with its own blank),
+/// then `Stmt.blank_before`, then the code. So `blank_before` is the gap
+/// BETWEEN a statement's paragraph and its statement — not the gap above the
+/// block — and adding one there pushes a reader's paragraph off the thing it
+/// describes. That is what the first version of this did, and it took looking
+/// at `roaches.rill` to see it.
+///
+/// The separation above a block lives on its FIRST lead comment. Inserting a
+/// declaration before the statement means that separation belongs to the
+/// declaration now, and the comment block gets a single blank to sit under it:
+///
+///     align :k.match
+///                                  ← the blank that was the comment's
+///     using 0.025 as :grain
+///                                  ← one, so the block is not glued to it
+///     // A little variation in size…
+///     row.seed | mul :grain | …    ← untouched: the paragraph still leads it
+///
+/// Returns the blank the declaration should carry, and rewrites the lead in
+/// place on `st`. A statement with no lead keeps the shape by the same rule,
+/// one field along.
+fn openRoomAbove(arena: std.mem.Allocator, st: *script.Stmt) Error!u32 {
+    if (st.lead.len == 0) {
+        const outer = st.blank_before;
+        st.blank_before = 1;
+        return outer;
+    }
+    const lead = try arena.dupe(script.Comment, st.lead);
+    const outer = lead[0].blank_before;
+    lead[0].blank_before = 1;
+    st.lead = lead;
+    return outer;
 }
 
 /// A hole name nothing else in the file has taken.

@@ -16210,3 +16210,229 @@ test "edit: a fold this cannot reach into is refused by name, never half-edited"
     // than inventing a meaning for it.
     try testing.expectError(error.NoSuchField, rill.edit.setFoldField(a, sc, ":pairs", 0, "l", "1"));
 }
+
+// ---------------------------------------------------------------------------
+// R6f — `edit.setArg` / `edit.nameArg`: a magic constant, set and named.
+// ---------------------------------------------------------------------------
+
+test "edit: an argument is set VERBATIM, and its neighbours keep their spelling" {
+    // `mul 0.025`'s literal is a `script.Arg` with a declared port, so there
+    // is nothing to hoist and nothing to look up — this is the simple half of
+    // "how do we edit a literal", and the one that covers most of a file.
+    //
+    // MUTATION A: format the incoming text as a number (`{d}`) rather than
+    // passing it through. `0.030` goes in as `0.03`, which is the same number
+    // and not the same file — and the day somebody sets a value this host
+    // rounds, the file quietly stops being what the author wrote.
+    // MUTATION B: replace `call.args[ai]` by AUTHORED index rather than by
+    // port. `mul 0.025` has one argument at port 1, so index 1 is out of
+    // bounds — and on a two-argument call it would set the wrong one, which is
+    // the failure that looks like it worked.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", "plane.a | mul 0.025 | add 0.03 | write plane.out\n", &diag);
+    defer before.deinit();
+    const site = try siteOf(&before, &reg, "mul", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.setArg(arena.allocator(), before.script.?, .{
+        .line = site.line,
+        .col = site.col,
+        .port = 1,
+    }, "0.040");
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    // Verbatim: the trailing zero the caller typed is in the file.
+    try testing.expectEqualStrings("plane.a | mul 0.040 | add 0.03 | write plane.out\n", text);
+}
+
+test "edit: a magic constant gets a real name, bound where a reader meets it" {
+    // Christian, 2026-09-12, on `row.seed | mul 0.025 | add 0.03 | write
+    // row.size`: *"Magic constants can have real names too."* Every editor's
+    // "extract variable", spelled as the binding rill already has.
+    //
+    // MUTATION A: put the `using` at the top of the file instead of above its
+    // statement. It parses — an item may appear anywhere before its use — and
+    // the name is declared a screen away from the only place it means
+    // anything, which is `addCall`'s argument for the same placement.
+    // MUTATION B: write the literal's VALUE into the binding by re-rendering
+    // it. `0.025` is four characters in the file and a float in memory; a
+    // rename that changes the spelling is not a rename.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", "plane.a | mul 0.025 | write plane.out\n", &diag);
+    defer before.deinit();
+    const site = try siteOf(&before, &reg, "mul", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.nameArg(arena.allocator(), before.script.?, .{
+        .line = site.line,
+        .col = site.col,
+        .port = 1,
+    }, "grain");
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    try testing.expectEqualStrings(
+        \\using 0.025 as :grain
+        \\
+        \\plane.a | mul :grain | write plane.out
+        \\
+    , text);
+
+    // The PROGRAM is unchanged — a rename moves no numbers. `mul`'s port 1 is
+    // still the same literal, which is what makes this safe to offer on a
+    // right-click.
+    for (after.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "mul")) continue;
+        const s = after.slot(n.inputs[1]);
+        try testing.expect(s.source == .literal);
+        try testing.expectApproxEqAbs(@as(f64, 0.025), rill.types.asNumber(s.source.literal).?, 1e-9);
+    }
+}
+
+test "edit: naming refuses what is already named, and what has no text at all" {
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var diag = rill.Diag{};
+    var p = try rill.parse(gpa, &reg, "p",
+        \\using 0.5 as :taken
+        \\
+        \\plane.a | mul 0.025 | write plane.out
+        \\
+    , &diag);
+    defer p.deinit();
+    const site = try siteOf(&p, &reg, "mul", 0);
+    const pin = rill.edit.Pin{ .line = site.line, .col = site.col, .port = 1 };
+
+    // A name already bound. The parser would refuse the file anyway; saying so
+    // before writing it is the difference between a refusal and a broken file.
+    try testing.expectError(error.NameTaken, rill.edit.nameArg(a, p.script.?, pin, "taken"));
+
+    // Port 0 is the PIPE — there is no text there to name or to set, and that
+    // is a different fact from "the port does not exist".
+    const piped = rill.edit.Pin{ .line = site.line, .col = site.col, .port = 0 };
+    try testing.expectError(error.PortNotWritten, rill.edit.nameArg(a, p.script.?, piped, "x"));
+    try testing.expectError(error.PortNotWritten, rill.edit.setArg(a, p.script.?, piped, "1"));
+
+    // **A constant that already has a name.** A fold reference expands to a
+    // literal, so it arrives with `.literal` kind and sails past the kind
+    // check — and the first version produced `using :grain as :again`, a name
+    // bound to a name, which parses and means nothing. Found by driving the
+    // verb twice on one pin.
+    //
+    // Mutation: drop the `nameTaken` guard on `arg.text`. Red, and the file it
+    // would have written is worse than a refusal: valid, pointless, and one
+    // more indirection every time somebody presses the button again.
+    var d3 = rill.Diag{};
+    var r = try rill.parse(gpa, &reg, "p",
+        \\using 0.025 as :grain
+        \\
+        \\plane.a | mul :grain | write plane.out
+        \\
+    , &d3);
+    defer r.deinit();
+    const s3 = try siteOf(&r, &reg, "mul", 0);
+    try testing.expectError(error.AlreadyNamed, rill.edit.nameArg(a, r.script.?, .{
+        .line = s3.line,
+        .col = s3.col,
+        .port = 1,
+    }, "again"));
+
+    // A plane path is already named by what it reads.
+    var d2 = rill.Diag{};
+    var q = try rill.parse(gpa, &reg, "p", "plane.a | mul plane.gain | write plane.out\n", &d2);
+    defer q.deinit();
+    const s2 = try siteOf(&q, &reg, "mul", 0);
+    try testing.expectError(error.NotEditable, rill.edit.nameArg(a, q.script.?, .{
+        .line = s2.line,
+        .col = s2.col,
+        .port = 1,
+    }, "gain"));
+}
+
+test "edit: setting a NAMED constant lands on the binding, not over the name" {
+    // Found by driving the two new verbs in sequence: `hud name` lifted
+    // `0.025` out to `:grain`, and `hud set` on the same pin wrote `0.040`
+    // straight over the reference — an editor undoing the naming gesture a
+    // reader had just made, in the same session, for the same number.
+    //
+    // MUTATION: drop the `nameTaken` redirect. The use site becomes a literal
+    // again and the `using` is left bound to a value nothing reads. Nothing
+    // fails to parse, which is why this needed driving rather than reading.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p",
+        \\using 0.025 as :grain
+        \\
+        \\plane.a | mul :grain | write plane.out
+        \\
+    , &diag);
+    defer before.deinit();
+    const site = try siteOf(&before, &reg, "mul", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.setArg(arena.allocator(), before.script.?, .{
+        .line = site.line,
+        .col = site.col,
+        .port = 1,
+    }, "0.040");
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    // The binding moved and the NAME survived, which is the whole claim.
+    try testing.expectEqualStrings(
+        \\using 0.040 as :grain
+        \\
+        \\plane.a | mul :grain | write plane.out
+        \\
+    , text);
+
+    // A plane-path fold with a projection is NOT this: its number is on the
+    // plane, not in the file, and the reference must be left alone.
+    var d2 = rill.Diag{};
+    var q = try rill.parse(gpa, &reg, "p",
+        \\using plane.room as :k
+        \\
+        \\plane.a | mul :k.tight | write plane.out
+        \\
+    , &d2);
+    defer q.deinit();
+    const s2 = try siteOf(&q, &reg, "mul", 0);
+    const e2 = try rill.edit.setArg(arena.allocator(), q.script.?, .{
+        .line = s2.line,
+        .col = s2.col,
+        .port = 1,
+    }, "0.5");
+    const t2 = try rill.script.print(gpa, &e2);
+    defer gpa.free(t2);
+    try testing.expect(std.mem.indexOf(u8, t2, "using plane.room as :k") != null);
+    try testing.expect(std.mem.indexOf(u8, t2, "mul 0.5") != null);
+}
