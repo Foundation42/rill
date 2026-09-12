@@ -5890,3 +5890,84 @@ with the term it named: a stale label is not a dialog.
 One fixture was wrong rather than the code, and the parser said so: `clamp 0 1`
 as a chain head leaves `max` unbound. Changed to `mul 2 3 | add 1`, which is a
 head call with every port bound — which is what the gate needed to be about.
+
+## A `using` body may span lines (2026-09-12)
+
+Christian, looking at the Oklab colour table buried mid-chain in
+`roaches.rill`: *"maybe we should hoist that constant record up to a using …
+I just think it's more idiomatic."*
+
+It is. And the spelling he wrote did not work, for two reasons neither of us
+would have guessed — both found by probing rather than reading:
+
+**Drop the parens.** `using` substitutes TOKENS, parens included, and `(…)` is
+section syntax at an argument position. rill's own refusal says it exactly:
+*"expected operator inside '(…)' — expanded from :stops, bound at line 1"*.
+
+**And the statement ended at the newline**, by construction: `parseUsing` took
+tokens until `.newline`. So the idiomatic spelling was a 135-character line
+against a canon of 88, in a file that is 230 lines of 88-column prose, and
+`fmt` had no way to wrap it.
+
+### The change, in two halves
+
+**Parser.** The span now continues while `[`/`{` depth is above zero. Not a new
+freedom: `over 16 [ … ]` already spans five lines in the exemplar, and this is
+the same one reaching the one statement that had been left out of it.
+
+Depth counts brackets and braces only. A `(` is a SECTION — a sub-graph, not a
+value — and a `using` whose body is an unclosed section should keep ending at
+the newline, where the refusal is about the line the author is looking at.
+Counting parens would send it hunting to EOF and swallow the statements below.
+
+**Printer**, and this half was not in the plan. I said twice that the printer
+needed nothing, on the belief that `Using.body` was authored text emitted
+verbatim. It is not: it is re-rendered by `renderTokens`, which collapses
+newlines into separators. So the first version parsed the wrapped form and
+`fmt` flattened it straight back — format-on-save undoing the hoist the instant
+it was written, which is worse than refusing it. Measured, not reasoned: the
+`fmt` output was on one line.
+
+The fix is one call, and deliberately not a layout of its own — `fitValue`,
+the same measure-then-`breakSpan` the head-value and argument paths already
+use. `over 16 [ … ]` is the same four records breaking the same way, and two
+layouts for one construct is how a file starts printing two ways.
+
+### The property, checked
+
+    using [
+        {l: 0.28, a: -0.02, b: -0.08},
+        …
+    ] as :stops
+
+round-trips byte-identically, printing twice changes nothing, **and the
+one-line spelling normalises to the same shape** — one canonical form, two
+spellings in. The 22-file corpus is still a printer fixed point.
+
+### Gates
+
+`using: a BRACKETED body may span lines, and prints back as one canonical shape`
+- **A** (parser): restore `while (peek != .newline)`. The wrapped spelling
+  fails at the `using` itself — the span it captured was a lone `[`.
+- **B** (printer): `self.w(u.body)`. It parses, and `fmt` collapses it.
+
+`using: a SHORT body stays on its line, and an unclosed section still ends at
+the newline`
+- **A**: drop `fitValue`'s width test — every `using` in the corpus explodes
+  onto four lines, `using plane.drift.@self.k as :k` included, which is the
+  idiom the whole feature is imitating.
+- **B**: count `(` in the depth. The `using` runs to EOF and takes the
+  statements below it with it; one node becomes none.
+
+### A note on how this was found, because it repeated
+
+The first probe of five spellings reported all five parsing. All five were
+wrong: **an unreferenced `using` is never expanded**, so the body is never
+checked. The truth only appeared when each binding was actually USED at a site.
+The same fact bit the gate a third time — an assertion that `using (> 0 as
+:pred` is refused, which it is not, for exactly that reason.
+
+**A `using` nobody references proves nothing about a `using`.**
+
+The VSCode grammar needed no change: it matches the `using` keyword and
+`as :name` independently, with no line-scoped rule between them.

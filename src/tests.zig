@@ -15957,3 +15957,118 @@ test "edit: a node whose name is still READ is refused, and one nobody reads is 
         try testing.expectEqualStrings("plane.a | mul 2\n", text);
     }
 }
+
+test "using: a BRACKETED body may span lines, and prints back as one canonical shape" {
+    // Christian, 2026-09-12, looking at the colour table buried mid-chain in
+    // `roaches.rill`: *"maybe we should hoist that constant record up to a
+    // using … I just think it's more idiomatic."* It is — and it worked on
+    // ONE line and only on one line, so a four-stop Oklab table came to 135
+    // characters against a canon of 88, in a file that is 230 lines of
+    // 88-column prose.
+    //
+    // Two halves, and each has its own mutation:
+    //
+    // MUTATION A (parser): restore `while (peek != .newline)`. The multi-line
+    // spelling fails at the `using` itself with "binds tokens to a name",
+    // because the span it captured was a lone `[`.
+    // MUTATION B (printer): `self.w(u.body)` instead of `fitValue`. It parses,
+    // and `fmt` collapses it straight back onto one line — so format-on-save
+    // undoes the hoist the moment the reader writes it, which is worse than
+    // refusing it. The second assertion is the one that catches this.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    const wrapped =
+        \\using [
+        \\    {l: 0.28, a: -0.02, b: -0.08},
+        \\    {l: 0.55, a: 0.02, b: 0.02},
+        \\    {l: 1.10, a: 0.10, b: 0.10},
+        \\    {l: 2.00, a: 0.14, b: 0.15}
+        \\] as :stops
+        \\
+        \\plane.a | mul 2 | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(gpa, &reg, "p", wrapped, &diag);
+    defer prog.deinit();
+
+    // It prints back as EXACTLY what was written — the shape is canonical, so
+    // format-on-save leaves a reader's hoist alone.
+    const printed = try rill.script.print(gpa, prog.script.?);
+    defer gpa.free(printed);
+    try testing.expectEqualStrings(wrapped, printed);
+
+    // …and printing twice changes nothing, which is the property the whole
+    // corpus is held to.
+    var d2 = rill.Diag{};
+    var again = try rill.parse(gpa, &reg, "p", printed, &d2);
+    defer again.deinit();
+    const twice = try rill.script.print(gpa, again.script.?);
+    defer gpa.free(twice);
+    try testing.expectEqualStrings(printed, twice);
+
+    // **One canonical form, two spellings in.** The same binding written on
+    // one long line normalises to the wrapped shape, so the file does not
+    // print two ways depending on how it was typed.
+    const oneline =
+        \\using [{l: 0.28, a: -0.02, b: -0.08}, {l: 0.55, a: 0.02, b: 0.02}, {l: 1.10, a: 0.10, b: 0.10}, {l: 2.00, a: 0.14, b: 0.15}] as :stops
+        \\
+        \\plane.a | mul 2 | write plane.out
+        \\
+    ;
+    var d3 = rill.Diag{};
+    var flat = try rill.parse(gpa, &reg, "p", oneline, &d3);
+    defer flat.deinit();
+    const from_flat = try rill.script.print(gpa, flat.script.?);
+    defer gpa.free(from_flat);
+    try testing.expectEqualStrings(wrapped, from_flat);
+}
+
+test "using: a SHORT body stays on its line, and an unclosed section still ends at the newline" {
+    // Two things the new freedom must not have taken away.
+    //
+    // MUTATION A: drop the width test in `fitValue` — every `using` in the
+    // corpus explodes onto four lines, including `using plane.drift.@self.k
+    // as :k`, which is the idiom this whole feature is imitating.
+    // MUTATION B: count `(`/`)` in the depth as well. A `using` whose body is
+    // an unclosed SECTION then swallows the rest of the file looking for its
+    // closer, and the refusal lands hundreds of lines from the mistake. A
+    // section is a sub-graph, not a value; only `[` and `{` may wrap.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    const short =
+        \\using plane.player as :p
+        \\
+        \\:p.health | clamp 0 100 | write plane.ui.hp
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(gpa, &reg, "p", short, &diag);
+    defer prog.deinit();
+    const printed = try rill.script.print(gpa, prog.script.?);
+    defer gpa.free(printed);
+    try testing.expectEqualStrings(short, printed);
+
+    // An unclosed `(` still ENDS AT THE NEWLINE, so the statement below it is
+    // still a statement. (The body itself is not checked here — a `using`
+    // nobody references is never expanded, which is why the first four probes
+    // of this feature all looked like they passed and none of them did.)
+    //
+    // Mutation B lands here: count `(` in the depth and this `using` runs to
+    // EOF hunting a closer, swallowing `plane.a | mul 2` with it. One node
+    // becomes none.
+    var d2 = rill.Diag{};
+    var open = try rill.parse(gpa, &reg, "p",
+        \\using (> 0 as :pred
+        \\
+        \\plane.a | mul 2
+        \\
+    , &d2);
+    defer open.deinit();
+    try testing.expectEqual(@as(usize, 1), open.nodes.items.len);
+    try testing.expectEqualStrings("mul", reg.get(open.nodes.items[0].op).name);
+}

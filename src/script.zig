@@ -643,7 +643,20 @@ const Printer = struct {
                 try self.blanks(u.blank_before);
                 try self.indent(col);
                 try self.w("using ");
-                try self.w(u.body);
+                // **A `using` body is a span like any other.** Christian,
+                // 2026-09-12, hoisting a colour table out of a chain: *"maybe
+                // we should hoist that constant record up to a using — I just
+                // think it's more idiomatic."* It is, and the parser now lets
+                // one span lines — but until this line `fmt` collapsed it
+                // straight back onto one, so format-on-save undid the hoist
+                // the moment it was written.
+                //
+                // `fitValue` and not a layout of its own: `over 16 […]` in
+                // `roaches.rill` is the same four records breaking the same
+                // way, and two layouts for one construct is how a file starts
+                // printing two ways. The reserve is what still has to fit
+                // after the span closes.
+                try self.fitValue(u.body, col, " as ".len + u.name.len);
                 try self.w(" as ");
                 try self.w(u.name);
                 try self.trail(u.trail);

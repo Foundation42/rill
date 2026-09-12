@@ -1928,7 +1928,42 @@ const Parser = struct {
         const lead = try self.takeLead(self.peek().line);
         const kw = self.next(); // "using"
         const start = self.pos;
-        while (self.peek().kind != .newline and self.peek().kind != .eof) _ = self.next();
+        // **The statement ends at the newline — unless a bracket is open.**
+        //
+        // Christian, 2026-09-12, on hoisting a colour table out of a chain:
+        // *"maybe we should hoist that constant record up to a using … I just
+        // think it's more idiomatic."* It is, and it worked on one line and
+        // only on one line: a four-stop Oklab table is 135 characters against
+        // a canon of 88, and `fmt` cannot wrap a `using` — so the idiomatic
+        // spelling cost a scar in a file that is 230 lines of 88-column prose.
+        //
+        // A `[` or `{` left open is unambiguous about intent: nothing else can
+        // follow on that line, and a newline inside brackets is already how
+        // every OTHER multi-line literal in the language is written (`over 16
+        // [ … ]` spans five lines in `roaches.rill` today). So this is not a
+        // new freedom, it is the same one, reaching one statement that had
+        // been left out of it.
+        //
+        // The PRINTER needs nothing: `Using.body` is stored as authored text
+        // and emitted verbatim, so the author's own line breaks survive
+        // exactly as a `describe` column's do.
+        //
+        // Depth counts `[`/`{` only. `(` is a section — a sub-graph, not a
+        // value — and a `using` whose body is an unclosed section is a
+        // mistake this should keep ending at the newline, where the refusal is
+        // about the line the author is looking at.
+        var depth: u32 = 0;
+        while (true) {
+            const k = self.peek().kind;
+            if (k == .eof) break;
+            if (k == .newline and depth == 0) break;
+            switch (k) {
+                .lbracket, .lbrace => depth += 1,
+                .rbracket, .rbrace => depth -|= 1,
+                else => {},
+            }
+            _ = self.next();
+        }
         const span = self.toks[start..self.pos];
 
         if (span.len < 3) {
