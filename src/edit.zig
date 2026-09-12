@@ -592,7 +592,14 @@ pub fn link(
 ) Error!script.Script {
     const fl = try locate(sc, from.line, from.col);
     const tl = try locate(sc, to.line, to.col);
-    if (fl.item >= tl.item) return error.NeedsReorder;
+    // **Same statement is a SPLIT, not a reorder.** Both endpoints in one
+    // chain means the wire between them is the `|` itself, and reordering
+    // nothing would fix that — answering `NeedsReorder` would tell a reader to
+    // move a statement above itself. Found by driving the two against
+    // `roaches.rill`, where `row.seed | mul 0.025 | add 0.03` is one statement
+    // and the obvious drag lands inside it.
+    if (fl.item == tl.item) return error.NeedsSplit;
+    if (fl.item > tl.item) return error.NeedsReorder;
 
     const fst = sc.top[fl.item].stmt;
     // `as` names the LAST term's outputs. A producer anywhere else in its

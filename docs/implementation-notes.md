@@ -5814,6 +5814,20 @@ line so nothing may follow it.
 `NeedsSplit`, `NeedsReorder`, `InsideDefinition` and `NoSuchCall` (including a
 `{0, 0}` site, which is sugar with no call of its own).
 
+### Driving it found one misreported case
+
+Both endpoints in ONE statement came back `NeedsReorder`, which would tell a
+reader to move a statement above itself. It is a `NeedsSplit`: the wire between
+two terms of one chain IS the `|`, and no amount of reordering reaches it.
+Found by running every plausible drag against `roaches.rill`, where
+`row.seed | mul 0.025 | add 0.03` is one statement and the obvious drag lands
+inside it.
+
+That run is also the honest measure of the refusal surface. On the exemplar,
+most drags land on `NeedsSplit` — the file is written as chains, and a chain's
+pipes are most of its wires. The split is what makes this feature general, and
+it is a decision about the reader's prose rather than a piece of code.
+
 ### Measured
 
 Suite green. The shipped corpus is still a printer fixed point — 21 of 22 files
