@@ -67,6 +67,9 @@ pub const Error = std.mem.Allocator.Error || error{
     /// The producer's statement does not come before the consumer's, and
     /// rill's parse order IS its dependency order. See `link`.
     NeedsReorder,
+    /// Removing that call would take away an `as` name something below still
+    /// reads, or make one name a different producer. See `removeCall`.
+    StillRead,
 };
 
 /// **One end of a wire**, addressed the way the canvas can address it.
@@ -669,6 +672,214 @@ fn sameStage(a: ?usize, b: ?usize) bool {
     if (a == null and b == null) return true;
     if (a == null or b == null) return false;
     return a.? == b.?;
+}
+
+/// Is `name` read as a stream by any call outside item `skip`?
+///
+/// A `.stream` argument is *"a local `as` name, with any `.field`
+/// projections"*, so `hit` is also read by `hit.pos` — matching the bare text
+/// alone would call that unread and delete the thing it names.
+fn nameRead(items: []const script.Item, name: []const u8, skip: usize) bool {
+    for (items, 0..) |it, i| {
+        if (i == skip) continue;
+        const st = switch (it) {
+            .stmt => |s| s,
+            else => continue,
+        };
+        if (callsRead(st, name)) return true;
+    }
+    return false;
+}
+
+fn argReads(a: script.Arg, name: []const u8) bool {
+    if (a.kind != .stream) return false;
+    if (std.mem.eql(u8, a.text, name)) return true;
+    return a.text.len > name.len and
+        std.mem.startsWith(u8, a.text, name) and
+        a.text[name.len] == '.';
+}
+
+fn callsRead(st: script.Stmt, name: []const u8) bool {
+    switch (st.head) {
+        .call => |c| for (c.args) |a| {
+            if (argReads(a, name)) return true;
+        },
+        // A chain head that IS the name — `t1 | add 3` — reads it as surely as
+        // an argument does, and it is a bare string rather than an `Arg`.
+        .value => |v| if (std.mem.eql(u8, v, name) or
+            (v.len > name.len and std.mem.startsWith(u8, v, name) and v[name.len] == '.')) return true,
+    }
+    for (st.stages) |sg| switch (sg) {
+        .call => |c| for (c.args) |a| {
+            if (argReads(a, name)) return true;
+        },
+        .fan => |f| for (f.branches) |b| {
+            for (b.head.args) |a| {
+                if (argReads(a, name)) return true;
+            }
+            for (b.stages) |s2| switch (s2) {
+                .call => |c2| for (c2.args) |a| {
+                    if (argReads(a, name)) return true;
+                },
+                else => {},
+            };
+        },
+        .project => {},
+    };
+    return false;
+}
+
+/// Is this declared hole still used by any call outside item `skip`?
+fn holeUsed(items: []const script.Item, name: []const u8, skip: usize) bool {
+    for (items, 0..) |it, i| {
+        if (i == skip) continue;
+        const st = switch (it) {
+            .stmt => |s| s,
+            else => continue,
+        };
+        if (stmtUsesHole(st, name)) return true;
+    }
+    return false;
+}
+
+fn stmtUsesHole(st: script.Stmt, name: []const u8) bool {
+    switch (st.head) {
+        .call => |c| for (c.args) |a| {
+            if (a.kind == .hole and std.mem.eql(u8, a.text, name)) return true;
+        },
+        .value => |v| if (std.mem.eql(u8, v, name)) return true,
+    }
+    for (st.stages) |sg| switch (sg) {
+        .call => |c| for (c.args) |a| {
+            if (a.kind == .hole and std.mem.eql(u8, a.text, name)) return true;
+        },
+        else => {},
+    };
+    return false;
+}
+
+/// **Take a node out of the program.**
+///
+/// Christian: *"can't move the wires, or delete nodes."* This is the other
+/// half, and `addCall`'s own header wrote its contract a beat early — the
+/// `using` sits with its statement rather than hoisted to the top because that
+/// is *"the one that survives being undone: an add and a later delete take an
+/// adjacent pair away together"*. So a hole this call was the only user of goes
+/// with it, and the file a reader adds-then-deletes into is the file they
+/// started with.
+///
+/// **What happens to the chain.** A node in the middle of one is removed and
+/// the pipe closes over it — `A | B | C` minus B is `A | C`, which is what
+/// every editor does and what a reader watching the wire snap shut expects.
+/// Removing the HEAD leaves the first stage with nothing feeding it, so it
+/// gets a declared hole, exactly as `unlink` would have left it.
+///
+/// **`StillRead` is the refusal, and it is about MEANING rather than
+/// breakage.** If the statement declares `as` names that survive it — removing
+/// the whole statement takes them away, and removing the chain's last term
+/// makes them name a different producer — then a reader below is either broken
+/// or, worse, silently repointed. Named, refused, and left to the person.
+/// Names nobody reads are simply dropped: a stale label is not worth a dialog.
+pub fn removeCall(
+    arena: std.mem.Allocator,
+    sc: *const script.Script,
+    reg: *const registry.Registry,
+    line: u32,
+    col: u32,
+) Error!script.Script {
+    const loc = try locate(sc, line, col);
+    const st = sc.top[loc.item].stmt;
+
+    // Which `as` names stop naming what they named?
+    const tail: ?usize = if (st.stages.len == 0) null else st.stages.len - 1;
+    const whole = loc.stage == null and st.stages.len == 0;
+    const names_lost = whole or (loc.stage != null and sameStage(loc.stage, tail));
+    if (names_lost) {
+        for (st.names) |n| {
+            if (nameRead(sc.top, n, loc.item)) return error.StillRead;
+        }
+    }
+
+    // The holes this call was using, so an add-then-delete leaves no orphan
+    // declaration behind.
+    const doomed = callOf(&st, loc.stage);
+    var drop = std.ArrayListUnmanaged([]const u8).empty;
+    for (doomed.args) |a| {
+        if (a.kind != .hole) continue;
+        if (holeUsed(sc.top, a.text, loc.item)) continue;
+        try drop.append(arena, a.text);
+    }
+
+    var out_stmt: ?script.Stmt = null;
+    if (!whole) {
+        var s2 = st;
+        if (loc.stage) |si| {
+            // The pipe closes over it.
+            var stages = std.ArrayListUnmanaged(script.Stage).empty;
+            try stages.appendSlice(arena, st.stages);
+            _ = stages.orderedRemove(si);
+            s2.stages = try stages.toOwnedSlice(arena);
+            if (names_lost) s2.names = &.{};
+        } else {
+            // The head goes and the first stage has nothing feeding it. A
+            // declared hole is what "not chosen yet" IS in rill text.
+            const next = st.stages[0].call;
+            const facts = try portFacts(arena, sc, reg, next.op, 0);
+            const hole = try mintHole(arena, sc, sc.top, next.op, facts.name);
+            s2.head = .{ .value = hole };
+            return try withUsingAndDrops(arena, sc, loc.item, hole, facts.ty, s2, drop.items);
+        }
+        out_stmt = s2;
+    }
+
+    var items = std.ArrayListUnmanaged(script.Item).empty;
+    for (sc.top, 0..) |it, i| {
+        if (i == loc.item) {
+            if (out_stmt) |s2| try items.append(arena, .{ .stmt = s2 });
+            continue;
+        }
+        if (it == .using and isDropped(drop.items, it.using.name)) continue;
+        try items.append(arena, it);
+    }
+    var out = sc.*;
+    out.top = try items.toOwnedSlice(arena);
+    return out;
+}
+
+fn isDropped(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+/// `withUsing`, plus the orphaned declarations this edit takes away.
+fn withUsingAndDrops(
+    arena: std.mem.Allocator,
+    sc: *const script.Script,
+    at: usize,
+    name: []const u8,
+    ty: []const u8,
+    st: script.Stmt,
+    drops: []const []const u8,
+) Error!script.Script {
+    var items = std.ArrayListUnmanaged(script.Item).empty;
+    for (sc.top, 0..) |it, i| {
+        if (i == at) {
+            try items.append(arena, .{ .using = .{
+                .name = name,
+                .body = if (ty.len == 0) "?" else try std.fmt.allocPrint(arena, "?{s}", .{ty}),
+                .blank_before = 1,
+            } });
+            try items.append(arena, .{ .stmt = st });
+            continue;
+        }
+        if (it == .using and isDropped(drops, it.using.name)) continue;
+        try items.append(arena, it);
+    }
+    var out = sc.*;
+    out.top = try items.toOwnedSlice(arena);
+    return out;
 }
 
 /// A hole name nothing else in the file has taken.

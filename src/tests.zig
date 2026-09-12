@@ -15804,3 +15804,156 @@ test "edit: the three refusals are the GRAMMAR, and each one is named" {
         try testing.expectError(error.NoSuchCall, rill.edit.unlink(a, p.script.?, &reg, .{ .line = 0, .col = 0, .port = 0 }));
     }
 }
+
+// ---------------------------------------------------------------------------
+// R6d — `edit.removeCall`: a node taken out.
+// ---------------------------------------------------------------------------
+
+test "edit: a node in the middle of a chain goes, and the pipe closes over it" {
+    // What a reader watching the wire snap shut expects, and what every other
+    // editor does: `A | B | C` minus B is `A | C`.
+    //
+    // MUTATION: remove the stage AND everything after it. The file still
+    // parses — it is a shorter program — and half the reader's statement is
+    // gone with the node they clicked. The `write` assertion below is what
+    // catches it.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", "plane.a | mul 2 | add 3 | write plane.out\n", &diag);
+    defer before.deinit();
+    const site = try siteOf(&before, &reg, "add", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.removeCall(arena.allocator(), before.script.?, &reg, site.line, site.col);
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    try testing.expectEqualStrings("plane.a | mul 2 | write plane.out\n", text);
+}
+
+test "edit: removing a chain's HEAD leaves the next one an open socket" {
+    // The first stage has nothing feeding it once the head is gone, and a
+    // declared hole is what "not chosen yet" IS in rill text — the same
+    // answer `unlink` gives, from the same machinery.
+    //
+    // MUTATION: promote the first stage to the head instead. `mul 2` with
+    // nothing piped in binds `2` to port 0, so the program still parses and
+    // quietly computes something else — the worst kind of edit.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", "mul 2 3 | add 1 | write plane.out\n", &diag);
+    defer before.deinit();
+    const site = try siteOf(&before, &reg, "mul", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.removeCall(arena.allocator(), before.script.?, &reg, site.line, site.col);
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    try testing.expect(std.mem.indexOf(u8, text, "mul") == null);
+    try testing.expect(std.mem.indexOf(u8, text, "using ?") != null);
+    // The socket feeds `add`, and `add`'s own `1` is untouched.
+    try testing.expect(std.mem.indexOf(u8, text, "| add 1 | write plane.out") != null);
+    for (after.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "add")) continue;
+        try testing.expect(after.slot(n.inputs[0]).source == .hole);
+    }
+}
+
+test "edit: an add and a later delete take the adjacent pair away together" {
+    // `addCall`'s header wrote this contract a beat before there was anything
+    // to honour it: the `using` sits WITH its statement rather than hoisted to
+    // the top because that is *"the one that survives being undone"*. Add an
+    // operator, delete it, and the file is the one you started with.
+    //
+    // MUTATION: skip the `drop` list and remove only the statement. The
+    // program is right and the file is not — an orphan `using ?number as
+    // :push_k` drifts above a statement nobody wrote there, and it accumulates
+    // one per add-then-delete for the life of the file.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    const src = "plane.a | mul 2 | write plane.out\n";
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", src, &diag);
+    defer before.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const added = try rill.edit.addCall(a, before.script.?, &reg, "clamp");
+    const with_add = try rill.script.print(a, &added);
+    try testing.expect(std.mem.indexOf(u8, with_add, "using ?number as :clamp_") != null);
+
+    var mid = try rill.parse(gpa, &reg, "p", with_add, &diag);
+    defer mid.deinit();
+    const site = try siteOf(&mid, &reg, "clamp", 0);
+    const removed = try rill.edit.removeCall(a, mid.script.?, &reg, site.line, site.col);
+    const back = try rill.script.print(a, &removed);
+
+    try testing.expectEqualStrings(src, back);
+}
+
+test "edit: a node whose name is still READ is refused, and one nobody reads is not" {
+    // The refusal is about MEANING, not breakage: removing the statement takes
+    // the name away and a reader below is broken — but removing a chain's last
+    // term silently REPOINTS the name at a different producer, which is worse,
+    // and looks like nothing at all in a diff.
+    //
+    // MUTATION: check `nameRead` only when the whole statement goes. The
+    // second arm below stops refusing, and `t1` quietly comes to mean `mul`'s
+    // output instead of `add`'s.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Whole statement, name read below.
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "plane.a | mul 2 as t1\n\nt1 | add 3 | write plane.out\n", &diag);
+        defer p.deinit();
+        const site = try siteOf(&p, &reg, "mul", 0);
+        try testing.expectError(error.StillRead, rill.edit.removeCall(a, p.script.?, &reg, site.line, site.col));
+    }
+
+    // Chain TAIL, name read below: the name would move rather than vanish.
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "plane.a | mul 2 | add 3 as t1\n\nt1 | write plane.out\n", &diag);
+        defer p.deinit();
+        const site = try siteOf(&p, &reg, "add", 0);
+        try testing.expectError(error.StillRead, rill.edit.removeCall(a, p.script.?, &reg, site.line, site.col));
+    }
+
+    // A name NOBODY reads is not worth a refusal — it is dropped with the term
+    // it named, and the statement keeps working.
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "plane.a | mul 2 | add 3 as unread\n", &diag);
+        defer p.deinit();
+        const site = try siteOf(&p, &reg, "add", 0);
+        const edited = try rill.edit.removeCall(a, p.script.?, &reg, site.line, site.col);
+        const text = try rill.script.print(a, &edited);
+        try testing.expectEqualStrings("plane.a | mul 2\n", text);
+    }
+}

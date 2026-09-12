@@ -5834,3 +5834,59 @@ Suite green. The shipped corpus is still a printer fixed point — 21 of 22 file
 byte-identical through `rill fmt`, and the 22nd (`src/rills/select.rill`) fails
 to PARSE under the bare CLI because it calls matryoshka's `select only`, which
 is a missing host vocabulary and not a moved printer.
+
+## `removeCall` — a node taken out (2026-09-12)
+
+Christian: *"can't move the wires, or **delete nodes**."* The other half of the
+same sentence, and the smaller one, because the contract was already written.
+
+### `addCall`'s header wrote this a beat early
+
+The `using` sits with its statement rather than hoisted to the top of the file
+because that is *"the one that survives being undone: an add and a later delete
+take an adjacent pair away together"*. There was nothing to honour it at the
+time. There is now, and it is gated by round trip: add an operator, delete it,
+and `expectEqualStrings` against the source you started with.
+
+### What happens to the chain
+
+A node in the middle goes and the pipe closes over it — `A | B | C` minus B is
+`A | C`, which is what every editor does and what a reader watching the wire
+snap shut expects. Removing the HEAD leaves the first stage with nothing
+feeding it, so it gets a declared hole — the same answer `unlink` gives, from
+the same machinery. The tempting alternative is to promote the first stage to
+the head, and it is the worst kind of edit: `mul 2` with nothing piped in binds
+`2` to port 0, so the program still parses and quietly computes something else.
+
+### `StillRead` is about MEANING, not breakage
+
+Two shapes, and the second is why the check is not "does removing this break
+the file":
+
+- removing the whole statement takes its `as` names away, and a reader below
+  is broken — loud, and a person would find it;
+- removing a chain's LAST term makes those names name a **different
+  producer**. The file still parses. Nothing is broken. `t1` just quietly
+  means something else, and it looks like nothing at all in a diff.
+
+Both are refused. A name nobody reads is not worth a refusal and is dropped
+with the term it named: a stale label is not a dialog.
+
+### Gates, and the mutations they were paid for
+
+- *a node in the middle of a chain goes, and the pipe closes over it* —
+  **mutation**: remove the stage and everything after it. The file still
+  parses, and half the reader's statement went with the node they clicked.
+- *removing a chain's HEAD leaves the next one an open socket* — **mutation**:
+  promote the first stage instead. Parses, and computes something else.
+- *an add and a later delete take the adjacent pair away together* —
+  **mutation**: skip the `drop` list. The program is right and the FILE is not:
+  an orphan `using ?number as :clamp_lo` drifts above a statement nobody wrote
+  there, one per add-then-delete for the life of the file.
+- *a node whose name is still READ is refused, and one nobody reads is not* —
+  **mutation**: check `nameRead` only when the whole statement goes. The
+  second arm stops refusing and `t1` silently repoints.
+
+One fixture was wrong rather than the code, and the parser said so: `clamp 0 1`
+as a chain head leaves `max` unbound. Changed to `mul 2 3 | add 1`, which is a
+head call with every port bound — which is what the gate needed to be about.
