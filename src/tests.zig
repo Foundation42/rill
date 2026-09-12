@@ -1702,7 +1702,7 @@ test "pack: a fold supplies a default, and a describe block splices nothing" {
         \\def f(rate) = rate | mul 2
         \\describe f
         \\    :nope "a binding that is not there"
-    , "nothing in this file binds");
+    , "nothing in this file binds");  // checked at the end of the parse now
 }
 
 test "publish hook: freshened wires reach the host each tick, then go quiet" {

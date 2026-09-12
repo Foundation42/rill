@@ -791,6 +791,10 @@ const Parser = struct {
     /// A document-subject `describe` block has been seen. One per file, for a
     /// def's reason: there is one place to read.
     program_described: bool = false,
+    /// Every `:fold` key a `describe` block named, with the token to point at
+    /// and the block it was in. Checked once at the end of the parse, where
+    /// the file's bindings are all known: see `checkDescribeSubjects`.
+    doc_folds: std.ArrayListUnmanaged(struct { tok: Token, subject: []const u8 }) = .empty,
     /// The subject of every DOCUMENT-level `describe`, with the token to point
     /// at. Checked once at the end of the parse: see `checkDescribeSubjects`.
     doc_subjects: std.ArrayListUnmanaged(Token) = .empty,
@@ -1125,6 +1129,11 @@ const Parser = struct {
         for (self.doc_subjects.items) |t| {
             if (self.defs.get(t.text) != null) {
                 return self.fail(t, "'{s}' IS a def in this program, and this block is above it — a `describe` block follows the `def` it describes (parse order is definition order here)", .{t.text});
+            }
+        }
+        for (self.doc_folds.items) |f| {
+            if (!self.folds.contains(f.tok.text)) {
+                return self.fail(f.tok, "describe '{s}': nothing in this file binds '{s}' — a `describe` line names a `using … as {s}`, anywhere in the file", .{ f.subject, f.tok.text, f.tok.text });
             }
         }
     }
@@ -1787,13 +1796,24 @@ const Parser = struct {
                 if (fs.text.len == 0) {
                     return self.fail(fs, "describe '{s}': '{s}' has an empty description — say what it means", .{ subject_name, t.text });
                 }
-                // The same parity the ports get: a description of a binding
-                // this file does not have is wrong whoever wrote it, and a
-                // renamed `using` must not leave its sentence behind pointing
-                // at nothing.
-                if (!self.folds.contains(t.text)) {
-                    return self.fail(t, "describe '{s}': nothing in this file binds '{s}' — a `describe` line names a `using … as {s}` above it", .{ subject_name, t.text, t.text });
-                }
+                // The same parity the ports get, checked at the END of the
+                // parse: a description of a binding this file does not have is
+                // wrong whoever wrote it, and a renamed `using` must not leave
+                // its sentence behind pointing at nothing.
+                //
+                // **At the end, and not here, because a describe block is
+                // PROSE ABOUT THE WHOLE FILE.** Checking against the folds
+                // bound SO FAR would force one of two bad shapes on
+                // `roaches.rill`, whose block sits with its `def` a hundred
+                // lines above the bindings it wants to describe: either hoist
+                // every `using` to the top, away from the statement it belongs
+                // beside, or scatter the prose into blocks near each one. The
+                // file says "one place to read" about its own ports, and this
+                // is that rule holding for its bindings too.
+                //
+                // The runtime elides the block entirely, so nothing here is a
+                // forward REFERENCE in the sense define-before-use is about.
+                try self.doc_folds.append(self.a(), .{ .tok = t, .subject = subject_name });
                 for (lines.items) |ln| {
                     if (std.mem.eql(u8, ln.key, t.text)) {
                         return self.fail(t, "describe '{s}': '{s}' is described twice", .{ subject_name, t.text });
