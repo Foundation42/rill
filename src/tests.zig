@@ -1539,17 +1539,31 @@ test "pack: a describe block must follow a def that exists, once" {
     // specific fix, and none of them may shrug. Mutation that bites: replace
     // the `defs.get` refusal with a silent `return` — a describe block for a
     // misspelled def documents nothing and says nothing.
-    try expectParseError("describe nobody\n  \"hi\"", "is not a def in this program");
+    // A subject that is not a def names the DOCUMENT and is a label — see
+    // `layout`'s ruling, whose second reason is that `rill fmt -` hands the
+    // parser the program name `-`, so a checked subject would refuse every
+    // file the formatter is pointed at. What is still refused is a PORT line
+    // with no def to own it, one line lower down.
+    try expectParseError("describe nobody\n  \"hi\"\n  rate \"x\"", "which has no ports");
     // …including a describe block written ABOVE its def, which is the
-    // plausible mistake — parse order is definition order here.
+    // plausible mistake — parse order is definition order here, and prose
+    // goes before its subject everywhere else in the world.
+    //
+    // This one is caught at the END of the parse now, because it cannot be
+    // caught where it is written: `early` is not a def yet. The subject-side
+    // refusal that used to catch it is gone — a document subject is a LABEL
+    // and is resolved against nothing — so `checkDescribeSubjects` carries it.
+    // Mutation: drop that call from `parse`. The block silently becomes a
+    // document block, `early` is undocumented, and nothing says so, which is
+    // exactly the mutation this gate's own header names.
     try expectParseError(
         \\describe early
         \\    "written before its def"
         \\
         \\def early(x) = x | mul 2
-    , "a `describe` block follows the `def` it describes");
+    , "IS a def in this program, and this block is above it");
     // …and an operator is not a def: its help lives in its registration.
-    try expectParseError("describe mul\n  \"multiply\"", "is a registered operator, not a def");
+    try expectParseError("describe mul\n  \"multiply\"", "is a registered operator");
     // One block per definition, so there is one place to read.
     try expectParseError(
         \\def f(x) = x | mul 2
@@ -1585,7 +1599,7 @@ test "pack: a describe block must follow a def that exists, once" {
         \\describe f
         \\    ""
         \\    x "the value"
-    , "the definition's description is empty");
+    , "the description is empty");
 }
 
 test "pack: a fold supplies a default, and a describe block splices nothing" {
@@ -1639,13 +1653,56 @@ test "pack: a fold supplies a default, and a describe block splices nothing" {
         \\def f(x = :k) = x | mul 2
         \\f | tap t
     , "expanded from :k");
-    // A describe block splices nothing, and says so by name.
+    // **A fold in the KEY position is a NAME, and names the BINDING.** This
+    // used to be refused with the port position's reason — *"a fold in the
+    // port-NAME position could rename what the parity gate then checks"* —
+    // and that danger is real of a SPLICE and gone the moment it is not one.
+    // Christian, 2026-09-12: *"we can use describe to describe using :names
+    // as well."*
+    //
+    // The fixture is the sharp one on purpose: `:p` binds the token `rate`,
+    // and `f` has a port called `rate`. If the key spliced, this line would
+    // document the PORT. It documents the BINDING, and the port's own doc
+    // stays empty.
+    //
+    // Mutation: splice the key. `rate` gains a description it was never given
+    // and the parity gate downstream reads a port as documented that nobody
+    // documented.
+    {
+        var p2 = try parseOk(testing.allocator, &reg,
+            \\using rate as :p
+            \\export def f(rate = 1 (0..2)) = rate | mul 2
+            \\describe f
+            \\    "a thing"
+            \\    rate "THE PORT"
+            \\    :p "THE FOLD"
+            \\
+            \\f | write plane.out
+        );
+        defer p2.deinit();
+        // Both lines are accepted, and each lands on its own thing: the port
+        // keeps the port's sentence, and the fold's does not leak into it.
+        try testing.expectEqualStrings("THE PORT", p2.exported("f").?.ports[0].doc);
+    }
+
+    // The STRING position still refuses a fold, and for the half of the
+    // original reason that survives: indirection where the whole point is
+    // that the sentence sits where a reader finds it.
     try expectParseError(
-        \\using rate as :p
+        \\using "the rate" as :s
         \\def f(rate) = rate | mul 2
         \\describe f
-        \\    :p "the rate"
-    , "read verbatim");
+        \\    rate :s
+    , "needs a quoted description");
+
+    // And a `:name` nothing binds is refused, which is the ports' own parity
+    // in the other namespace: a renamed `using` must not leave its sentence
+    // behind pointing at nothing.
+    try expectParseError(
+        \\def f(rate) = rate | mul 2
+        \\describe f
+        \\    :nope "a binding that is not there"
+    , "nothing in this file binds");
 }
 
 test "publish hook: freshened wires reach the host each tick, then go quiet" {
@@ -16435,4 +16492,120 @@ test "edit: setting a NAMED constant lands on the binding, not over the name" {
     defer gpa.free(t2);
     try testing.expect(std.mem.indexOf(u8, t2, "using plane.room as :k") != null);
     try testing.expect(std.mem.indexOf(u8, t2, "mul 0.5") != null);
+}
+
+test "describe: the subject may be the PROGRAM, for a file with no def at all" {
+    // Christian, 2026-09-12: *"we can use describe to describe using :names as
+    // well."* He chose this over a doc string on the `using` itself, and the
+    // deciding reason was extensibility: a trailing string *"isn't symmetric
+    // with describe, and it also blocks further annotation of using in
+    // future"* — one slot holds one fact, where a block line can grow a unit
+    // and a range the way a def's port already has.
+    //
+    // Twelve of the thirteen kernels in the sibling corpus have no `def`, so a
+    // block that could only follow a definition had nowhere to document a
+    // file's own constants — and no machine-readable place for the file's own
+    // summary either, which every one of them keeps in a `//` comment.
+    //
+    // MUTATION A: drop the program arm. Every one of those files is back to
+    // having nowhere to put this.
+    // MUTATION B: look the name up as the PROGRAM before the def. Red on the
+    // file that matters most: `roaches.rill` exports a def called `roaches`
+    // AND is the program `roaches`, so a block documenting ports today would
+    // silently become a block about the file.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var prog = try parseOk(gpa, &reg,
+        \\using 0.025 as :grain
+        \\using 0.05 as :base
+        \\
+        \\describe p
+        \\    "A little variation in size so no two read as one substance."
+        \\    :grain "how much a row varies, in metres"
+        \\    :base  "the smallest a row gets, in metres"
+        \\
+        \\plane.seed | mul :grain | add :base | write plane.out
+    );
+    defer prog.deinit();
+
+    // The block is kept in the document, keyed by the binding names, which is
+    // how a host reads it — the `layout` precedent exactly.
+    var found: usize = 0;
+    for (prog.script.?.top) |it| {
+        const an = switch (it) {
+            .annex => |a| a,
+            else => continue,
+        };
+        try testing.expectEqualStrings("describe", an.keyword);
+        try testing.expectEqualStrings("p", an.subject);
+        for (an.lines) |ln| {
+            if (std.mem.eql(u8, ln.key, ":grain")) found += 1;
+            if (std.mem.eql(u8, ln.key, ":base")) found += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), found);
+
+    // …and it round-trips, because the printer never needed to change: an
+    // annex line is a key and a value whatever the key happens to be.
+    const text = try rill.script.print(gpa, prog.script.?);
+    defer gpa.free(text);
+    try testing.expect(std.mem.indexOf(u8, text, "    :grain \"how much a row varies, in metres\"") != null);
+
+    // A bare word in a program block names a port, and the file has none —
+    // refused POINTING at the colon, because that is nearly always the fix.
+    try expectParseError(
+        \\using 0.025 as :grain
+        \\
+        \\describe p
+        \\    "hi"
+        \\    grain "no colon"
+        \\
+        \\plane.a | mul :grain | write plane.out
+    , "a file's own binding is `:grain`");
+
+    // **The collision, gated.** A def named the same as the program is not a
+    // corner: `roaches.rill` exports `roaches` and IS the program `roaches`,
+    // which is the file this whole feature was asked for beside. The def must
+    // win, or a block that documents ports today becomes a block about the
+    // file — silently, because both spellings parse.
+    //
+    // This is the fixture mutation B needs, and the first version of this gate
+    // did not have it: the suite's programs are all called `p` and its defs
+    // are all called `f`, so "def first" was an assertion nothing could
+    // falsify. Checked by running the mutation: it survived, and then it did
+    // not.
+    {
+        var diag = rill.Diag{};
+        var same = try rill.parse(gpa, &reg, "twin",
+            \\export def twin(rate = 1 (0..2)) = rate | mul 2
+            \\
+            \\describe twin
+            \\    "the DEF, not the file"
+            \\    rate "the port"
+            \\
+            \\twin | write plane.out
+            \\
+        , &diag);
+        defer same.deinit();
+        // It landed on the def: the port has its description.
+        try testing.expectEqualStrings("the port", same.exported("twin").?.ports[0].doc);
+        try testing.expectEqualStrings("the DEF, not the file", same.exported("twin").?.doc);
+    }
+
+    // Two program blocks is two places to read.
+    try expectParseError(
+        \\using 1 as :a
+        \\
+        \\describe p
+        \\    "one"
+        \\    :a "x"
+        \\
+        \\describe p
+        \\    "two"
+        \\    :a "y"
+        \\
+        \\plane.a | mul :a | write plane.out
+    , "already has a `describe` block");
 }

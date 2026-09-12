@@ -6085,3 +6085,70 @@ the verbs against the real file, twice, in sequence.
   from its value; a rename that changes the spelling is not a rename.
 - `setting a NAMED constant lands on the binding, not over the name`.
 - `naming refuses what is already named, and what has no text at all`.
+
+## `describe` documents a file, and its `:names` (2026-09-12)
+
+Christian, on the two ways a named constant could carry a sentence:
+
+> *"B is convenient for sure, but it isn't symmetric with describe, and it also
+> blocks further annotation of using in future."*
+
+B was `using 0.025 as :grain "the sentence"`. He is right on both counts and the
+second is the one I had missed: **one slot holds one fact.** A def's port
+already carries a default, a range and a sentence; the day a `using` wants a
+unit or a range, a trailing string has nowhere to put it, where a block line
+grows the way the port's did.
+
+So `describe` grew two ways, and they are one rule: **`describe <name>` where
+the name is a def or the FILE, and its lines key a port or a `:fold`.**
+
+### A fold in the KEY position is a NAME, not a splice
+
+The refusal that stood there covered both positions on one reason — *"a fold in
+the port-NAME position could rename what the parity gate then checks, and a
+fold in the string position buys indirection where the whole point is that the
+sentence sits where a reader finds it."* The first half is true of a SPLICE and
+evaporates the moment the key is taken verbatim; the second half stands
+untouched and is still enforced.
+
+The gate's fixture is the sharp one: `:p` binds the token `rate`, and the def
+has a port called `rate`. If the key spliced, that line would document the
+PORT. It documents the BINDING, and the port's own sentence is untouched.
+
+### The subject is a LABEL, and `layout`'s ruling already said so
+
+The first draft checked the subject against `prog.name`. It broke immediately
+and in exactly the way the `layout` ruling — marked *"meant to be final"* —
+predicts in its second reason:
+
+> *"A document's own name is not a fact rill's text carries — the HOST hands
+> `program_name` to `parse`, and `rill fmt -` hands it `-`. A subject checked
+> against that would make the formatter warn on every file it was pointed at."*
+
+`describe shy` in `shy.rill` refused under `rill check -`, which is what
+format-on-save runs. **A paragraph written for one block predicted the bug in
+another**, and the fix was to follow it: a non-def subject names the document,
+verbatim, resolved against nothing.
+
+**Def FIRST, and that needed a fixture to be a claim.** `roaches.rill` exports a
+def called `roaches` and IS the program `roaches`. The first version of the gate
+asserted the lookup order and could not falsify it — every program in the suite
+is called `p` and every def `f` — so the mutation SURVIVED. It bites now,
+against a file where the two names collide.
+
+### And a refusal that would have vanished
+
+`describe early` written ABOVE `def early` was a named, plausible mistake —
+prose goes before its subject everywhere except a language where parse order is
+definition order. The subject-side refusal caught it and cannot any more.
+Rather than lose it, `checkDescribeSubjects` runs at the END of the parse,
+where the def finally exists, and says the same thing. Without it a block one
+line too early documents nothing and says nothing, which is the mutation that
+gate's own header names.
+
+### What it buys
+
+Twelve of the thirteen kernels in the sibling corpus have no `def`, so until
+now a file had nowhere to document its own constants — and nowhere
+machine-readable for its own summary either, which every one of them keeps in a
+`//` comment. `kernels/shy.rill` carries the first one.

@@ -754,6 +754,7 @@ fn parseWith(
     p.comments = comments.items;
     p.program_target = .{ .nodes = &prog.nodes, .slots = &prog.slots, .plane = top };
     try p.parseProgram();
+    try p.checkDescribeSubjects();
     try p.publishScript();
 
     // Publish `as` names on the program (sources that are wires only — the
@@ -787,6 +788,12 @@ const Parser = struct {
     /// `using` and its trailing `as`. Resolved entirely at parse — folds are
     /// surface syntax and never reach the graph, the dump, or the evaluator.
     folds: std.StringArrayHashMapUnmanaged(Fold) = .empty,
+    /// A document-subject `describe` block has been seen. One per file, for a
+    /// def's reason: there is one place to read.
+    program_described: bool = false,
+    /// The subject of every DOCUMENT-level `describe`, with the token to point
+    /// at. Checked once at the end of the parse: see `checkDescribeSubjects`.
+    doc_subjects: std.ArrayListUnmanaged(Token) = .empty,
     /// One entry per EXPANSION, not per binding: `via` chains a splice back
     /// through the folds it came through, so a refusal deep inside expanded
     /// tokens can name every fold between the author's text and the token
@@ -1102,6 +1109,26 @@ const Parser = struct {
 
     /// Assemble the retained script once the whole file is read. The per-node
     /// origin table is built HERE because only now is the node count known.
+    /// **A document block whose subject turns out to be a def, written ABOVE
+    /// that def.** Checked at the END of the parse, because it cannot be
+    /// checked where it is written: the def does not exist yet.
+    ///
+    /// It is the plausible mistake — a reader puts the prose before the thing
+    /// it is about, which is how prose works everywhere except here, where
+    /// parse order is definition order. Refusing the SUBJECT outright used to
+    /// catch it and cannot any more, because a document subject is a label and
+    /// is resolved against nothing (`layout`'s ruling). So it is caught here
+    /// instead, with the same sentence: without this a describe block written
+    /// one line too early documents nothing and says nothing, which is the
+    /// mutation its own gate names.
+    fn checkDescribeSubjects(self: *Parser) ParseError!void {
+        for (self.doc_subjects.items) |t| {
+            if (self.defs.get(t.text) != null) {
+                return self.fail(t, "'{s}' IS a def in this program, and this block is above it — a `describe` block follows the `def` it describes (parse order is definition order here)", .{t.text});
+            }
+        }
+    }
+
     fn publishScript(self: *Parser) ParseError!void {
         const origins = try self.a().alloc(?script.Origin, self.prog.nodes.items.len);
         @memset(origins, null);
@@ -1672,16 +1699,56 @@ const Parser = struct {
         if (name_tok.kind != .name) {
             return self.fail(name_tok, "expected the name of a def after 'describe' — `describe <name>`", .{});
         }
-        const tmpl = self.defs.get(name_tok.text) orelse {
+        // **The subject is a def, OR the program itself.** Christian,
+        // 2026-09-12: *"we can use describe to describe using :names as
+        // well"* — and twelve of the thirteen kernels in the sibling corpus
+        // have no `def` at all, so a block that could only follow a definition
+        // had nowhere to document a file's own named constants. A file's
+        // summary had nowhere to live either: every kernel put it in a `//`
+        // comment, where no host can read it.
+        //
+        // Def FIRST, deliberately. `roaches.rill` exports a def called
+        // `roaches` and is also the program `roaches`, so the two names
+        // collide in the one file that matters most — and the existing
+        // meaning has to win, or a block that documents ports today would
+        // silently become a block about the file.
+        // A name that is not a def names the DOCUMENT, and is retained
+        // VERBATIM and resolved against nothing — `layout`'s rule, whose
+        // ruling says it is meant to be final, and whose second reason is
+        // exactly the trap here: *"A document's own name is not a fact rill's
+        // text carries — the HOST hands `program_name` to `parse`, and `rill
+        // fmt -` hands it `-`. A subject checked against that would make the
+        // formatter warn on every file it was pointed at, over a label that
+        // changes nothing."*
+        //
+        // Checking it against `prog.name` was the first draft, and it broke
+        // exactly as that paragraph predicts: `describe shy` in `shy.rill`
+        // refuses under `rill fmt -`, which is what format-on-save runs. So
+        // the label is a label.
+        //
+        // What is still checked is everything INSIDE the block: a port line
+        // needs a def, and a `:fold` line needs a binding. An orphan block is
+        // no longer a refusal by subject, but a block full of port lines with
+        // no def still is, one line lower down.
+        const tmpl: ?*Template = self.defs.get(name_tok.text) orelse blk: {
             if (self.reg.find(name_tok.text) != null) {
-                return self.fail(name_tok, "'{s}' is a registered operator, not a def — `describe` documents a definition in this program, and an operator's help lives in its registration", .{name_tok.text});
+                return self.fail(name_tok, "'{s}' is a registered operator — `describe` documents a definition in this program, or the file itself, and an operator's help lives in its registration", .{name_tok.text});
             }
-            return self.fail(name_tok, "'{s}' is not a def in this program — a `describe` block follows the `def` it describes (parse order is definition order here)", .{name_tok.text});
+            break :blk null;
         };
-        if (tmpl.described) {
-            return self.fail(name_tok, "'{s}' already has a `describe` block — one block per definition, so there is one place to read", .{name_tok.text});
+        if (tmpl) |t| {
+            if (t.described) {
+                return self.fail(name_tok, "'{s}' already has a `describe` block — one block per definition, so there is one place to read", .{name_tok.text});
+            }
+            t.described = true;
+        } else {
+            if (self.program_described) {
+                return self.fail(name_tok, "'{s}' already has a `describe` block — one block per file, so there is one place to read", .{name_tok.text});
+            }
+            self.program_described = true;
+            try self.doc_subjects.append(self.a(), name_tok);
         }
-        tmpl.described = true;
+        const subject_name = if (tmpl) |t| t.name else self.prog.name;
 
         var any_line = false;
         while (true) {
@@ -1696,53 +1763,93 @@ const Parser = struct {
             // string position buys indirection where the whole point is that
             // the sentence sits where a reader finds it. Refused by name
             // rather than by "unexpected token".
+            // **A fold in the KEY position is a NAME, and is not spliced.**
+            // The refusal that stood here refused both positions on one
+            // reason, and only half of it was about the key: *"a fold in the
+            // port-NAME position could rename what the parity gate then
+            // checks"* — true of a SPLICE, and the whole point of this arm is
+            // that `:grain` stays `:grain`. The string half of that reason
+            // stands untouched and is enforced below: a fold there would buy
+            // indirection where the whole point is that the sentence sits
+            // where a reader finds it.
+            //
+            // Christian's ruling, 2026-09-12, choosing this over a trailing
+            // string on the `using` itself: a doc slot on the binding *"isn't
+            // symmetric with describe, and it also blocks further annotation
+            // of using in future"* — one slot is one fact, and a block line
+            // can grow a unit and a range the way a def's port already has.
             if (t.kind == .fold) {
-                return self.fail(t, "a `describe` block is prose and is read verbatim — '{s}' is not spliced here; write the text out", .{t.text});
+                _ = self.next();
+                const fs = self.next();
+                if (fs.kind != .string) {
+                    return self.fail(fs, "describe '{s}': '{s}' needs a quoted description — `{s} \"what it means\"`", .{ subject_name, t.text, t.text });
+                }
+                if (fs.text.len == 0) {
+                    return self.fail(fs, "describe '{s}': '{s}' has an empty description — say what it means", .{ subject_name, t.text });
+                }
+                // The same parity the ports get: a description of a binding
+                // this file does not have is wrong whoever wrote it, and a
+                // renamed `using` must not leave its sentence behind pointing
+                // at nothing.
+                if (!self.folds.contains(t.text)) {
+                    return self.fail(t, "describe '{s}': nothing in this file binds '{s}' — a `describe` line names a `using … as {s}` above it", .{ subject_name, t.text, t.text });
+                }
+                for (lines.items) |ln| {
+                    if (std.mem.eql(u8, ln.key, t.text)) {
+                        return self.fail(t, "describe '{s}': '{s}' is described twice", .{ subject_name, t.text });
+                    }
+                }
+                try lines.append(self.a(), .{ .key = t.text, .values = try self.oneValue(self.toks[self.pos - 1 ..][0..1]) });
+                any_line = true;
+                continue;
             }
             if (t.kind == .string) {
                 _ = self.next();
                 if (any_line) {
-                    return self.fail(t, "describe '{s}': a bare string describes the DEFINITION and comes first — a port's line is `<port> \"…\"`", .{tmpl.name});
+                    return self.fail(t, "describe '{s}': a bare string describes the whole thing and comes first — a named line is `<port> \"…\"` or `:<binding> \"…\"`", .{subject_name});
                 }
                 if (t.text.len == 0) {
-                    return self.fail(t, "describe '{s}': the definition's description is empty — say what it does, or leave the line out", .{tmpl.name});
+                    return self.fail(t, "describe '{s}': the description is empty — say what it does, or leave the line out", .{subject_name});
                 }
-                tmpl.doc = try self.unescape(t.text);
+                if (tmpl) |d| d.doc = try self.unescape(t.text);
                 try lines.append(self.a(), .{ .values = try self.oneValue(self.toks[self.pos - 1 ..][0..1]) });
                 any_line = true;
                 continue;
             }
             if (t.kind != .name) {
-                return self.fail(t, "describe '{s}': expected a port name or a leading description string, got '{s}'", .{ tmpl.name, t.text });
+                return self.fail(t, "describe '{s}': expected a port name, a `:fold` name, or a leading description string, got '{s}'", .{ subject_name, t.text });
             }
+            // A bare word names a PORT, and only a def has those. Named
+            // rather than shrugged at: the fix is almost always the colon.
+            const td = tmpl orelse return self.fail(t, "describe '{s}': this block is about the file, which has no ports — a bare word names a def's port, and a file's own binding is `:{s}`", .{ subject_name, t.text });
             _ = self.next();
             const st = self.next();
             if (st.kind != .string) {
-                return self.fail(st, "describe '{s}': port '{s}' needs a quoted description — `{s} \"what it means\"`", .{ tmpl.name, t.text, t.text });
+                return self.fail(st, "describe '{s}': port '{s}' needs a quoted description — `{s} \"what it means\"`", .{ subject_name, t.text, t.text });
             }
             // An empty string is not a description, and letting one through
             // would make the parity gate say "port has no description" about a
             // line that is visibly right there.
             if (st.text.len == 0) {
-                return self.fail(st, "describe '{s}': port '{s}' has an empty description — say what it means", .{ tmpl.name, t.text });
+                return self.fail(st, "describe '{s}': port '{s}' has an empty description — say what it means", .{ subject_name, t.text });
             }
             // Direction two of the parity gate, and it runs for a LOCAL def
             // too: a describe block that names a port the definition does not
             // have is wrong whoever wrote it, and the fix is the list.
-            const pd = for (tmpl.ports) |*p| {
+            const pd = for (td.ports) |*p| {
                 if (std.mem.eql(u8, p.name, t.text)) break p;
             } else {
-                return self.fail(t, "describe '{s}': '{s}' is not a port of '{s}' — it has: {s}", .{ tmpl.name, t.text, tmpl.name, try self.portList(tmpl) });
+                return self.fail(t, "describe '{s}': '{s}' is not a port of '{s}' — it has: {s}", .{ subject_name, t.text, subject_name, try self.portList(td) });
             };
             if (pd.doc.len > 0) {
-                return self.fail(t, "describe '{s}': port '{s}' is described twice", .{ tmpl.name, t.text });
+                return self.fail(t, "describe '{s}': port '{s}' is described twice", .{ subject_name, t.text });
             }
             pd.doc = try self.unescape(st.text);
             try lines.append(self.a(), .{ .key = t.text, .values = try self.oneValue(self.toks[self.pos - 1 ..][0..1]) });
             any_line = true;
         }
         if (!any_line) {
-            return self.fail(kw, "describe '{s}' says nothing — put the description on the next line, indented", .{tmpl.name});
+            return self.fail(kw, "describe '{s}' says nothing — put the description on the next line, indented", .{subject_name});
         }
         self.closeLine();
         try self.program_target.items.append(self.a(), .{ .annex = .{
