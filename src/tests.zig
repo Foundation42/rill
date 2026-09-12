@@ -15525,3 +15525,282 @@ test "R6 AUDIT: every registered operator either drops cleanly or refuses by nam
     // A gate that refused everything would pass every assertion above.
     try testing.expect(dropped > 20);
 }
+
+// ---------------------------------------------------------------------------
+// R6b — `script.Arg.port`: the binding the parser knew and used to throw away.
+// ---------------------------------------------------------------------------
+
+test "script: an authored argument knows which PORT it bound to" {
+    // `graph.CallSite` exists because an editor changing a wire has to find
+    // the `Call` that wrote it. This exists because, having found the call, it
+    // then has to find the ARGUMENT — and `args` is in AUTHORED order where
+    // ports are in DECLARED order. The two differ the moment anything is
+    // piped, optional, keyword-bound, a section, or a static.
+    //
+    // MUTATION A: delete the stamp loop after the bindings. Every port reads
+    // null, and an editor asking "which argument is port 1" gets no answer at
+    // all — `edit.unlink` would have nothing to replace.
+    // MUTATION B: stamp the AUTHORED index instead (`port = si`). This is
+    // precisely the re-derivation the field exists to prevent, and it is the
+    // plausible-looking one: it is right for a bare call and wrong for every
+    // piped one. `mul`'s `2` is authored arg 0 and port 1, and it goes red
+    // here.
+    var reg = try hostRegistry(testing.allocator);
+    defer reg.deinit();
+    const src =
+        \\plane.a | mul 2 | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var prog = try rill.parse(testing.allocator, &reg, "p", src, &diag);
+    defer prog.deinit();
+
+    const sc = prog.script.?;
+
+    var saw_mul = false;
+    var saw_write = false;
+    for (prog.nodes.items) |n| {
+        const call = sc.callAt(n.site.line, n.site.col) orelse continue;
+        if (std.mem.eql(u8, call.op, "mul")) {
+            saw_mul = true;
+            // ONE authored argument, and it is port ONE: port 0 is the pipe,
+            // which nobody wrote and which therefore has no `Arg` at all.
+            try testing.expectEqual(@as(usize, 1), call.args.len);
+            try testing.expectEqualStrings("2", call.args[0].text);
+            try testing.expectEqual(@as(?u8, 1), call.args[0].port);
+        }
+        if (std.mem.eql(u8, call.op, "write")) {
+            saw_write = true;
+            // **A static is not a port**, and this is the arm a naive index
+            // mapping gets confidently wrong. `write`'s target is
+            // `Node.statics[0]`, so the one authored argument binds no input
+            // port and says so — the same `null` `addCall` refuses a hole for.
+            try testing.expectEqual(@as(usize, 1), call.args.len);
+            try testing.expectEqualStrings("plane.out", call.args[0].text);
+            try testing.expectEqual(@as(?u8, null), call.args[0].port);
+        }
+    }
+    try testing.expect(saw_mul);
+    try testing.expect(saw_write);
+}
+
+// ---------------------------------------------------------------------------
+// R6c — `edit.link` / `edit.unlink`: the wire, moved.
+//
+// rill has no wire syntax. A wire is the PIPE between two terms of one chain,
+// or a NAME (`… as t`, read somewhere below). So every assertion here is about
+// what the printed file says AND about what re-parsing it produces — the text
+// is the wire format and the graph is the claim.
+// ---------------------------------------------------------------------------
+
+/// Print an edited script and parse the result. The only assertion that
+/// matters about a structural edit is that what it produced is a file rill can
+/// read, so every gate below goes through here.
+fn reparse(gpa: std.mem.Allocator, reg: *rill.Registry, edited: *const rill.script.Script, out_text: *[]u8) !rill.Program {
+    out_text.* = try rill.script.print(gpa, edited);
+    errdefer gpa.free(out_text.*);
+    var diag = rill.Diag{};
+    return rill.parse(gpa, reg, "p", out_text.*, &diag) catch |e| {
+        std.debug.print("edited program did not parse: {s}\n{s}\n", .{ @errorName(e), out_text.* });
+        return e;
+    };
+}
+
+/// The call site of the Nth node whose operator is `op`.
+fn siteOf(prog: *const rill.Program, reg: *const rill.Registry, op: []const u8, nth: usize) !rill.graph.CallSite {
+    var seen: usize = 0;
+    for (prog.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, op)) continue;
+        if (seen == nth) return n.site;
+        seen += 1;
+    }
+    return error.NoSuchNode;
+}
+
+test "edit: unlink a required port leaves a declared HOLE, and the file still parses" {
+    // An editor needs text that says "this operator is here and this input is
+    // not chosen yet", and rill's only such text is §3.15's hole — which is
+    // exactly what `addCall` mints for the same reason.
+    //
+    // MUTATION A: drop the argument instead of replacing it with a hole. The
+    // file prints `plane.a | mul` and does not parse: a required port with
+    // nothing bound is a parse error, so unlinking anything would destroy the
+    // program rather than open a socket.
+    // MUTATION B: emit the hole argument but not the `using`. `:mul_b` is then
+    // an undeclared name and the file does not load either — which is why the
+    // two are written by one function and not by a caller who might forget.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", "plane.a | mul 2 | write plane.out\n", &diag);
+    defer before.deinit();
+    const site = try siteOf(&before, &reg, "mul", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.unlink(arena.allocator(), before.script.?, &reg, .{
+        .line = site.line,
+        .col = site.col,
+        .port = 1,
+    });
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    // The declaration and the use, both present and agreeing.
+    try testing.expect(std.mem.indexOf(u8, text, "using ?number as :mul_b") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "mul :mul_b") != null);
+    // …and the literal it replaced is gone.
+    try testing.expect(std.mem.indexOf(u8, text, "mul 2") == null);
+
+    // The GRAPH says the same thing: that port is a hole now, not a literal.
+    for (after.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "mul")) continue;
+        try testing.expect(after.slot(n.inputs[1]).source == .hole);
+    }
+}
+
+test "edit: link names the producer's output and the consumer reads it" {
+    // The whole of what a wire is between two statements. Fan-out comes free:
+    // a name may be read by any number of consumers, which is why nothing in
+    // `link` asks how many wires already leave that output.
+    //
+    // MUTATION A: skip the `as` and point the consumer at the producer's
+    // OPERATOR name. `mul` is an unknown name at that position and the file
+    // does not load.
+    // MUTATION B: name the output but leave the consumer's argument alone.
+    // The file parses — it is a valid program — and the wire the reader
+    // dragged is simply not there, which is the failure a gate over text
+    // alone would miss. The graph assertion below is what catches it.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    const src =
+        \\plane.a | mul 2
+        \\
+        \\plane.b | add 3 | write plane.out
+        \\
+    ;
+    var diag = rill.Diag{};
+    var before = try rill.parse(gpa, &reg, "p", src, &diag);
+    defer before.deinit();
+    const producer = try siteOf(&before, &reg, "mul", 0);
+    const consumer = try siteOf(&before, &reg, "add", 0);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const edited = try rill.edit.link(
+        arena.allocator(),
+        before.script.?,
+        &reg,
+        .{ .line = producer.line, .col = producer.col, .port = 0 },
+        .{ .line = consumer.line, .col = consumer.col, .port = 1 },
+    );
+
+    var text: []u8 = undefined;
+    var after = try reparse(gpa, &reg, &edited, &text);
+    defer gpa.free(text);
+    defer after.deinit();
+
+    try testing.expect(std.mem.indexOf(u8, text, " as ") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "add 3") == null);
+
+    // **The wire, in the graph.** `add`'s port 1 is fed by a wire whose
+    // producer is the `mul` node — not a literal, and not some other node.
+    var checked = false;
+    for (after.nodes.items) |n| {
+        if (!std.mem.eql(u8, reg.get(n.op).name, "add")) continue;
+        const s = after.slot(n.inputs[1]);
+        const up = switch (s.source) {
+            .wire => |u| u,
+            else => return error.NotAWire,
+        };
+        const feeder = after.nodes.items[after.slot(up).node];
+        try testing.expectEqualStrings("mul", reg.get(feeder.op).name);
+        checked = true;
+    }
+    try testing.expect(checked);
+}
+
+test "edit: the three refusals are the GRAMMAR, and each one is named" {
+    // Not an implementation's convenience. rill spells a wire as a pipe or a
+    // name, and each refusal below is a place where neither spelling reaches.
+    const gpa = testing.allocator;
+    var reg = try hostRegistry(gpa);
+    defer reg.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // ── NeedsSplit: the producer is not its chain's last term ────────────
+    // `as` names the FINAL outputs of a chain, so `A | B | C as t` names C's.
+    // There is no spelling for B's without cutting the statement in two —
+    // which would move the reader's paragraph, so it is refused instead.
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "plane.a | mul 2 | write plane.out\n\nplane.b | add 3\n", &diag);
+        defer p.deinit();
+        const mid = try siteOf(&p, &reg, "mul", 0); // mid-chain: `write` follows
+        const cons = try siteOf(&p, &reg, "add", 0);
+        try testing.expectError(error.NeedsSplit, rill.edit.link(
+            a,
+            p.script.?,
+            &reg,
+            .{ .line = mid.line, .col = mid.col, .port = 0 },
+            .{ .line = cons.line, .col = cons.col, .port = 1 },
+        ));
+    }
+
+    // ── NeedsReorder: a name read above where it is written ──────────────
+    // rill's parse order IS its dependency order, so this is not a style
+    // preference — the file would not load.
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "plane.a | mul 2\n\nplane.b | add 3\n", &diag);
+        defer p.deinit();
+        const later = try siteOf(&p, &reg, "add", 0);
+        const earlier = try siteOf(&p, &reg, "mul", 0);
+        try testing.expectError(error.NeedsReorder, rill.edit.link(
+            a,
+            p.script.?,
+            &reg,
+            .{ .line = later.line, .col = later.col, .port = 0 },
+            .{ .line = earlier.line, .col = earlier.col, .port = 1 },
+        ));
+    }
+
+    // ── InsideDefinition: editable, but not by this gesture ──────────────
+    // A def body is shared by every call of it, so moving one wire there
+    // moves it for all of them. Told apart from `NoSuchCall` deliberately:
+    // the two send a reader looking in completely different places.
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "def double(x) =\n    x | mul 2\n\nplane.a | double | write plane.out\n", &diag);
+        defer p.deinit();
+        const inner = try siteOf(&p, &reg, "mul", 0);
+        try testing.expectError(error.InsideDefinition, rill.edit.unlink(
+            a,
+            p.script.?,
+            &reg,
+            .{ .line = inner.line, .col = inner.col, .port = 1 },
+        ));
+    }
+
+    // ── NoSuchCall: a stale canvas, and sugar with no call of its own ────
+    {
+        var diag = rill.Diag{};
+        var p = try rill.parse(gpa, &reg, "p", "plane.a | mul 2\n", &diag);
+        defer p.deinit();
+        try testing.expectError(error.NoSuchCall, rill.edit.unlink(a, p.script.?, &reg, .{ .line = 999, .col = 1, .port = 0 }));
+        // A `{0, 0}` site is sugar with no call of its own — a projection, a
+        // record's assembly — and it answers the same way rather than
+        // walking the whole file to discover there is nothing at line zero.
+        try testing.expectError(error.NoSuchCall, rill.edit.unlink(a, p.script.?, &reg, .{ .line = 0, .col = 0, .port = 0 }));
+    }
+}

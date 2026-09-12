@@ -5702,3 +5702,121 @@ two. 109 in `ops.zig`, not ~115. The counts above are the measured ones.
 
 **Suite 510 → 523. Extension 59 → 60 tests, 54 mutations, 54 bit, 0 stale.
 Corpus 47/47 round-trip and 47/47 `rill fmt` no-op, byte-identical.**
+
+## `link` / `unlink` — the wire, moved (2026-09-12)
+
+Christian: *"I wouldn't mind being able to edit the graphs. Right now can't
+move the wires, or delete nodes."* spark's canvas has carried the whole
+gesture since 2026-09-10 — lift a wire off a pin, drop it on a pin or on empty
+canvas, and it writes `link from=src.out to=mul.b` or `unlink to=mul.a` to its
+`edits=` path. Nothing in rill could apply one.
+
+### What a wire IS, which is what shapes everything else
+
+rill has no wire syntax. A wire is the PIPE between two terms of one chain
+(`collide | slide`) or a NAME (`… as t1`, read below). So moving a wire is
+never one edit in one place, and the case split is the grammar rather than an
+implementation's convenience:
+
+- an argument that is a literal, a hole, a path or a stream name — LOCAL, one
+  `Arg` replaced;
+- a chain HEAD that is a value (`plane.a | mul 2`, rewiring `mul`'s port 0) —
+  also local, the head value replaced;
+- a port fed by the pipe MID-CHAIN — the statement would have to be cut in two.
+
+### `script.Arg.port` — the binding the parser knew and threw away
+
+`graph.CallSite` exists because *"an editor that changes a wire has to find the
+`Call` that wrote it"*. Having found the call, it then has to find the
+ARGUMENT — and `args` is in AUTHORED order where ports are in DECLARED order.
+The two differ the moment anything is piped, optional, keyword-bound, a section
+or a static, which is to say almost always.
+
+The parser already has the mapping: `bound[]`, built from the primary pipe,
+the kwargs by name, the sections into free boolean ports, and the remaining
+positionals in declared order. Re-deriving those four rules inside `edit.zig`
+would be a second answer able to drift from the first — the exact mistake
+`CallSite`'s own note describes being made once already. So the parser stamps
+`script.Arg.port` back onto the snapshot once the bindings are final, and null
+means "binds no port": a section body, an argument consumed into a static, a
+def-call argument in a loaded script.
+
+**A latent bug found on the way.** `bindArg`'s word-to-string-literal path
+REBUILT the arg as a whole-struct literal naming six fields, silently dropping
+`syn`, `syn_kind` and `kw_colon`. Harmless only because the script snapshot is
+taken before the binding and nothing downstream read them — `syn_index` is read
+downstream, so the next person to add a field would have found it the hard way.
+It is three assignments onto the existing copy now, which removes the class.
+
+### Why the split is refused rather than performed
+
+It is mechanical, and both halves parse — checked before writing any code:
+
+    A | B | C          →    A | B as t1
+                            t1 | C
+
+The reason is not difficulty. **A statement carries the reader's prose.**
+`Stmt.lead` is the paragraph above it and `Stmt.trail` the note at its end, and
+in `roaches.rill` every statement has one. Cutting a statement in half orphans
+that paragraph from half of what it describes, and nothing in a wire-drag says
+which half the author meant it for. A refusal that names the case leaves that
+decision with the person; a silent split moves their writing.
+
+`NeedsReorder` is the same argument about a different axis: rill's parse order
+IS its dependency order — `parser.zig`'s header has said since the spring that
+a visual editor must emit statements in it — so a name read above where it is
+written is a file that will not load. Moving the statement is obvious and is
+not done here, because a statement may be depended on by others and which one
+moves is a judgement.
+
+`InsideDefinition` is told apart from `NoSuchCall` deliberately: a def body is
+shared by every call of it, so moving one wire there moves it for all of them.
+Answering "no such call" would send a reader hunting a stale canvas.
+
+### Probed before written, not after
+
+Four forms had to parse before any of this was worth designing, and all four do:
+
+    :h | add 3                  a hole can head a chain (unlink's head case)
+    t1 | add 3                  a stream name can head a chain (the split)
+    add t1 3                    a head call binds port 0 positionally
+    t1 read by two statements    fan-out is free
+
+`add a t1 b 3` is the one that does NOT: a non-`kw` port refuses the keyword
+spelling, so a new argument has to go in at the right positional index.
+`insertionIndex` does that, and it is not "append": a `write`'s target is a
+positional STATIC that must stay first, and a TAIL captures the rest of the
+line so nothing may follow it.
+
+### Gates, and the mutations they were paid for
+
+`script: an authored argument knows which PORT it bound to` —
+- **A**: delete the stamp loop. Every port reads null and an editor asking
+  "which argument is port 1" gets no answer at all.
+- **B**: stamp the AUTHORED index. This is the re-derivation the field exists
+  to prevent and it is the plausible-looking one — right for a bare call,
+  wrong for every piped one. `mul`'s `2` is authored arg 0 and port 1. Ran it:
+  red, `expected 1, found 0`.
+
+`edit: unlink a required port leaves a declared HOLE` —
+- **A**: drop the argument instead. `plane.a | mul` does not parse, so
+  unlinking anything would destroy the program rather than open a socket.
+- **B**: emit the hole but not the `using`. An undeclared name; also does not
+  load. Which is why one function writes both.
+
+`edit: link names the producer's output and the consumer reads it` —
+- **A**: point the consumer at the producer's OPERATOR name. Unknown name.
+- **B**: name the output and leave the consumer alone. **The file still
+  parses** — it is a valid program with the wire simply missing, which is the
+  failure a text-only gate would wave through. Ran it: red.
+
+`edit: the three refusals are the GRAMMAR, and each one is named` — walks
+`NeedsSplit`, `NeedsReorder`, `InsideDefinition` and `NoSuchCall` (including a
+`{0, 0}` site, which is sugar with no call of its own).
+
+### Measured
+
+Suite green. The shipped corpus is still a printer fixed point — 21 of 22 files
+byte-identical through `rill fmt`, and the 22nd (`src/rills/select.rill`) fails
+to PARSE under the bare CLI because it calls matryoshka's `select only`, which
+is a missing host vocabulary and not a moved printer.

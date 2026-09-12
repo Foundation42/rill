@@ -659,6 +659,13 @@ const Arg = struct {
     syn_kind: script.Arg.Kind = .word,
     /// `at: 5` rather than `at 5` — two spellings of one binding.
     kw_colon: bool = false,
+    /// This argument's index in the `script.Arg` snapshot, so the port
+    /// binding below can stamp `script.Arg.port` back onto it. Null for an
+    /// argument the parser SYNTHESISED rather than read — the primary pipe's
+    /// stand-in, a carried output claiming a port by name, the membership
+    /// sink's literal rousing — none of which any author wrote and none of
+    /// which has a snapshot entry to stamp.
+    syn_index: ?u32 = null,
 };
 
 /// A producer's non-first output riding a pipe, by name (see the pipe site).
@@ -1080,7 +1087,7 @@ const Parser = struct {
     }
 
     /// Snapshot one call's arguments as authored, for the script.
-    fn synArgs(self: *Parser, args: []const Arg) ![]const script.Arg {
+    fn synArgs(self: *Parser, args: []const Arg) ![]script.Arg {
         const out = try self.a().alloc(script.Arg, args.len);
         for (args, out) |src_arg, *dst| dst.* = .{
             .kind = src_arg.syn_kind,
@@ -3182,10 +3189,18 @@ const Parser = struct {
         // statics loop, which only reads it. `op_name` is already the
         // spelling that was typed: the two-word lookup above rewrote it to
         // `boolean subtract` exactly when the author wrote two words.
+        // The snapshot, and the index back into it, set TOGETHER so the two
+        // cannot drift: from here on `args.items[j]` and `syn_args[j]` are
+        // the same argument, and the port binding below stamps the second
+        // through the first. Nothing between this point and that one adds to
+        // or removes from `args.items` — the statics loop marks `consumed`
+        // and the keyword pairing that does rewrite the list ran above.
+        const syn_args = try self.synArgs(args.items);
+        for (args.items, 0..) |*ag, j| ag.syn_index = @intCast(j);
         self.last_call = .{
             .op = op_name,
             .shape = shape_syn,
-            .args = try self.synArgs(args.items),
+            .args = syn_args,
             .line = op_tok.line,
             .col = op_tok.col,
         };
@@ -3395,6 +3410,23 @@ const Parser = struct {
             bound[pi] = .{ .kind = .stream, .source = c.src, .ty = self.sourceTy(target, c.src), .tok = op_tok };
         }
 
+        // **The port each authored argument bound to, written back onto the
+        // snapshot.** `bound` IS the mapping and it is final here: the
+        // primary pipe, the kwargs by name, the sections and the remaining
+        // positionals have all claimed. See `script.Arg.port` for why this is
+        // stamped once by the one who knows rather than re-derived by
+        // everyone who asks.
+        //
+        // A `null` syn_index is an entry the parser synthesised — the pipe's
+        // stand-in, a carried output, the membership literal — and there is
+        // no authored argument to stamp. That is the same fact `port = null`
+        // reports from the other side.
+        for (bound, 0..) |maybe, pi| {
+            const b = maybe orelse continue;
+            const si = b.syn_index orelse continue;
+            syn_args[si].port = @intCast(pi);
+        }
+
         // Type check + collect sources.
         const sources = try self.a().alloc(Source, ports.len);
         for (ports, 0..) |port, i| {
@@ -3592,7 +3624,17 @@ const Parser = struct {
             var pk = struple.Packer.init(self.a());
             pk.appendString(arg.text) catch return error.OutOfMemory;
             const bytes = pk.toOwnedSlice() catch return error.OutOfMemory;
-            out = .{ .kind = .literal, .source = .{ .literal = bytes }, .ty = types.Tag.string, .text = arg.text, .kw = arg.kw, .tok = arg.tok };
+            // **Mutate, do not rebuild.** This was a whole-struct literal
+            // naming six fields, which silently dropped every field it did
+            // not name — `syn`, `syn_kind`, `kw_colon` — and that was
+            // harmless only because the script snapshot is taken BEFORE the
+            // binding and nothing downstream read them. `syn_index` is read
+            // downstream, so the next person to add a field would have found
+            // this the hard way. `out` is already a copy of `arg`; three
+            // assignments say what actually changes.
+            out.kind = .literal;
+            out.source = .{ .literal = bytes };
+            out.ty = types.Tag.string;
         }
         if (port.one_of.len > 0 and out.kind == .literal) {
             if (types.asString(out.source.literal)) |s| {
@@ -4142,9 +4184,11 @@ const Parser = struct {
         // operator call is recorded, so `roaches rate 20` prints back as
         // itself rather than as the eleven nodes it flattens into. This is
         // the other half of the tunnel — the door is the call site.
+        const def_syn_args = try self.synArgs(args.items);
+        for (args.items, 0..) |*ag, j| ag.syn_index = @intCast(j);
         self.last_call = .{
             .op = tmpl.name,
-            .args = try self.synArgs(args.items),
+            .args = def_syn_args,
             .line = op_tok.line,
             .col = op_tok.col,
         };
@@ -4172,6 +4216,14 @@ const Parser = struct {
             } else return self.fail(arg.tok, "too many arguments for '{s}' ({d} port(s))", .{ tmpl.name, tmpl.ports.len });
             bound[pi] = try self.bindArg(arg, .{ .name = tmpl.ports[pi].name, .ty = tmpl.ports[pi].ty }, tmpl.name, null, false);
         }
+        // Same stamp as the opcall path's, and for the same reader: a def
+        // call is a call, so its arguments are editable the same way.
+        for (bound, 0..) |maybe, pi| {
+            const b = maybe orelse continue;
+            const si = b.syn_index orelse continue;
+            def_syn_args[si].port = @intCast(pi);
+        }
+
         const port_sources = try self.a().alloc(Source, tmpl.ports.len);
         for (tmpl.ports, 0..) |pd, i| {
             const arg = bound[i] orelse {

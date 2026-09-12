@@ -96,6 +96,26 @@ pub const Arg = struct {
     /// `at: 5` rather than `at 5`. Two spellings of one binding, and the file
     /// keeps the one it had.
     kw_colon: bool = false,
+    /// **Which declared input port this argument binds to**, or null for one
+    /// that binds none — a section BODY, an argument the parser consumed into
+    /// a static, or a def-call argument in a script that was loaded rather
+    /// than parsed.
+    ///
+    /// `graph.CallSite`'s argument, one level finer, and for the same
+    /// customer. That field exists because an editor changing a wire has to
+    /// find the `Call` that wrote it; this exists because having found the
+    /// call, it then has to find the ARGUMENT — and `args` is the authored
+    /// order, where ports are the declared one. The two differ whenever
+    /// anything is piped, optional, keyword-bound or a section, which is to
+    /// say almost always.
+    ///
+    /// The parser knows this for certain: `bound[]` IS the mapping, built
+    /// from the primary pipe, the kwargs by name, the sections and the
+    /// remaining positionals in declared order. Re-deriving those four rules
+    /// in `edit.zig` would be a second answer able to drift from the first,
+    /// which is the mistake `CallSite`'s own note describes being made once
+    /// already.
+    port: ?u8 = null,
     line: u32 = 0,
     col: u32 = 0,
 };
